@@ -1,0 +1,1644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>VulcanTrader - Trading</title>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .navbar {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky; top: 0; z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .brand { color: #fff; font-size: 1.5rem; font-weight: 600; text-decoration: none; }
+        .nav-link {
+            color: #fff; text-decoration: none; padding: 0.5rem 0.85rem;
+            border-radius: 4px; margin-left: 0.25rem;
+            border: 1px solid transparent; transition: all 0.3s ease;
+        }
+        .nav-link:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
+        .nav-link.active {
+            background: linear-gradient(135deg, rgba(105,95,245,0.1), rgba(52,22,100,0.1));
+            border-color: #695ff5; box-shadow: 0 0 10px rgba(105,95,245,0.3);
+        }
+        .btn {
+            background: linear-gradient(135deg, #4c17ad 0%, #341664 50%, #190538 100%);
+            color: #fff; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 0.5rem 1rem; font-weight: 500;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(105,95,245,0.3); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-danger { background: linear-gradient(135deg, #dc2626, #991b1b); }
+
+        .content { max-width: 95%; margin: 0 auto; padding: 2rem; }
+
+        .card {
+            background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
+        .card h3 {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            margin: -1.5rem -1.5rem 1rem -1.5rem;
+            padding: 1rem 1.5rem;
+            border-radius: 8px 8px 0 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            color: #e0e0e0; font-size: 1.125rem; font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .form-input, select {
+            background: rgba(255,255,255,0.05); color: #e0e0e0;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem;
+        }
+        .form-input:focus, select:focus { outline: none; border-color: #695ff5; }
+
+        /* status pill */
+        .status-pill {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.3rem 0.75rem; border-radius: 999px; font-size: 0.78rem;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981;
+            box-shadow: 0 0 8px #10b981; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+        .status-dot.stopped { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+
+        /* metrics grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 0.75rem;
+        }
+        .metric {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 1rem;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
+        .metric-label {
+            font-size: 0.75rem; color: #a0aec0;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 0.4rem; text-align: center;
+        }
+        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
+        .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+
+        /* monthly/daily boxes */
+        .period-grid { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+        .period-box {
+            background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 0.85rem 0.65rem;
+            min-width: 130px; max-width: 160px; flex: 1;
+            display: flex; flex-direction: column; gap: 0.35rem;
+            transition: all 0.3s ease;
+        }
+        .period-box:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(105,95,245,0.15);
+            background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+        }
+        .period-header {
+            font-size: 0.8rem; font-weight: 600; color: #e0e0e0; text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 0.4rem; margin-bottom: 0.25rem;
+        }
+        .period-row { display: flex; justify-content: space-between; font-size: 0.78rem; }
+        .period-row .lbl { color: #a0aec0; }
+        .period-row .val { font-weight: 600; }
+
+        /* tables */
+        .table-wrap { overflow-x: auto; max-height: 600px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th {
+            background: linear-gradient(135deg, #0f0f23, #1a1a3e);
+            color: #a0aec0; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            padding: 0.6rem 0.5rem; text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            white-space: nowrap; font-size: 0.72rem;
+            position: sticky; top: 0; z-index: 1;
+        }
+        td {
+            padding: 0.5rem 0.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: #e0e0e0; white-space: nowrap;
+        }
+        tbody tr:hover { background: rgba(105,95,245,0.08); }
+        .pair-cell { font-weight: 600; color: #695ff5; }
+        .side-long { color: #10b981; font-weight: 600; }
+        .side-short { color: #ef4444; font-weight: 600; }
+        .badge {
+            display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+            font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em;
+        }
+        .badge-open { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+        .badge-closed { background: rgba(160,174,192,0.15); color: #a0aec0; border: 1px solid rgba(160,174,192,0.3); }
+
+        .alert {
+            background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
+            border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #fca5a5;
+        }
+        .loading { text-align: center; padding: 2.5rem; color: #a0aec0; }
+        .spinner {
+            display: inline-block; width: 20px; height: 20px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-left-color: #695ff5;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.6rem; vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        @media (max-width: 768px) { .pair-grid { grid-template-columns: 1fr; } }
+        .pair-section h4 {
+            color: #a0aec0; font-size: 0.85rem;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin: 0 0 0.5rem 0;
+        }
+
+        .quality-bar {
+            display: inline-block; width: 50px; height: 6px;
+            background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;
+            vertical-align: middle; margin-right: 0.4rem;
+        }
+        .quality-bar > span { display: block; height: 100%; }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* === VulcanTrader Pro UI overrides === */
+        body {
+            background:
+                linear-gradient(135deg, rgba(15,5,20,0.55), rgba(10,5,15,0.78)),
+                url('/static/background.jpg') center/cover fixed no-repeat,
+                linear-gradient(135deg, #1b0a14 0%, #14081a 50%, #0d0610 100%) !important;
+        }
+        .navbar {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
+            backdrop-filter: blur(10px) saturate(140%);
+            -webkit-backdrop-filter: blur(10px) saturate(140%);
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset !important;
+            position: relative;
+        }
+        .navbar::after {
+            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
+            box-shadow: 0 0 10px rgba(105,95,245,0.5);
+            pointer-events: none;
+        }
+        .brand {
+            font-family: 'Cinzel', serif !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.10em !important;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.75), 0 0 18px rgba(105,95,245,0.5) !important;
+        }
+        .nav-link.active {
+            background: linear-gradient(135deg, rgba(105,95,245,0.15), rgba(52,22,100,0.15)) !important;
+            border-color: #695ff5 !important;
+            box-shadow: 0 0 10px rgba(105,95,245,0.35) !important;
+        }
+        .btn {
+            background: linear-gradient(135deg, rgba(76,23,173,0.88) 0%, rgba(52,22,100,0.88) 50%, rgba(25,5,56,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
+            background-blend-mode: normal, normal !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            border-radius: 0 !important;
+            padding: 12px 24px !important;
+            min-width: 150px;
+            font-family: 'Cinzel', serif !important;
+            font-weight: 700 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.08em !important;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4), 0 1px 0 rgba(255,255,255,0.12) inset !important;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
+            color: #f5f5f5 !important;
+        }
+        .btn:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 12px 32px rgba(105,95,245,0.5), 0 1px 0 rgba(255,255,255,0.18) inset !important;
+            filter: drop-shadow(0 0 6px rgba(105,95,245,0.4));
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, rgba(220,38,38,0.88) 0%, rgba(185,28,28,0.88) 50%, rgba(153,27,27,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
+            background-blend-mode: normal, normal !important;
+        }
+        .btn-logout {
+            background: rgba(255,255,255,0.07) !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            box-shadow: none !important;
+            min-width: unset !important;
+            border-radius: 6px !important;
+            font-family: inherit !important;
+            letter-spacing: 0 !important;
+            font-size: 1.1rem !important;
+            opacity: 0.75;
+        }
+        .btn-logout:hover:not(:disabled) { opacity: 1; transform: scale(1.1); }
+        .card {
+            background: linear-gradient(135deg, rgba(27,27,27,0.56) 0%, rgba(20,19,27,0.56) 50%, rgba(13,11,22,0.61) 100%) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.05) inset !important;
+            overflow: hidden;
+        }
+        .card h3 {
+            position: relative;
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            font-family: 'Cinzel', serif !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.08em !important;
+            color: #e0e0e0 !important;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.6), 0 0 18px rgba(105,95,245,0.35) !important;
+        }
+        .card h3::after {
+            content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
+            box-shadow: 0 0 10px rgba(105,95,245,0.5);
+            pointer-events: none;
+        }
+        .metric, .period-box {
+            background: rgba(255,255,255,0.03) !important;
+            backdrop-filter: blur(8px) saturate(130%);
+            -webkit-backdrop-filter: blur(8px) saturate(130%);
+            border: 1px solid rgba(255,255,255,0.05) !important;
+        }
+        .period-box:hover {
+            background: rgba(255,255,255,0.05) !important;
+            box-shadow: 0 6px 20px rgba(105,95,245,0.15) !important;
+        }
+        th {
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%) !important;
+            color: #a0aec0 !important;
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+        }
+        tbody tr:hover { background: rgba(105,95,245,0.10) !important; }
+        .pair-section h4 {
+            font-family: 'Cinzel', serif !important;
+            letter-spacing: 0.08em !important;
+            color: #a0aec0 !important;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.6) !important;
+        }
+        .form-input, select {
+            background: #1e1c2a !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+        }
+        select option { background: #1e1c2a; color: #e0e0e0; }
+        .form-input:focus, select:focus { border-color: #695ff5 !important; box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important; }
+        .pair-cell { color: #695ff5 !important; }
+    </style>
+</head>
+<body>
+<div id="app" x-data="tradingApp()" x-init="init()">
+    <nav class="navbar">
+        <div style="display:flex; align-items:center;">
+            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;" x-text="status && status.version ? 'v'+status.version : 'v1.1'"></span></a>
+            <div style="margin-left: 2rem;">
+                <a href="/trading" class="nav-link active">Trading</a>
+                <a href="/backtester" class="nav-link">Backtester</a>
+            </div>
+        </div>
+        <div style="display:flex; gap:0.75rem; align-items:center;">
+            <span class="status-pill" x-show="status">
+                <span class="status-dot" :class="{ stopped: status && status.state !== 'RUNNING' }"></span>
+                <span x-text="status ? (status.state || 'UNKNOWN') : ''"
+                      :style="status && status.state === 'RUNNING' ? 'color:#10b981;font-weight:600;' : 'color:#ef4444;font-weight:600;'"></span>
+                <span style="color:#a0aec0;">·</span>
+                <span x-text="status ? (status.exchange || '?') : ''"></span>
+                <span style="color:#a0aec0;">·</span>
+                <span x-text="status ? (status.dry_run ? 'DRY' : 'LIVE') : ''"></span>
+                <template x-if="status && status.last_process">
+                    <span style="color:#a0aec0; font-size:0.72rem;">
+                        &nbsp;· last <span x-text="formatDate(status.last_process)"></span>
+                    </span>
+                </template>
+                <template x-if="status && !status.attached">
+                    <span style="color:#f59e0b;">&nbsp;· not attached</span>
+                </template>
+            </span>
+            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:#a0aec0;">
+                <input type="checkbox" x-model="autoRefresh"> Auto-refresh (10s)
+            </label>
+            <button class="btn" @click="startBot()" :disabled="loading || status?.state === 'RUNNING'"
+                    title="Start trading">&#9654; Start</button>
+            <button class="btn btn-danger" @click="stopBot()" :disabled="loading || status?.state !== 'RUNNING'"
+                    title="Pause trading">&#9208; Stop</button>
+            <button class="btn btn-logout" @click="logout()" title="Logout"
+                    style="min-width:unset; padding:8px 12px; line-height:0;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <div class="content">
+        <div x-show="error" class="alert"><strong>Error:</strong> <span x-text="error"></span></div>
+
+        <div x-show="loading && allTrades.length === 0" class="loading">
+            <span class="spinner"></span> Loading trades...
+        </div>
+
+        <!-- === BOT CONFIGURATION === -->
+        <div class="card" style="margin-bottom:1rem;">
+            <h3>
+                Bot Configuration
+                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
+                    Running:&nbsp;<span style="color:#695ff5;" x-text="status && status.bot_name ? status.bot_name : '—'"></span>
+                    &nbsp;·&nbsp;<span x-text="status && status.strategy ? status.strategy : '—'"></span>
+                    &nbsp;·&nbsp;<span :class="status && !status.dry_run ? 'pos' : 'neg'"
+                                       x-text="status ? (status.dry_run ? 'Paper' : 'LIVE') : '—'"></span>
+                </span>
+            </h3>
+            <div style="display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-end;">
+                <label style="display:flex; flex-direction:column; gap:0.35rem;">
+                    <span style="font-size:0.75rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</span>
+                    <select x-model="selectedConfig" class="form-input" style="min-width:220px;">
+                        <option value="">— Select config —</option>
+                        <template x-for="c in configs" :key="c.name">
+                            <option :value="c.name" x-text="c.name"></option>
+                        </template>
+                    </select>
+                </label>
+                <label style="display:flex; flex-direction:column; gap:0.35rem;">
+                    <span style="font-size:0.75rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</span>
+                    <select x-model="selectedStrategy" class="form-input" style="min-width:220px;">
+                        <option value="">— Select strategy —</option>
+                        <template x-for="s in strategies" :key="s.name">
+                            <option :value="s.name" x-text="s.name"></option>
+                        </template>
+                    </select>
+                </label>
+                <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; padding-bottom:0.35rem;">
+                    <input type="checkbox" x-model="selectedDryRun" @change="applyDryRun()"
+                           style="width:16px; height:16px; accent-color:#695ff5; cursor:pointer;">
+                    <span style="font-size:0.85rem; color:#a0aec0;">Paper mode (dry run)</span>
+                </label>
+                <div style="padding-bottom:0.35rem; font-size:0.72rem; color:#6b7280; line-height:1.6;">
+                    Config &amp; strategy require restart to apply.<br>
+                    Paper toggle applies to the running bot immediately.
+                </div>
+            </div>
+        </div>
+
+        <template x-if="allTrades.length > 0 || !loading">
+          <div>
+            <!-- === METRICS === -->
+            <div class="card">
+                <h3>
+                    Performance Metrics
+                    <span style="font-weight:400; font-size:0.8rem; color:#a0aec0;">
+                        Closed trades: <span x-text="closedEnriched.length"></span> · Open: <span x-text="openEnriched.length"></span>
+                    </span>
+                </h3>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <div class="metric-label">Win Rate / # Trades</div>
+                        <div class="metric-value" :class="metrics.winRate >= 50 ? 'pos' : 'neg'"
+                             x-text="metrics.winRate.toFixed(2) + '% / ' + metrics.totalTrades"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Wins / Losses</div>
+                        <div class="metric-value">
+                            <span class="pos" x-text="metrics.wins"></span> /
+                            <span class="neg" x-text="metrics.losses"></span>
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">PnL</div>
+                        <div class="metric-value" :class="metrics.totalPnl >= 0 ? 'pos' : 'neg'"
+                             x-text="fmt(metrics.totalPnl)"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">ROI</div>
+                        <div class="metric-value" :class="metrics.roi >= 0 ? 'pos' : 'neg'"
+                             x-text="metrics.roi.toFixed(2) + '%'"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Sharpe</div>
+                        <div class="metric-value" :class="metrics.sharpe >= 1 ? 'pos' : (metrics.sharpe < 0 ? 'neg' : '')"
+                             x-text="metrics.sharpe.toFixed(2)"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Profit Factor</div>
+                        <div class="metric-value" :class="metrics.profitFactor >= 1 ? 'pos' : 'neg'"
+                             x-text="isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : '∞'"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Expectancy R</div>
+                        <div class="metric-value" :class="metrics.expectancyR >= 0 ? 'pos' : 'neg'"
+                             x-text="metrics.expectancyR.toFixed(3)"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">R : R</div>
+                        <div class="metric-value" x-text="metrics.rr.toFixed(2)"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">CAGR</div>
+                        <div class="metric-value" :class="metrics.cagr >= 0 ? 'pos' : 'neg'"
+                             x-text="metrics.cagr.toFixed(2) + '%'"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Max Drawdown</div>
+                        <div class="metric-value neg">
+                            <span x-text="metrics.maxDrawdownPct.toFixed(2) + '%'"></span>
+                            <span style="font-size:0.7rem; color:#a0aec0;">(<span x-text="fmt(metrics.maxDrawdownAbs)"></span>)</span>
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Starting Capital</div>
+                        <div class="metric-value" x-text="fmt(metrics.startingCapital)"></div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Avg Trade Duration</div>
+                        <div class="metric-value" x-text="formatMinutes(metrics.avgDurationMin)"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- === MONTHLY === -->
+            <template x-if="monthly.length > 0">
+              <div class="card">
+                <h3>Monthly Performance</h3>
+                <div class="period-grid">
+                    <template x-for="m in monthly" :key="m.label">
+                        <div class="period-box">
+                            <div class="period-header" x-text="m.label"></div>
+                            <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="m.trades"></span></div>
+                            <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="m.winRate >= 50 ? 'pos' : 'neg'" x-text="m.winRate.toFixed(1) + '%'"></span></div>
+                            <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="m.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(m.pnl)"></span></div>
+                            <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="m.roi >= 0 ? 'pos' : 'neg'" x-text="m.roi.toFixed(2) + '%'"></span></div>
+                            <div class="period-row"><span class="lbl">PF</span><span class="val" x-text="isFinite(m.pf) ? m.pf.toFixed(2) : '∞'"></span></div>
+                        </div>
+                    </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- === DAILY === -->
+            <template x-if="daily.length > 0">
+              <div class="card">
+                <h3>Daily Performance (last 30)</h3>
+                <div class="period-grid">
+                    <template x-for="d in daily.slice(-30)" :key="d.label">
+                        <div class="period-box">
+                            <div class="period-header" x-text="d.label"></div>
+                            <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="d.trades"></span></div>
+                            <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="d.winRate >= 50 ? 'pos' : 'neg'" x-text="d.winRate.toFixed(1) + '%'"></span></div>
+                            <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="d.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(d.pnl)"></span></div>
+                            <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="d.roi >= 0 ? 'pos' : 'neg'" x-text="d.roi.toFixed(2) + '%'"></span></div>
+                        </div>
+                    </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- === CHARTS === -->
+            <div class="card"><h3>Equity Curve</h3><div id="equityChart" style="height:380px;"></div></div>
+            <div class="card"><h3>Drawdown</h3><div id="drawdownChart" style="height:340px;"></div></div>
+            <div class="card"><h3>Hourly P&amp;L</h3><div id="hourlyPnlChart" style="height:340px;"></div></div>
+            <div class="card"><h3>Hourly Profit Factor</h3><div id="hourlyPfChart" style="height:340px;"></div></div>
+            <div class="card"><h3>Hourly Max Drawdown</h3><div id="hourlyDdChart" style="height:340px;"></div></div>
+
+            <!-- === PAIR CHART (TradingView-style with strategy indicators) === -->
+            <div class="card">
+                <h3>
+                    Pair Chart
+                    <span style="display:flex; gap:0.5rem; align-items:center;">
+                        <select x-model="chartPair" @change="loadChart()" class="form-input" style="font-size:0.8rem; min-width:160px;">
+                            <option value="">— Select pair —</option>
+                            <template x-for="p in chartPairs" :key="p">
+                                <option :value="p" x-text="p"></option>
+                            </template>
+                        </select>
+                        <select x-model.number="chartLimit" @change="loadChart()" class="form-input" style="font-size:0.8rem;">
+                            <option :value="200">200 bars</option>
+                            <option :value="500">500 bars</option>
+                            <option :value="1000">1000 bars</option>
+                            <option :value="2000">2000 bars</option>
+                        </select>
+                        <span x-show="chartLoading" class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span>
+                    </span>
+                </h3>
+                <div x-show="chartError" class="alert" style="margin-bottom:0.75rem;" x-text="chartError"></div>
+                <div x-show="!chartPair && !chartLoading" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                    Select a pair to load candles + strategy indicators.
+                </div>
+                <div x-show="chartPair" id="pairChart" style="width:100%;"></div>
+                <div x-show="strategyInfo && chartPair" style="margin-top:0.5rem; font-size:0.75rem; color:#a0aec0; display:flex; gap:1rem; flex-wrap:wrap;">
+                    <span><strong style="color:#695ff5;" x-text="strategyInfo ? (strategyInfo.name || '?') : ''"></strong> · <span x-text="strategyInfo ? (strategyInfo.timeframe || '?') : ''"></span></span>
+                    <span x-show="chartIndicators.length">Indicators: <span x-text="chartIndicators.join(', ')"></span></span>
+                    <span x-show="chartTrades.length">Trades on chart: <span x-text="chartTrades.length"></span></span>
+                </div>
+            </div>
+
+            <!-- === BEST/WORST PAIRS === -->
+            <template x-if="pairs.length > 0">
+              <div class="card">
+                <h3>Best / Worst Pairs</h3>
+                <div class="pair-grid">
+                    <div class="pair-section">
+                        <h4>Top 10 Performers</h4>
+                        <div class="table-wrap" style="max-height:400px;">
+                            <table>
+                                <thead><tr>
+                                    <th>Pair</th><th>Trades</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
+                                </tr></thead>
+                                <tbody>
+                                    <template x-for="p in bestPairs" :key="'b-' + p.pair">
+                                        <tr>
+                                            <td class="pair-cell" x-text="p.pair"></td>
+                                            <td x-text="p.trades"></td>
+                                            <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
+                                            <td :class="p.sharpe >= 0 ? 'pos' : 'neg'" x-text="p.sharpe.toFixed(2)"></td>
+                                            <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
+                                            <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="pair-section">
+                        <h4>Bottom 10 Performers</h4>
+                        <div class="table-wrap" style="max-height:400px;">
+                            <table>
+                                <thead><tr>
+                                    <th>Pair</th><th>Trades</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
+                                </tr></thead>
+                                <tbody>
+                                    <template x-for="p in worstPairs" :key="'w-' + p.pair">
+                                        <tr>
+                                            <td class="pair-cell" x-text="p.pair"></td>
+                                            <td x-text="p.trades"></td>
+                                            <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
+                                            <td :class="p.sharpe >= 0 ? 'pos' : 'neg'" x-text="p.sharpe.toFixed(2)"></td>
+                                            <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
+                                            <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- === OPEN TRADES === -->
+            <div class="card">
+                <h3>
+                    <span>Open Trades (<span x-text="openEnriched.length"></span>)</span>
+                    <span style="font-weight:400; font-size:0.8rem; color:#a0aec0;">
+                        Unrealized: <span :class="openUnrealized >= 0 ? 'pos' : 'neg'" x-text="fmt(openUnrealized)"></span>
+                    </span>
+                </h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr>
+                            <th>#</th><th>Pair</th><th>Side</th>
+                            <th>Open</th><th>Duration</th>
+                            <th>Open Rate</th><th>Current</th>
+                            <th>Stake</th><th>Lev</th>
+                            <th>PnL</th><th>PnL %</th>
+                            <th>R</th><th>R:R</th><th>PF</th>
+                            <th>Sharpe</th><th>Expectancy R</th>
+                            <th>SNR</th><th>Entry Q</th><th>Exit Q</th>
+                            <th>Tag</th>
+                        </tr></thead>
+                        <tbody>
+                            <template x-for="(t, i) in openEnriched" :key="'o-' + t.__idx">
+                                <tr>
+                                    <td x-text="i + 1"></td>
+                                    <td class="pair-cell" x-text="t.pair"></td>
+                                    <td :class="t.is_short ? 'side-short' : 'side-long'" x-text="t.is_short ? 'SHORT' : 'LONG'"></td>
+                                    <td x-text="formatDate(t.open_date)"></td>
+                                    <td x-text="formatMinutes(t.__durationMin)"></td>
+                                    <td x-text="fmtRate(t.open_rate)"></td>
+                                    <td x-text="fmtRate(t.current_rate || t.close_rate)"></td>
+                                    <td x-text="fmt(+t.stake_amount || 0)"></td>
+                                    <td x-text="(+t.leverage || 1).toFixed(1) + 'x'"></td>
+                                    <td :class="t.__pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(t.__pnl)"></td>
+                                    <td :class="t.__pnl >= 0 ? 'pos' : 'neg'" x-text="(t.__pnlPct * 100).toFixed(2) + '%'"></td>
+                                    <td :class="t.__r >= 0 ? 'pos' : 'neg'" x-text="t.__r.toFixed(3)"></td>
+                                    <td x-text="t.__rr.toFixed(2)"></td>
+                                    <td x-text="isFinite(t.__pf) ? t.__pf.toFixed(2) : '∞'"></td>
+                                    <td :class="t.__sharpe >= 0 ? 'pos' : 'neg'" x-text="t.__sharpe.toFixed(2)"></td>
+                                    <td :class="t.__expectancyR >= 0 ? 'pos' : 'neg'" x-text="t.__expectancyR.toFixed(3)"></td>
+                                    <td x-text="t.__snr.toFixed(2)"></td>
+                                    <td>
+                                        <span class="quality-bar"><span :style="qualityStyle(t.__entryQ)"></span></span>
+                                        <span x-text="t.__entryQ.toFixed(0)"></span>
+                                    </td>
+                                    <td>
+                                        <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
+                                        <span x-text="t.__exitQ.toFixed(0)"></span>
+                                    </td>
+                                    <td style="color:#a0aec0;" x-text="t.enter_tag || '-'"></td>
+                                </tr>
+                            </template>
+                            <template x-if="openEnriched.length === 0">
+                                <tr>
+                                    <td colspan="20" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                                        No open trades
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <!-- === TIMING ANALYSIS (counterfactuals) === -->
+            <div class="card">
+                <h3>
+                    Trade Timing Analysis
+                    <span style="display:flex; gap:0.5rem; align-items:center; font-weight:400;">
+                        <label style="font-size:0.75rem; color:#a0aec0;">
+                            Entry Win
+                            <input type="number" x-model.number="timingParams.entry_window" min="1" max="100"
+                                   class="form-input" style="width:60px; padding:0.2rem 0.4rem;">
+                        </label>
+                        <label style="font-size:0.75rem; color:#a0aec0;">
+                            Exit Win
+                            <input type="number" x-model.number="timingParams.exit_window" min="1" max="100"
+                                   class="form-input" style="width:60px; padding:0.2rem 0.4rem;">
+                        </label>
+                        <label style="font-size:0.75rem; color:#a0aec0;">
+                            SL Horizon
+                            <input type="number" x-model.number="timingParams.sl_horizon" min="5" max="500"
+                                   class="form-input" style="width:70px; padding:0.2rem 0.4rem;">
+                        </label>
+                        <button class="btn" @click="loadTiming()" :disabled="timingLoading"
+                                style="padding:0.3rem 0.7rem; font-size:0.8rem;"
+                                x-text="timingLoading ? 'Analyzing…' : 'Run'">
+                        </button>
+                    </span>
+                </h3>
+                <div x-show="timingError" class="alert" style="margin-bottom:0.75rem;" x-text="timingError"></div>
+                <div x-show="!timing && !timingLoading" style="text-align:center; color:#a0aec0; padding:1rem;">
+                    Click <b>Run</b> to compute counterfactual entry/exit timing and SL-bypass scenarios
+                    using the strategy's analyzed candles.
+                </div>
+                <template x-if="timing">
+                  <div>
+                    <!-- Summary metrics -->
+                    <div class="metrics-grid" style="margin-bottom:1rem;">
+                        <div class="metric">
+                            <div class="metric-label">Trades Analyzed</div>
+                            <div class="metric-value" x-text="timing.summary.trades_analyzed"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Skipped (no candles)</div>
+                            <div class="metric-value" x-text="timing.summary.trades_skipped"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Avg Entry Improvement</div>
+                            <div class="metric-value pos" x-text="fmt(timing.summary.avg_entry_improvement_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Total Entry Gain</div>
+                            <div class="metric-value pos" x-text="fmt(timing.summary.total_entry_improvement_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Avg Exit Improvement</div>
+                            <div class="metric-value pos" x-text="fmt(timing.summary.avg_exit_improvement_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Total Exit Gain</div>
+                            <div class="metric-value pos" x-text="fmt(timing.summary.total_exit_improvement_abs)"></div>
+                        </div>
+                    </div>
+
+                    <!-- SL bypass summary -->
+                    <h4 style="color:#a0aec0; margin:1rem 0 0.5rem 0;">
+                        Stop-Loss Bypass — what if SL didn't fire?
+                    </h4>
+                    <div class="metrics-grid" style="margin-bottom:1rem;">
+                        <div class="metric">
+                            <div class="metric-label">SL Trades</div>
+                            <div class="metric-value" x-text="timing.summary.sl_count"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Would Recover</div>
+                            <div class="metric-value pos">
+                                <span x-text="timing.summary.sl_recovered_count"></span>
+                                <span style="font-size:0.7rem; color:#a0aec0;">
+                                    (<span x-text="slPct(timing.summary.sl_recovered_count)"></span>%)
+                                </span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Would Be Profitable</div>
+                            <div class="metric-value pos">
+                                <span x-text="timing.summary.sl_profitable_count"></span>
+                                <span style="font-size:0.7rem; color:#a0aec0;">
+                                    (<span x-text="slPct(timing.summary.sl_profitable_count)"></span>%)
+                                </span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Actual SL PnL</div>
+                            <div class="metric-value neg" x-text="fmt(timing.summary.sl_actual_total_pnl_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Hypothetical PnL</div>
+                            <div class="metric-value"
+                                 :class="timing.summary.sl_hypothetical_total_pnl_abs >= 0 ? 'pos' : 'neg'"
+                                 x-text="fmt(timing.summary.sl_hypothetical_total_pnl_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">PnL Delta</div>
+                            <div class="metric-value"
+                                 :class="timing.summary.sl_pnl_delta_abs >= 0 ? 'pos' : 'neg'"
+                                 x-text="fmt(timing.summary.sl_pnl_delta_abs)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">PF Actual → Hypothetical</div>
+                            <div class="metric-value">
+                                <span x-text="pfFmt(timing.summary.sl_profit_factor_actual)"></span>
+                                <span style="color:#a0aec0;">→</span>
+                                <span x-text="pfFmt(timing.summary.sl_profit_factor_hypothetical)"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Per-trade table -->
+                    <div class="table-wrap" style="max-height:500px;">
+                        <table>
+                            <thead><tr>
+                                <th>#</th><th>Pair</th><th>Side</th>
+                                <th>Open Rate</th><th>Best Entry</th><th>Δ Entry</th>
+                                <th>Close Rate</th><th>Best Exit</th><th>Δ Exit</th>
+                                <th>MFE %</th><th>MAE %</th>
+                                <th>Actual PnL</th><th>Exit</th>
+                                <th>SL→ Hyp PnL</th><th>SL→ Recover</th><th>SL→ Profit</th>
+                            </tr></thead>
+                            <tbody>
+                                <template x-for="(r, i) in timing.trades" :key="'tm-' + r.trade_id">
+                                    <tr>
+                                        <td x-text="i + 1"></td>
+                                        <td class="pair-cell" x-text="r.pair"></td>
+                                        <td :class="r.is_short ? 'side-short' : 'side-long'"
+                                            x-text="r.is_short ? 'SHORT' : 'LONG'"></td>
+                                        <td x-text="fmtRate(r.open_rate)"></td>
+                                        <td x-text="fmtRate(r.best_entry_rate)"></td>
+                                        <td :class="r.entry_improvement_abs > 0 ? 'pos' : ''"
+                                            x-text="fmt(r.entry_improvement_abs)"></td>
+                                        <td x-text="fmtRate(r.close_rate)"></td>
+                                        <td x-text="fmtRate(r.best_exit_rate)"></td>
+                                        <td :class="r.exit_improvement_abs > 0 ? 'pos' : ''"
+                                            x-text="fmt(r.exit_improvement_abs)"></td>
+                                        <td class="pos" x-text="(r.mfe_pct * 100).toFixed(2) + '%'"></td>
+                                        <td class="neg" x-text="(r.mae_pct * 100).toFixed(2) + '%'"></td>
+                                        <td :class="r.actual_pnl_abs >= 0 ? 'pos' : 'neg'"
+                                            x-text="fmt(r.actual_pnl_abs)"></td>
+                                        <td style="color:#a0aec0; font-size:0.75rem;" x-text="r.exit_reason || '-'"></td>
+                                        <template x-if="r.sl_bypass">
+                                            <td :class="r.sl_bypass.hypothetical_pnl_abs >= 0 ? 'pos' : 'neg'"
+                                                x-text="fmt(r.sl_bypass.hypothetical_pnl_abs)"></td>
+                                        </template>
+                                        <template x-if="!r.sl_bypass">
+                                            <td style="color:#444;">—</td>
+                                        </template>
+                                        <template x-if="r.sl_bypass">
+                                            <td>
+                                                <span class="badge"
+                                                      :class="r.sl_bypass.would_have_recovered ? 'badge-open' : 'badge-closed'"
+                                                      x-text="r.sl_bypass.would_have_recovered ? 'YES' : 'NO'"></span>
+                                            </td>
+                                        </template>
+                                        <template x-if="!r.sl_bypass">
+                                            <td style="color:#444;">—</td>
+                                        </template>
+                                        <template x-if="r.sl_bypass">
+                                            <td>
+                                                <span class="badge"
+                                                      :class="r.sl_bypass.would_have_been_profitable ? 'badge-open' : 'badge-closed'"
+                                                      x-text="r.sl_bypass.would_have_been_profitable ? 'YES' : 'NO'"></span>
+                                            </td>
+                                        </template>
+                                        <template x-if="!r.sl_bypass">
+                                            <td style="color:#444;">—</td>
+                                        </template>
+                                    </tr>
+                                </template>
+                                <template x-if="timing.trades.length === 0">
+                                    <tr>
+                                        <td colspan="16" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                                            No trades to analyze.
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                  </div>
+                </template>
+            </div>
+
+            <!-- === CLOSED TRADES === -->
+            <div class="card">
+                <h3>
+                    <span>Closed Trades (<span x-text="closedEnriched.length"></span>)</span>
+                    <input x-model="closedFilter" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
+                </h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr>
+                            <th>#</th><th>Pair</th><th>Side</th>
+                            <th>Open</th><th>Close</th><th>Duration</th>
+                            <th>Open Rate</th><th>Close Rate</th>
+                            <th>PnL</th><th>PnL %</th>
+                            <th>R</th><th>R:R</th><th>PF</th>
+                            <th>Sharpe</th><th>Expectancy R</th>
+                            <th>SNR</th><th>Entry Q</th><th>Exit Q</th>
+                            <th>Exit</th>
+                        </tr></thead>
+                        <tbody>
+                            <template x-for="(t, i) in filteredClosed" :key="'c-' + t.__idx">
+                                <tr>
+                                    <td x-text="i + 1"></td>
+                                    <td class="pair-cell" x-text="t.pair"></td>
+                                    <td :class="t.is_short ? 'side-short' : 'side-long'" x-text="t.is_short ? 'SHORT' : 'LONG'"></td>
+                                    <td x-text="formatDate(t.open_date)"></td>
+                                    <td x-text="formatDate(t.close_date)"></td>
+                                    <td x-text="formatMinutes(t.__durationMin)"></td>
+                                    <td x-text="fmtRate(t.open_rate)"></td>
+                                    <td x-text="fmtRate(t.close_rate)"></td>
+                                    <td :class="t.__pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(t.__pnl)"></td>
+                                    <td :class="t.__pnl >= 0 ? 'pos' : 'neg'" x-text="(t.__pnlPct * 100).toFixed(2) + '%'"></td>
+                                    <td :class="t.__r >= 0 ? 'pos' : 'neg'" x-text="t.__r.toFixed(3)"></td>
+                                    <td x-text="t.__rr.toFixed(2)"></td>
+                                    <td x-text="isFinite(t.__pf) ? t.__pf.toFixed(2) : '∞'"></td>
+                                    <td :class="t.__sharpe >= 0 ? 'pos' : 'neg'" x-text="t.__sharpe.toFixed(2)"></td>
+                                    <td :class="t.__expectancyR >= 0 ? 'pos' : 'neg'" x-text="t.__expectancyR.toFixed(3)"></td>
+                                    <td x-text="t.__snr.toFixed(2)"></td>
+                                    <td>
+                                        <span class="quality-bar"><span :style="qualityStyle(t.__entryQ)"></span></span>
+                                        <span x-text="t.__entryQ.toFixed(0)"></span>
+                                    </td>
+                                    <td>
+                                        <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
+                                        <span x-text="t.__exitQ.toFixed(0)"></span>
+                                    </td>
+                                    <td style="color:#a0aec0;" x-text="t.exit_reason || '-'"></td>
+                                </tr>
+                            </template>
+                            <template x-if="filteredClosed.length === 0">
+                                <tr>
+                                    <td colspan="19" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                                        No closed trades
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- === BOT LOG === -->
+            <div class="card">
+                <h3>
+                    Bot Log
+                    <span style="display:flex; gap:0.5rem; align-items:center; font-weight:400;">
+                        <!-- Tab toggle -->
+                        <span style="display:flex; border:1px solid rgba(255,255,255,0.15); border-radius:6px; overflow:hidden; font-size:0.8rem;">
+                            <button @click="logTab='messages'; loadLogs()"
+                                    :style="logTab==='messages' ? 'background:#695ff5; color:#fff;' : 'background:transparent; color:#a0aec0;'"
+                                    style="border:none; padding:0.2rem 0.6rem; cursor:pointer;">Messages</button>
+                            <button @click="logTab='console'; loadConsoleLogs()"
+                                    :style="logTab==='console' ? 'background:#695ff5; color:#fff;' : 'background:transparent; color:#a0aec0;'"
+                                    style="border:none; padding:0.2rem 0.6rem; cursor:pointer;">Console</button>
+                        </span>
+                        <!-- Messages filter (visible only on Messages tab) -->
+                        <template x-if="logTab==='messages'">
+                            <select x-model="logsFilter" class="form-input" style="font-size:0.8rem; padding:0.2rem 0.5rem; width:auto;">
+                                <option value="all">All</option>
+                                <option value="trade">Trades</option>
+                                <option value="status">Status</option>
+                            </select>
+                        </template>
+                        <button class="btn" @click="logTab==='messages' ? loadLogs() : loadConsoleLogs()" style="padding:0.3rem 0.7rem; font-size:0.8rem;">&#8635; Refresh</button>
+                    </span>
+                </h3>
+
+                <!-- Messages tab -->
+                <template x-if="logTab==='messages'">
+                    <div style="font-family:monospace; font-size:0.78rem; max-height:400px; overflow-y:auto;
+                                background:rgba(0,0,0,0.25); border-radius:6px; padding:0.75rem;">
+                        <template x-if="logs.length === 0">
+                            <div style="color:#a0aec0; text-align:center; padding:1rem;">No log messages yet.</div>
+                        </template>
+                        <template x-for="(m, i) in logs.filter(m => logsFilter === 'all' || (logsFilter === 'trade' && ['buy','sell','entry','exit','open_trade','close_trade','trade_cancel'].some(k => (m.type||'').toLowerCase().includes(k))) || (logsFilter === 'status' && (m.type||'').toLowerCase().includes('status') || (m.type||'').toLowerCase().includes('startup')))" :key="i">
+                            <div style="display:flex; gap:0.75rem; border-bottom:1px solid rgba(255,255,255,0.04); padding:0.25rem 0; line-height:1.5;">
+                                <span style="color:#a0aec0; white-space:nowrap; flex-shrink:0;" x-text="m.received_at ? m.received_at.replace('T',' ').slice(0,19) : ''"></span>
+                                <span class="badge"
+                                      :class="(m.type||'').includes('buy') || (m.type||'').includes('entry') || (m.type||'').includes('open') ? 'badge-open' : ((m.type||'').includes('sell') || (m.type||'').includes('exit') || (m.type||'').includes('close') ? 'badge-closed' : '')"
+                                      style="flex-shrink:0; align-self:flex-start;"
+                                      x-text="m.type || '?'"></span>
+                                <span style="color:#e0e0e0; word-break:break-word;"
+                                      x-text="m.status || m.message || (m.pair ? m.pair + (m.profit_amount != null ? ' · PnL ' + (m.profit_amount >= 0 ? '+' : '') + (+m.profit_amount).toFixed(2) : '') + (m.stake_amount != null ? ' · stake ' + (+m.stake_amount).toFixed(2) : '') : JSON.stringify(m).slice(0,120))"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Console tab -->
+                <template x-if="logTab==='console'">
+                    <div style="font-family:monospace; font-size:0.75rem; max-height:400px; overflow-y:auto;
+                                background:rgba(0,0,0,0.35); border-radius:6px; padding:0.75rem;">
+                        <template x-if="consoleLogs.length === 0">
+                            <div style="color:#a0aec0; text-align:center; padding:1rem;">No console output yet.</div>
+                        </template>
+                        <template x-for="(l, i) in consoleLogs" :key="i">
+                            <div style="padding:0.1rem 0; line-height:1.4; white-space:pre-wrap; word-break:break-all;"
+                                 :style="l.level==='ERROR' ? 'color:#fc8181;' : l.level==='WARNING' ? 'color:#f6e05e;' : l.level==='DEBUG' ? 'color:#68d391;' : 'color:#e0e0e0;'"
+                                 x-text="l.line"></div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </div></template>
+    </div>
+</div>
+
+<script>
+function tradingApp() {
+    return {
+        token: localStorage.getItem('VulcanTrader_token') || '',
+        status: null,
+        openTrades: [],
+        closedTrades: [],
+        loading: false,
+        error: null,
+        closedFilter: '',
+        startingCapital: 1000,
+        autoRefresh: true,
+        _timer: null,
+        strategyInfo: null,
+        chartPair: '',
+        chartLimit: 500,
+        chartData: null,
+        chartTrades: [],
+        chartIndicators: [],
+        chartLoading: false,
+        chartError: null,
+        timing: null,
+        timingLoading: false,
+        timingError: null,
+        timingParams: { entry_window: 10, exit_window: 10, sl_horizon: 50 },
+        logs: [],
+        logsFilter: 'all',
+        logTab: 'messages',
+        consoleLogs: [],
+        configs: [],
+        strategies: [],
+        selectedConfig: localStorage.getItem('VT_selectedConfig') || '',
+        selectedStrategy: localStorage.getItem('VT_selectedStrategy') || '',
+        selectedDryRun: true,
+
+        get allTrades() { return this.openTrades.concat(this.closedTrades); },
+        get openEnriched() { return this.openTrades.map((t, i) => this._enrich(t, i, true)); },
+        get closedEnriched() { return this.closedTrades.map((t, i) => this._enrich(t, i, false)); },
+        get filteredClosed() {
+            const f = this.closedFilter.trim().toUpperCase();
+            if (!f) return this.closedEnriched;
+            return this.closedEnriched.filter(t => (t.pair || '').toUpperCase().includes(f));
+        },
+        get openUnrealized() { return this.openEnriched.reduce((s, t) => s + t.__pnl, 0); },
+        get metrics() {
+            const ts = this.closedEnriched;
+            const n = ts.length;
+            if (n === 0) {
+                return { winRate:0,totalTrades:0,wins:0,losses:0,totalPnl:0,roi:0,
+                         sharpe:0,profitFactor:0,expectancyR:0,rr:0,cagr:0,
+                         maxDrawdownPct:0,maxDrawdownAbs:0,
+                         startingCapital:this.startingCapital,avgDurationMin:0 };
+            }
+            // Only count trades with recorded P&L for rate/ratio metrics
+            // (null profit = cancelled/unfilled orders that never settled)
+            const scored = ts.filter(t => t.__hasPnl);
+            const ns = scored.length || 1;
+            const wins = scored.filter(t => t.__pnl > 0);
+            const losses = scored.filter(t => t.__pnl < 0);
+            const winRate = (wins.length / ns) * 100;
+            const totalPnl = ts.reduce((s, t) => s + t.__pnl, 0);
+            const grossWin = wins.reduce((s, t) => s + t.__pnl, 0);
+            const grossLoss = Math.abs(losses.reduce((s, t) => s + t.__pnl, 0));
+            const profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
+            const avgWin = wins.length ? grossWin / wins.length : 0;
+            const avgLoss = losses.length ? grossLoss / losses.length : 0;
+            const rr = avgLoss > 0 ? avgWin / avgLoss : 0;
+            const winRateFrac = wins.length / ns;
+            const expectancyR = winRateFrac * rr - (1 - winRateFrac);
+            const roi = (totalPnl / this.startingCapital) * 100;
+            const sharpe = this._sharpe(this._dailyReturns(ts));
+            const eq = this._equity(ts, this.startingCapital);
+            const ddRes = this._maxDrawdown(eq.values);
+            const dates = ts.map(t => new Date(t.close_date || t.open_date)).filter(d => !isNaN(d));
+            let cagr = 0;
+            if (dates.length >= 2) {
+                const days = (Math.max(...dates) - Math.min(...dates)) / 86400000;
+                const years = days / 365.25;
+                if (years > 0 && this.startingCapital > 0) {
+                    const finalEq = this.startingCapital + totalPnl;
+                    if (finalEq > 0) cagr = Math.min((Math.pow(finalEq / this.startingCapital, 1 / years) - 1) * 100, 99999);
+                }
+            }
+            const avgDurationMin = ts.reduce((s, t) => s + t.__durationMin, 0) / n;
+            return {
+                winRate, totalTrades: n, wins: wins.length, losses: losses.length,
+                totalPnl, roi, sharpe, profitFactor, expectancyR, rr, cagr,
+                maxDrawdownPct: ddRes.pct, maxDrawdownAbs: ddRes.abs,
+                startingCapital: this.startingCapital, avgDurationMin,
+            };
+        },
+        get monthly() {
+            return this._groupByPeriod(this.closedEnriched, t => {
+                const d = new Date(t.close_date || t.open_date);
+                if (isNaN(d)) return null;
+                return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+            });
+        },
+        get daily() {
+            return this._groupByPeriod(this.closedEnriched, t => {
+                const d = new Date(t.close_date || t.open_date);
+                if (isNaN(d)) return null;
+                return d.toISOString().slice(0, 10);
+            });
+        },
+        get pairs() {
+            const map = {};
+            this.closedEnriched.forEach(t => {
+                const p = t.pair || '?';
+                if (!map[p]) map[p] = { pair: p, trades: 0, wins: 0, pnl: 0, gw: 0, gl: 0,
+                                        pnls: [], ordered: [] };
+                const o = map[p];
+                o.trades++; o.pnl += t.__pnl; o.pnls.push(t.__pnl);
+                if (t.__pnl > 0) { o.wins++; o.gw += t.__pnl; }
+                else if (t.__pnl < 0) { o.gl += Math.abs(t.__pnl); }
+                o.ordered.push({ d: new Date(t.close_date || t.open_date), p: t.__pnl });
+            });
+            return Object.values(map).map(o => {
+                const m = o.pnls.reduce((s, v) => s + v, 0) / o.pnls.length;
+                const v = o.pnls.length > 1
+                    ? o.pnls.reduce((s, x) => s + (x - m) ** 2, 0) / (o.pnls.length - 1) : 0;
+                const sd = Math.sqrt(v);
+                const sharpe = sd > 0 ? (m / sd) * Math.sqrt(252) : 0;
+                o.ordered.sort((a, b) => a.d - b.d);
+                let eq = this.startingCapital, peak = eq, maxDd = 0;
+                o.ordered.forEach(({ p }) => {
+                    eq += p; if (eq > peak) peak = eq;
+                    const dd = peak !== 0 ? ((peak - eq) / peak) * 100 : 0;
+                    if (dd > maxDd) maxDd = dd;
+                });
+                return {
+                    pair: o.pair, trades: o.trades, pnl: o.pnl, sharpe, maxDd,
+                    pf: o.gl > 0 ? o.gw / o.gl : (o.gw > 0 ? Infinity : 0),
+                };
+            }).sort((a, b) => b.pnl - a.pnl);
+        },
+        get bestPairs() { return this.pairs.slice(0, 10); },
+        get worstPairs() { return this.pairs.slice().reverse().slice(0, 10); },
+        get chartPairs() {
+            const set = new Set();
+            this.openTrades.forEach(t => t.pair && set.add(t.pair));
+            (this.strategyInfo && this.strategyInfo.pairs || []).forEach(p => set.add(p));
+            this.closedTrades.slice(-50).forEach(t => t.pair && set.add(t.pair));
+            return Array.from(set).sort();
+        },
+
+        async init() {
+            if (!this.token) { window.location.href = '/login'; return; }
+            await this.refreshDashboard();
+            await Promise.all([
+                this.authedFetch('/api/strategy/info').then(r => { this.strategyInfo = r; }).catch(() => {}),
+                this.loadMeta(),
+            ]);
+            if (this.autoRefresh) this._startTimer();
+            this.$watch('closedTrades', () => this.$nextTick(() => this.renderCharts()));
+            this.$watch('autoRefresh', v => v ? this._startTimer() : this._stopTimer());
+            this.$watch('selectedConfig', v => localStorage.setItem('VT_selectedConfig', v));
+            this.$watch('selectedStrategy', v => localStorage.setItem('VT_selectedStrategy', v));
+        },
+
+        fmt(v) { return (v >= 0 ? '+' : '') + (+v).toFixed(2); },
+        fmtRate(v) { if (v == null || v === '') return '-'; const n = +v; return n < 1 ? n.toPrecision(5) : n.toFixed(4); },
+        formatDate(d) {
+            if (!d) return '-';
+            const dt = new Date(d);
+            if (isNaN(dt)) return d;
+            return dt.toISOString().replace('T', ' ').slice(0, 16);
+        },
+        formatMinutes(m) {
+            if (!m || !isFinite(m)) return '-';
+            const h = Math.floor(m / 60); const mm = Math.round(m % 60);
+            return h > 0 ? `${h}h ${mm}m` : `${mm}m`;
+        },
+        qualityStyle(q) {
+            const pct = Math.max(0, Math.min(100, q));
+            const color = pct >= 70 ? '#10b981' : pct >= 40 ? '#695ff5' : '#ef4444';
+            return `width:${pct}%; background:${color};`;
+        },
+        async authedFetch(url, opts = {}) {
+            const r = await fetch(url, {
+                ...opts,
+                headers: { Authorization: 'Bearer ' + this.token, ...(opts.headers || {}) }
+            });
+            if (r.status === 401) {
+                localStorage.removeItem('VulcanTrader_token');
+                window.location.href = '/login';
+                throw new Error('Unauthorized');
+            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        },
+        logout() {
+            this._stopTimer();
+            localStorage.removeItem('VulcanTrader_token');
+            window.location.href = '/login';
+        },
+        async startBot() {
+            try {
+                await this.authedFetch('/api/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        config: this.selectedConfig || null,
+                        strategy: this.selectedStrategy || null,
+                        dry_run: this.selectedDryRun,
+                    }),
+                });
+                await this.refreshAll(true);
+            } catch(e) { this.error = 'Start failed: ' + e.message; }
+        },
+        async stopBot() {
+            try {
+                await this.authedFetch('/api/stop', { method: 'POST' });
+                await this.refreshAll(true);
+            } catch(e) { this.error = 'Stop failed: ' + e.message; }
+        },
+        async loadMeta() {
+            try {
+                const [cfgs, strats] = await Promise.all([
+                    this.authedFetch('/api/configs').catch(() => ({ configs: [] })),
+                    this.authedFetch('/api/strategies').catch(() => ({ strategies: [] })),
+                ]);
+                this.configs = cfgs.configs || [];
+                this.strategies = strats.strategies || [];
+                if (this.status) {
+                    if (this.status.dry_run !== undefined) this.selectedDryRun = !!this.status.dry_run;
+                    if (this.status.strategy && !this.selectedStrategy) this.selectedStrategy = this.status.strategy;
+                }
+            } catch (e) {}
+        },
+        async applyDryRun() {
+            try {
+                await this.authedFetch('/api/bot/configure', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dry_run: this.selectedDryRun }),
+                });
+                await this.refreshAll(true);
+            } catch (e) { this.error = 'Configure failed: ' + e.message; }
+        },
+        _startTimer() {
+            this._stopTimer();
+            this._timerBusy = false;
+            this._timer = setInterval(async () => {
+                if (this._timerBusy) return;
+                this._timerBusy = true;
+                try { await this.refreshDashboard(true); }
+                finally { this._timerBusy = false; }
+            }, 10000);
+        },
+        _stopTimer() { if (this._timer) { clearInterval(this._timer); this._timer = null; } },
+        async refreshDashboard(silent) {
+            if (!silent) this.loading = true;
+            this.error = null;
+            try {
+                const d = await this.authedFetch('/api/dashboard');
+                if (d.status) this.status = d.status;
+                this.openTrades = d.open_trades || [];
+                this.closedTrades = d.closed_trades || [];
+                this.logs = (d.messages || []).slice().reverse();
+                this.consoleLogs = (d.logs || []).slice().reverse();
+                if (this.status && this.status.starting_capital) {
+                    this.startingCapital = +this.status.starting_capital;
+                }
+            } catch (e) {
+                this.error = e.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+        async refreshAll(silent) { return this.refreshDashboard(silent); },
+        async loadLogs() { return this.refreshDashboard(true); },
+        async loadConsoleLogs() { return this.refreshDashboard(true); },
+        _enrich(t, idx, isOpen) {
+            const pnl = +(t.profit_abs ?? t.close_profit_abs ?? 0);
+            const pnlPct = +(t.profit_ratio ?? t.close_profit ?? 0);
+            const stake = +t.stake_amount || 0;
+            const open = t.open_date ? new Date(t.open_date) : null;
+            const closeDate = isOpen ? new Date() : (t.close_date ? new Date(t.close_date) : null);
+            const durationMin = open && closeDate ? (closeDate - open) / 60000 : 0;
+            const stopLoss = Math.abs(+t.initial_stop_loss_abs
+                ? (+t.open_rate - +t.initial_stop_loss_abs) * (+t.amount || 0) : 0)
+                || (stake * 0.02);
+            const r = stopLoss > 0 ? pnl / stopLoss : 0;
+            const rr = Math.abs(pnlPct) / 0.02;
+            const pf = pnl > 0 ? Infinity : (pnl < 0 ? 0 : 1);
+            const sharpe = pnlPct === 0 ? 0 : Math.max(-10, Math.min(10, pnlPct * 10));
+            const expectancyR = r;
+            const snr = Math.abs(pnlPct) / 0.01;
+            const minR = +t.min_rate || 0, maxR = +t.max_rate || 0;
+            let entryQ = 50, exitQ = 50;
+            if (minR && maxR && maxR > minR && +t.open_rate) {
+                const open_r = +t.open_rate;
+                if (t.is_short) {
+                    entryQ = Math.max(0, Math.min(100, ((open_r - minR) / (maxR - minR)) * 100));
+                } else {
+                    entryQ = Math.max(0, Math.min(100, ((maxR - open_r) / (maxR - minR)) * 100));
+                }
+            }
+            if (!isOpen && minR && maxR && maxR > minR && +t.close_rate) {
+                const close_r = +t.close_rate;
+                if (t.is_short) {
+                    exitQ = Math.max(0, Math.min(100, ((maxR - close_r) / (maxR - minR)) * 100));
+                } else {
+                    exitQ = Math.max(0, Math.min(100, ((close_r - minR) / (maxR - minR)) * 100));
+                }
+            }
+            const hasPnl = (t.profit_abs ?? t.close_profit_abs) != null;
+            return Object.assign({}, t, {
+                __idx: idx, __pnl: pnl, __pnlPct: pnlPct, __durationMin: durationMin,
+                __r: r, __rr: rr, __pf: pf, __sharpe: sharpe, __expectancyR: expectancyR,
+                __snr: snr, __entryQ: entryQ, __exitQ: exitQ, __hasPnl: hasPnl,
+            });
+        },
+        _equity(trades, start) {
+            const ordered = trades.slice().sort((a, b) =>
+                new Date(a.close_date || a.open_date) - new Date(b.close_date || b.open_date));
+            const xs = []; const ys = []; let eq = start;
+            ordered.forEach(t => { eq += t.__pnl; xs.push(new Date(t.close_date || t.open_date)); ys.push(eq); });
+            return { dates: xs, values: ys };
+        },
+        _maxDrawdown(values) {
+            let peak = values[0] || 0, maxAbs = 0, maxPct = 0;
+            values.forEach(v => {
+                if (v > peak) peak = v;
+                const dd = peak - v;
+                if (dd > maxAbs) maxAbs = dd;
+                const pct = peak !== 0 ? (dd / peak) * 100 : 0;
+                if (pct > maxPct) maxPct = pct;
+            });
+            return { abs: maxAbs, pct: maxPct };
+        },
+        _dailyReturns(trades) {
+            const map = {};
+            trades.forEach(t => {
+                const d = new Date(t.close_date || t.open_date);
+                if (isNaN(d)) return;
+                const key = d.toISOString().slice(0, 10);
+                map[key] = (map[key] || 0) + t.__pnl;
+            });
+            return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+                .map(([, v]) => v / this.startingCapital);
+        },
+        _sharpe(returns) {
+            if (returns.length < 2) return 0;
+            const m = returns.reduce((s, v) => s + v, 0) / returns.length;
+            const v = returns.reduce((s, x) => s + (x - m) ** 2, 0) / (returns.length - 1);
+            const sd = Math.sqrt(v);
+            return sd > 0 ? (m / sd) * Math.sqrt(252) : 0;
+        },
+        _groupByPeriod(trades, keyFn) {
+            const map = {};
+            trades.forEach(t => {
+                const k = keyFn(t);
+                if (!k) return;
+                if (!map[k]) map[k] = { label: k, trades: 0, wins: 0, pnl: 0, gw: 0, gl: 0 };
+                const o = map[k];
+                o.trades++; o.pnl += t.__pnl;
+                if (t.__pnl > 0) { o.wins++; o.gw += t.__pnl; }
+                else if (t.__pnl < 0) { o.gl += Math.abs(t.__pnl); }
+            });
+            return Object.values(map).map(o => ({
+                label: o.label, trades: o.trades, pnl: o.pnl,
+                winRate: (o.wins / o.trades) * 100,
+                roi: (o.pnl / this.startingCapital) * 100,
+                pf: o.gl > 0 ? o.gw / o.gl : (o.gw > 0 ? Infinity : 0),
+            })).sort((a, b) => a.label.localeCompare(b.label));
+        },
+        _layout(extra) {
+            return Object.assign({
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#e0e0e0', family: 'system-ui, sans-serif' },
+                margin: { t: 30, r: 30, b: 50, l: 60 },
+                xaxis: { gridcolor: 'rgba(255,255,255,0.05)' },
+                yaxis: { gridcolor: 'rgba(255,255,255,0.05)' },
+                showlegend: false,
+            }, extra || {});
+        },
+        renderCharts() {
+            if (this.closedEnriched.length === 0) return;
+            const ts = this.closedEnriched;
+            const eq = this._equity(ts, this.startingCapital);
+            const cfg = { responsive: true, displaylogo: false };
+
+            Plotly.react('equityChart', [{
+                x: eq.dates, y: eq.values, type: 'scatter', mode: 'lines',
+                line: { color: '#10b981', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(16,185,129,0.1)',
+            }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Equity' } }), cfg);
+
+            let peak = eq.values[0] || 0;
+            const ddVals = eq.values.map(v => {
+                if (v > peak) peak = v;
+                return peak !== 0 ? ((v - peak) / peak) * 100 : 0;
+            });
+            Plotly.react('drawdownChart', [{
+                x: eq.dates, y: ddVals, type: 'scatter', mode: 'lines',
+                line: { color: '#ef4444', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
+            }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Drawdown %' } }), cfg);
+
+            const hourly = Array(24).fill(null).map(() => ({ pnl: 0, gw: 0, gl: 0, dd: 0, peak: 0, eq: 0 }));
+            ts.forEach(t => {
+                const d = new Date(t.close_date || t.open_date);
+                if (isNaN(d)) return;
+                const h = d.getUTCHours();
+                hourly[h].pnl += t.__pnl;
+                if (t.__pnl > 0) hourly[h].gw += t.__pnl;
+                else if (t.__pnl < 0) hourly[h].gl += Math.abs(t.__pnl);
+                hourly[h].eq += t.__pnl;
+                if (hourly[h].eq > hourly[h].peak) hourly[h].peak = hourly[h].eq;
+                const dd = hourly[h].peak - hourly[h].eq;
+                if (dd > hourly[h].dd) hourly[h].dd = dd;
+            });
+            const hours = Array.from({ length: 24 }, (_, i) => i + ':00');
+
+            Plotly.react('hourlyPnlChart', [{
+                x: hours, y: hourly.map(h => h.pnl), type: 'bar',
+                marker: { color: hourly.map(h => h.pnl >= 0 ? '#10b981' : '#ef4444') },
+            }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'PnL' } }), cfg);
+
+            Plotly.react('hourlyPfChart', [{
+                x: hours,
+                y: hourly.map(h => h.gl > 0 ? h.gw / h.gl : (h.gw > 0 ? 5 : 0)),
+                type: 'bar',
+                marker: { color: hourly.map(h => (h.gl > 0 ? h.gw / h.gl : 5) >= 1 ? '#10b981' : '#ef4444') },
+            }], this._layout({
+                yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Profit Factor' },
+                shapes: [{ type: 'line', x0: -0.5, x1: 23.5, y0: 1, y1: 1,
+                           line: { color: 'rgba(255,255,255,0.3)', dash: 'dash', width: 1 } }],
+            }), cfg);
+
+            Plotly.react('hourlyDdChart', [{
+                x: hours, y: hourly.map(h => -h.dd), type: 'bar',
+                marker: { color: '#ef4444' },
+            }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Max DD' } }), cfg);
+        },
+        async loadChart() {
+            if (!this.chartPair) {
+                this.chartData = null;
+                this.chartTrades = [];
+                return;
+            }
+            this.chartLoading = true;
+            this.chartError = null;
+            try {
+                const tf = (this.strategyInfo && this.strategyInfo.timeframe) || '';
+                const url = `/api/pair/candles?pair=${encodeURIComponent(this.chartPair)}`
+                    + `&limit=${this.chartLimit}` + (tf ? `&timeframe=${encodeURIComponent(tf)}` : '');
+                const [candles, trades] = await Promise.all([
+                    this.authedFetch(url),
+                    this.authedFetch('/api/pair/trades?pair=' + encodeURIComponent(this.chartPair))
+                        .catch(() => ({ trades: [] })),
+                ]);
+                this.chartData = candles;
+                this.chartIndicators = candles.indicators || [];
+                this.chartTrades = trades.trades || [];
+                this.$nextTick(() => this.renderPairChart());
+            } catch (e) {
+                this.chartError = e.message;
+            } finally {
+                this.chartLoading = false;
+            }
+        },
+        renderPairChart() {
+            const data = this.chartData;
+            if (!data || !data.candles || data.candles.length === 0) {
+                Plotly.purge('pairChart');
+                return;
+            }
+            const candles = data.candles;
+            const dates = candles.map(c => c.date);
+            const plot_config = (this.strategyInfo && this.strategyInfo.plot_config) || { main_plot: {}, subplots: {} };
+            const mainPlot = plot_config.main_plot || {};
+            const subplots = plot_config.subplots || {};
+
+            const subplotNames = Object.keys(subplots);
+            const totalRows = 2 + subplotNames.length;
+
+            const heights = [0.55, 0.12];
+            const remaining = Math.max(0.05, (1 - 0.55 - 0.12) - 0.04);
+            const perSub = subplotNames.length ? (remaining / subplotNames.length) : 0;
+            for (let i = 0; i < subplotNames.length; i++) heights.push(perSub);
+
+            const traces = [];
+
+            traces.push({
+                x: dates,
+                open: candles.map(c => c.open),
+                high: candles.map(c => c.high),
+                low: candles.map(c => c.low),
+                close: candles.map(c => c.close),
+                type: 'candlestick',
+                name: this.chartPair,
+                increasing: { line: { color: '#10b981' }, fillcolor: 'rgba(16,185,129,0.6)' },
+                decreasing: { line: { color: '#ef4444' }, fillcolor: 'rgba(239,68,68,0.6)' },
+                xaxis: 'x', yaxis: 'y',
+            });
+
+            const palette = ['#695ff5', '#10b981', '#f59e0b', '#06b6d4', '#ec4899', '#8b5cf6', '#84cc16'];
+            let pi = 0;
+            const addLine = (col, opts, axisX, axisY) => {
+                if (!candles[0] || !(col in candles[0])) return;
+                const color = (opts && opts.color) || palette[pi++ % palette.length];
+                const dash = (opts && opts.type === 'bar') ? null : 'solid';
+                traces.push({
+                    x: dates,
+                    y: candles.map(c => c[col]),
+                    type: (opts && opts.type === 'bar') ? 'bar' : 'scatter',
+                    mode: 'lines',
+                    name: col,
+                    line: { color, width: 1.4, dash },
+                    marker: (opts && opts.type === 'bar') ? { color } : undefined,
+                    xaxis: axisX, yaxis: axisY,
+                });
+            };
+            for (const [col, opts] of Object.entries(mainPlot)) addLine(col, opts, 'x', 'y');
+
+            traces.push({
+                x: dates,
+                y: candles.map(c => c.volume),
+                type: 'bar',
+                name: 'volume',
+                marker: { color: candles.map(c => c.close >= c.open ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)') },
+                xaxis: 'x', yaxis: 'y2',
+            });
+
+            subplotNames.forEach((name, idx) => {
+                const row = 3 + idx;
+                const ax = `y${row}`;
+                const cols = subplots[name] || {};
+                for (const [col, opts] of Object.entries(cols)) addLine(col, opts, 'x', ax);
+            });
+
+            const entriesX = [], entriesY = [], entriesText = [], entryColors = [];
+            const exitsX = [], exitsY = [], exitsText = [], exitColors = [];
+            this.chartTrades.forEach(t => {
+                if (t.open_date && t.open_rate != null) {
+                    entriesX.push(this._normaliseDate(t.open_date));
+                    entriesY.push(+t.open_rate);
+                    entriesText.push(`${t.is_short ? 'SHORT' : 'LONG'} entry${t.enter_tag ? ' · ' + t.enter_tag : ''}`);
+                    entryColors.push(t.is_short ? '#ef4444' : '#10b981');
+                }
+                if (t.close_date && t.close_rate != null) {
+                    exitsX.push(this._normaliseDate(t.close_date));
+                    exitsY.push(+t.close_rate);
+                    exitsText.push(`Exit · ${t.exit_reason || '-'}`);
+                    exitColors.push(+(t.profit_abs ?? 0) >= 0 ? '#10b981' : '#ef4444');
+                }
+            });
+            if (entriesX.length) {
+                traces.push({
+                    x: entriesX, y: entriesY, mode: 'markers', type: 'scatter',
+                    name: 'Entry', text: entriesText,
+                    marker: { symbol: 'triangle-up', size: 10, color: entryColors },
+                    xaxis: 'x', yaxis: 'y',
+                });
+            }
+            if (exitsX.length) {
+                traces.push({
+                    x: exitsX, y: exitsY, mode: 'markers', type: 'scatter',
+                    name: 'Exit', text: exitsText,
+                    marker: { symbol: 'triangle-down', size: 10, color: exitColors },
+                    xaxis: 'x', yaxis: 'y',
+                });
+            }
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#e0e0e0', family: 'system-ui, sans-serif' },
+                margin: { t: 20, r: 30, b: 30, l: 60 },
+                grid: { rows: totalRows, columns: 1, roworder: 'top to bottom',
+                        subplots: [['xy'], ['xy2'], ...subplotNames.map((_, i) => [`xy${3 + i}`])] },
+                xaxis: {
+                    gridcolor: 'rgba(255,255,255,0.05)',
+                    rangeslider: { visible: false },
+                    type: 'date',
+                },
+                yaxis: { domain: [1 - heights[0], 1], gridcolor: 'rgba(255,255,255,0.05)', title: 'Price' },
+                yaxis2: { domain: [1 - heights[0] - heights[1], 1 - heights[0] - 0.005],
+                          gridcolor: 'rgba(255,255,255,0.05)', title: 'Vol' },
+            };
+            let acc = heights[0] + heights[1];
+            subplotNames.forEach((name, idx) => {
+                const h = heights[2 + idx];
+                const top = 1 - acc - 0.01;
+                const bot = top - h;
+                acc += h + 0.01;
+                layout[`yaxis${3 + idx}`] = {
+                    domain: [Math.max(0, bot), Math.max(0.05, top)],
+                    gridcolor: 'rgba(255,255,255,0.05)',
+                    title: name,
+                };
+            });
+
+            Plotly.react('pairChart', traces, layout,
+                { responsive: true, displaylogo: false, scrollZoom: true });
+        },
+        async loadTiming() {
+            this.timingLoading = true;
+            this.timingError = null;
+            try {
+                const p = this.timingParams;
+                const url = `/api/analysis/timing?limit=2000`
+                    + `&entry_window=${p.entry_window}`
+                    + `&exit_window=${p.exit_window}`
+                    + `&sl_horizon=${p.sl_horizon}`;
+                this.timing = await this.authedFetch(url);
+            } catch (e) {
+                this.timingError = e.message;
+            } finally {
+                this.timingLoading = false;
+            }
+        },
+        pfFmt(v) {
+            if (v === null || v === undefined) return '∞';
+            if (!isFinite(v)) return '∞';
+            return (+v).toFixed(2);
+        },
+        slPct(n) {
+            const total = (this.timing && this.timing.summary && this.timing.summary.sl_count) || 0;
+            return total > 0 ? ((n / total) * 100).toFixed(0) : '0';
+        },
+        _normaliseDate(d) {
+            if (!this.chartData) return d;
+            const target = new Date(d).getTime();
+            if (isNaN(target)) return d;
+            const candles = this.chartData.candles;
+            if (!candles.length) return d;
+            let lo = 0, hi = candles.length - 1, best = candles[0].date;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const t = new Date(candles[mid].date).getTime();
+                if (t === target) { best = candles[mid].date; break; }
+                if (t < target) { best = candles[mid].date; lo = mid + 1; }
+                else { hi = mid - 1; }
+            }
+            return best;
+        },
+    };
+}
+</script>
+</body>
+</html>

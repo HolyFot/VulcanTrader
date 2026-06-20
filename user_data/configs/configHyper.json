@@ -1,0 +1,147 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 3,
+    "stake_currency": "USDC",
+    "max_stake_amount": 50000,
+    "stake_amount": 10000,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run": true,
+    "dry_run_wallet": 12000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "liquidation_buffer": 0.05,
+    "leverage": 5,
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "hyperliquid",
+        "key": "",
+        "secret": "",
+        "ccxt_async_config": {},
+        "use_public_trades": false,
+        "pair_whitelist": [
+            "BTC/USDC:USDC",
+            "ETH/USDC:USDC",
+            "SOL/USDC:USDC",
+            "XYZ-CL/USDC:USDC",
+            "HYPE/USDC:USDC",
+            "XYZ-XYZ100/USDC:USDC",
+            "XYZ-NVDA/USDC:USDC",
+            "ZEC/USDC:USDC",
+            "XRP/USDC:USDC",
+            "XYZ-EUR/USDC:USDC",
+            "SPX/USDC:USDC",
+            "SUI/USDC:USDC",
+            "XYZ-BRENTOIL/USDC:USDC",
+            "XYZ-SILVER/USDC:USDC",
+            "XYZ-JPY/USDC:USDC",
+            "ZRO/USDC:USDC",
+            "FARTCOIN/USDC:USDC",
+            "PAXG/USDC:USDC",
+            "TAO/USDC:USDC",
+            "XYZ-GOLD/USDC:USDC",
+            "PUMP/USDC:USDC",
+            "RESOLV/USDC:USDC",
+            "VIRTUAL/USDC:USDC",
+            "VVV/USDC:USDC",
+            "DOGE/USDC:USDC",
+            "BNB/USDC:USDC",
+            "XPL/USDC:USDC",
+            "XYZ-CRCL/USDC:USDC",
+            "LINK/USDC:USDC",
+            "XYZ-TSLA/USDC:USDC",
+            "ARK/USDC:USDC",
+            "LIT/USDC:USDC",
+            "XYZ-HOOD/USDC:USDC",
+            "AVAX/USDC:USDC",
+            "DOT/USDC:USDC",
+            "XYZ-NATGAS/USDC:USDC",
+            "AAVE/USDC:USDC",
+            "JUP/USDC:USDC",
+            "XMR/USDC:USDC",
+            "NEAR/USDC:USDC",
+            "KPEPE/USDC:USDC",
+            "XYZ-GOOGL/USDC:USDC",
+            "GRASS/USDC:USDC",
+            "MORPHO/USDC:USDC"
+        ],
+        "pair_blacklist": [
+        ],
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "rateLimit": 50
+        }
+    },
+    "pairlists": [
+        {
+            "method": "VolumePairList",
+            "number_assets": 30,
+            "sort_key": "quoteVolume",
+            "min_value": 5000000,
+            "refresh_period": 3600
+        },
+        {
+            "method": "AgeFilter",
+            "min_days_listed": 14
+        },
+        {
+            "method": "PrecisionFilter"
+        },
+        {
+            "method": "RangeStabilityFilter",
+            "lookback_days": 3,
+            "min_rate_of_change": 0.03,
+            "refresh_period": 1440
+        }
+    ],
+    "telegram": {
+        "enabled": false,
+        "token": "",
+        "chat_id": ""
+    },
+    "discord": {
+        "enabled": true,
+        "webhook_url": "",
+        "bot_token": "",
+        "allowed_user_ids": []
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8080,
+        "verbosity": "info",
+        "enable_openapi": true,
+        "jwt_secret_key": "somethingRandomSomethingRandom123",
+        "CORS_origins": [],
+        "username": "test",
+        "password": "test"
+    },
+    "db_url": "json:user_data/accounts/trades-Hyper.json",
+    "bot_name": "Hyper Test",
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}
