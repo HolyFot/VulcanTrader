@@ -141,6 +141,7 @@
     "bot_name": "Hyper Test",
     "initial_state": "running",
     "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
     "internals": {
         "process_throttle_secs": 5
     }
