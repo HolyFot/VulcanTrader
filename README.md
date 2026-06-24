@@ -36,32 +36,6 @@ Re-activate the venv later with:
 ---
 
 
-### Start a paper-trading session
-
-Windows:
-
-```powershell/terminal:
-.\run-paper.bat
-```
-
-Linux / macOS:
-
-```bash
-./run-paper.sh
-```
-
-### Start a live (real-money) session
-
-The live launchers prompt for confirmation before placing real orders.
-
-```powershell
-.\run-live.bat
-```
-
-```bash
-./run-live.sh
-```
-
 ### Start the web dashboard only (no trading)
 
 Launches the FastAPI portal so you can browse backtest results, review
@@ -80,6 +54,34 @@ Linux / macOS:
 ./run-app.sh
 ```
 Then open **http://localhost:8080** in your browser (default password: `VulcanTrader`).
+
+
+### Start a paper-trading session
+You will need to edit this to point to your strategy & config.
+
+Windows:
+```powershell/terminal:
+.\run-paper.bat
+```
+
+Linux / macOS:
+```bash
+./run-paper.sh
+```
+
+### Start a live (real-money) session
+The live launchers prompt for confirmation before placing real orders.
+You will need to edit this to point to your strategy & config.
+
+Windows:
+```powershell
+.\run-live.bat
+```
+
+Linux / macOS:
+```bash
+./run-live.sh
+```
 
 
 ### Override the defaults

@@ -10,9 +10,9 @@ cd /d "%~dp0"
 
 if not exist ".venv" (
     echo [install] creating virtualenv .venv with Python 3.12 ...
-    py -3.12 -m venv .venv
+    python -m venv .venv
     if errorlevel 1 (
-        echo [install] ERROR: "py -3.12" failed. Install Python 3.12 from python.org first.
+        echo [install] ERROR: "python" failed. Install Python 3.12 from python.org first.
         exit /b 1
     )
 ) else (
