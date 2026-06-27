@@ -14,16 +14,19 @@ from VulcanTrader.strategy.parameters import (
     NumericParameter,
     RealParameter,
 )
-from VulcanTrader.strategy.strategy_helper import merge_informative_pair
+from VulcanTrader.strategy.strategy_helper import merge_informative_pair, stoploss_from_open
+from VulcanTrader.strategy.informative_decorator import informative
 
 __all__ = [
     "BaseParameter",
     "BooleanParameter",
     "CategoricalParameter",
     "DecimalParameter",
+    "informative",
     "IntParameter",
     "IStrategy",
     "NumericParameter",
     "RealParameter",
     "merge_informative_pair",
+    "stoploss_from_open",
 ]

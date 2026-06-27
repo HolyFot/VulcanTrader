@@ -66,12 +66,21 @@ class PairListManager(LoggingMixin):
         if self._config["runmode"] not in (RunMode.BACKTEST, RunMode.HYPEROPT):
             return
 
+        dynamic_pairlist = self._config.get("enable_dynamic_pairlist", False)
+
         pairlist_errors: list[str] = []
         noaction_pairlists: list[str] = []
         biased_pairlists: list[str] = []
-        for pairlist_handler in self._pairlist_handlers:
+        for i, pairlist_handler in enumerate(self._pairlist_handlers):
             if pairlist_handler.supports_backtesting == SupportsBacktesting.NO:
-                pairlist_errors.append(pairlist_handler.name)
+                if dynamic_pairlist:
+                    # Generator runs live; non-generator filters are skipped (only_first=True).
+                    if i == 0:
+                        biased_pairlists.append(pairlist_handler.name)
+                    else:
+                        noaction_pairlists.append(pairlist_handler.name)
+                else:
+                    pairlist_errors.append(pairlist_handler.name)
             if pairlist_handler.supports_backtesting == SupportsBacktesting.NO_ACTION:
                 noaction_pairlists.append(pairlist_handler.name)
             if pairlist_handler.supports_backtesting == SupportsBacktesting.BIASED:

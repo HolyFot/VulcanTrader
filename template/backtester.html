@@ -103,6 +103,22 @@
         .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
         .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
 
+        /* compact stat tiles (MAE/MFE strip) */
+        .metric-mini {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 0.6rem 0.5rem;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 7px;
+            text-align: center;
+        }
+        .metric-mini-label {
+            font-size: 0.68rem; color: #a0aec0;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+        .metric-mini-value { font-size: 1.1rem; font-weight: 700; color: #e0e0e0; }
+
         /* monthly/daily boxes */
         .period-grid {
             display: flex; flex-wrap: wrap; gap: 0.75rem;
@@ -390,7 +406,7 @@
 
                 <div v-if="selectedJob" style="margin-top:0.75rem;">
                     <div style="font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem;">
-                        Job log — {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)
+                        Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)
                     </div>
                     <pre ref="jobLogPre" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; max-height:280px; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap;">{{ jobLogText || '(no output yet)' }}</pre>
                 </div>
@@ -875,6 +891,223 @@
                 </template>
             </div>
 
+            <!-- === MAE / MFE ANALYSIS === -->
+            <div class="card">
+                <h3>
+                    MAE / MFE Analysis
+                    <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
+                        <span v-if="maeMfe && !maeMfeLoading" style="font-size:0.72rem; color:#a0aec0;">
+                            Regime pair: <strong style="color:#695ff5;">{{ maeMfe.regime_pair }}</strong>
+                            &nbsp;·&nbsp; {{ maeMfe.timeframe }}
+                            &nbsp;·&nbsp; {{ (maeMfe.global || {}).total || 0 }} trades
+                        </span>
+                        <select v-model="maeMfeRegimePair" class="form-input" style="font-size:0.8rem; min-width:180px;">
+                            <option value="__all__">ALL (each pair's own regime)</option>
+                            <option value="__btc__">Auto (BTC/USDT preferred)</option>
+                            <option v-for="p in uniquePairs" :key="p" :value="p">{{ p }}</option>
+                        </select>
+                        <select v-model.number="maeMfeClusters" class="form-input" style="font-size:0.8rem; min-width:80px;">
+                            <option :value="2">2 clusters</option>
+                            <option :value="3">3 clusters</option>
+                            <option :value="4">4 clusters</option>
+                            <option :value="5">5 clusters</option>
+                            <option :value="6">6 clusters</option>
+                        </select>
+                        <button class="btn" @click="maeMfeHelp = !maeMfeHelp"
+                                :title="maeMfeHelp ? 'Hide explanations' : 'What do these terms mean?'"
+                                style="min-width:0; padding:0.4rem 0.7rem; background:rgba(255,255,255,0.06) !important;">
+                            {{ maeMfeHelp ? '✕ Help' : 'ⓘ Help' }}
+                        </button>
+                        <button class="btn" @click="loadMaeMfe"
+                                :disabled="maeMfeLoading || !selectedBacktest"
+                                style="min-width:0; padding:0.4rem 0.9rem;">
+                            {{ maeMfeLoading ? 'Analyzing…' : 'Analyze' }}
+                        </button>
+                    </span>
+                </h3>
+                <div v-if="maeMfeError" class="alert"><strong>Error:</strong> {{ maeMfeError }}</div>
+                <div v-if="maeMfeLoading" class="loading"><span class="spinner"></span> Computing MAE / MFE…</div>
+
+                <!-- === Explanations === -->
+                <div v-if="maeMfeHelp" style="background:rgba(105,95,245,0.07); border:1px solid rgba(105,95,245,0.25); border-radius:8px; padding:1rem 1.25rem; margin-bottom:1.25rem; font-size:0.82rem; line-height:1.55; color:#c8cdd6;">
+                    <div style="font-weight:700; color:#a78bfa; margin-bottom:0.5rem; font-size:0.9rem;">How to read this analysis</div>
+                    <p style="margin:0.3rem 0;"><strong style="color:#10b981;">MFE</strong> (Maximum Favorable Excursion) = how far price moved <em>in your favor</em> at the best point of the trade, % (leverage-adjusted). <strong style="color:#ef4444;">MAE</strong> (Maximum Adverse Excursion) = how far it moved <em>against you</em> at the worst point. Both are taken from each trade's recorded <code>min_rate</code>/<code>max_rate</code>, so they describe the heat and the runway every trade actually had, regardless of where it eventually exited.</p>
+                    <p style="margin:0.3rem 0;"><strong>Scatter (MAE → x, MFE → y).</strong> Each dot is one trade. <span style="color:#10b981;">Green = win</span>, <span style="color:#ef4444;">red = loss</span>. Dots high & to the left (high MFE, low MAE) are clean trades; dots low & to the right gave a lot of heat for little reward. The dashed <strong>MAE = MFE</strong> diagonal is the break-even line for excursions.</p>
+                    <p style="margin:0.3rem 0;"><strong>Clusters (★).</strong> K-Means groups trades by their (MAE, MFE) shape to reveal natural setup "types". The <strong style="color:#f59e0b;">dominant cluster</strong> is the one maximizing <em>expectancy × size</em> (quality × frequency), not just the biggest. <em>Note:</em> because MAE/MFE are realized outcomes, clusters naturally sort toward win/loss. A near-100% win-rate cluster is normal, not a bug.</p>
+                    <p style="margin:0.3rem 0;">The two highlighted recommendation tiles in the overall view: <strong style="color:#a78bfa;">Recommended MFE % (TP)</strong> = middle (centroid) of the dominant cluster's MFE band, so the favorable-excursion take-profit level where your best repeating setup tends to run to. <strong style="color:#ef4444;">Recommended MAE % (SL)</strong> = middle (centroid) of the dominant cluster's MAE band, the adverse-excursion stop level, the typical heat that setup endures, so a stop there shouldn't cut your good trades. Switch the <strong>View</strong> dropdown to a regime to get that regime's own recommended MFE % / MAE %.</p>
+                    <p style="margin:0.3rem 0;"><strong style="color:#a78bfa;">Recommended Per-Regime MAE / MFE %, the main output.</strong> The market at each trade's entry is classified (via regime_analysis: trend EMAs + ADX) into EXTREME_BULL…EXTREME_BEAR. For <em>each</em> regime we derive two dynamic excursion percentages from that regime's own trades: <strong style="color:#f59e0b;">Recommended MFE %</strong> = the favorable-excursion <em>take-profit</em> level, taken from the regime's MFE distribution; <strong style="color:#ef4444;">Recommended MAE %</strong> = the adverse-excursion <em>stop-loss</em> level, taken from the regime's MAE distribution. Within those distributions we pick the (MFE %, MAE %) pair that <strong>maximises expectancy</strong>, so each is grounded in real excursions and optimised, not a raw median.  The bracketed "reached by / hit by %" shows how often each level is actually touched in that regime. These are exactly the base MAE %/MFE % to use in your MAE SLs & MFE TPs. Regimes with under 30 trades are flagged <span style="color:#eab308;">⚠</span> (optimum unreliable). In-sample fits confirm with a backtest.</p>
+                    <p style="margin:0.3rem 0 0; color:#8a92a0; font-style:italic;">Caveat: MAE/MFE carry no intra-trade ordering, so we can't know whether the high or the low came first. The TP model therefore slightly over-credits TP hits (a trade could have hit its SL before reaching its MFE). Treat the numbers as a well-grounded guide, then confirm with a backtest using the chosen TP/SL.</p>
+                </div>
+
+                <template v-if="!maeMfe && !maeMfeLoading && !maeMfeError">
+                    <p style="color:#a0aec0; text-align:center; margin:0.5rem 0 0.25rem;">
+                        Click <strong>Analyze</strong> to view MAE/MFE distribution, K-Means clusters, and optimal TP/SL recommendations.
+                    </p>
+                </template>
+
+                <template v-if="maeMfe && !maeMfeLoading">
+                    <!-- View selector (overall vs per-regime) -->
+                    <div v-if="maeMfeRegimeOptions.length" style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.85rem;">
+                        <span style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">View</span>
+                        <select v-model="maeMfeView" class="form-input" style="font-size:0.82rem; min-width:200px;">
+                            <option value="__all__">All regimes (overall)</option>
+                            <option v-for="r in maeMfeRegimeOptions" :key="r" :value="r">
+                                {{ r.replace(/_/g, ' ') }} ({{ maeMfe.per_regime[r].count }} trades)
+                            </option>
+                        </select>
+                        <span v-if="maeMfeView !== '__all__'" style="font-size:0.72rem; color:#666;">
+                            Metrics &amp; scatter below are filtered to this regime.
+                        </span>
+                    </div>
+
+                    <!-- Stats strip (adapts to selected view) -->
+                    <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.5rem; margin-bottom:1.25rem;">
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">Median MFE</div>
+                            <div class="metric-mini-value pos">{{ maeMfeStat.mfe_median != null ? maeMfeStat.mfe_median.toFixed(2) + '%' : '—' }}</div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">P75 MFE</div>
+                            <div class="metric-mini-value pos">{{ maeMfeStat.mfe_p75 != null ? maeMfeStat.mfe_p75.toFixed(2) + '%' : '—' }}</div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">Median MAE</div>
+                            <div class="metric-mini-value neg">{{ maeMfeStat.mae_median != null ? maeMfeStat.mae_median.toFixed(2) + '%' : '—' }}</div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">P75 MAE</div>
+                            <div class="metric-mini-value neg">{{ maeMfeStat.mae_p75 != null ? maeMfeStat.mae_p75.toFixed(2) + '%' : '—' }}</div>
+                        </div>
+
+                        <!-- Overall view: cluster-based recommendations -->
+                        <template v-if="maeMfeView === '__all__'">
+                            <div class="metric-mini" style="border: 1px solid rgba(167,139,250,0.4); background:rgba(167,139,250,0.07);"
+                                 title="Recommended MFE % (take-profit): middle of the dominant K-Means MFE band (chosen by expectancy × frequency)">
+                                <div class="metric-mini-label" style="color:#a78bfa;">Rec. MFE % (TP)</div>
+                                <div class="metric-mini-value" style="color:#a78bfa;">{{ maeMfe.recommended_tp != null ? maeMfe.recommended_tp.toFixed(2) + '%' : '—' }}</div>
+                            </div>
+                            <div class="metric-mini" style="border: 1px solid rgba(239,68,68,0.35); background:rgba(239,68,68,0.06);"
+                                 title="Recommended MAE % (stop-loss): middle of the dominant K-Means MAE band (typical adverse heat of the best repeating setup)">
+                                <div class="metric-mini-label" style="color:#ef4444;">Rec. MAE % (SL)</div>
+                                <div class="metric-mini-value" style="color:#ef4444;">{{ maeMfe.recommended_sl != null ? maeMfe.recommended_sl.toFixed(2) + '%' : '—' }}</div>
+                            </div>
+                        </template>
+
+                        <!-- Regime view: expectancy-optimised recommendations for THIS regime -->
+                        <template v-else>
+                            <div class="metric-mini" style="border: 1px solid rgba(245,158,11,0.35); background:rgba(245,158,11,0.06);"
+                                 title="Recommended MFE % for this regime: the favorable-excursion take-profit level, from its MFE distribution at the expectancy-maximising point">
+                                <div class="metric-mini-label" style="color:#f59e0b;">Rec. MFE % (TP)</div>
+                                <div class="metric-mini-value" style="color:#f59e0b;">{{ maeMfeStat.best_tp != null ? maeMfeStat.best_tp.toFixed(2) + '%' : '—' }}</div>
+                            </div>
+                            <div class="metric-mini" style="border: 1px solid rgba(239,68,68,0.35); background:rgba(239,68,68,0.06);"
+                                 title="Recommended MAE % for this regime: the adverse-excursion stop level, from its MAE distribution at the expectancy-maximising point">
+                                <div class="metric-mini-label" style="color:#ef4444;">Rec. MAE % (SL)</div>
+                                <div class="metric-mini-value" style="color:#ef4444;">{{ maeMfeStat.best_sl != null ? maeMfeStat.best_sl.toFixed(2) + '%' : '—' }}</div>
+                            </div>
+                            <div class="metric-mini" style="border: 1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.06);"
+                                 title="Mean modelled per-trade outcome in R-multiples (1R = this regime's recommended MAE % stop)">
+                                <div class="metric-mini-label" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#10b981' : '#ef4444' }">Expectancy R / Trade</div>
+                                <div class="metric-mini-value" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#10b981' : '#ef4444' }">
+                                    {{ maeMfeStat.best_exp_r != null ? (maeMfeStat.best_exp_r >= 0 ? '+' : '') + maeMfeStat.best_exp_r.toFixed(2) + 'R' : '—' }}
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Cluster summary badges (global: shown only in the overall view) -->
+                    <div v-if="maeMfeView === '__all__' && maeMfe.clusters && maeMfe.clusters.length" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <div v-for="c in maeMfe.clusters" :key="c.id"
+                             :style="{ display:'flex', flexDirection:'column', gap:'0.15rem', padding:'0.45rem 0.7rem',
+                                       borderRadius:'6px', fontSize:'0.75rem', lineHeight:'1.3',
+                                       background: c.is_dominant ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)',
+                                       border: '1px solid ' + (c.is_dominant ? '#f59e0b' : 'rgba(255,255,255,0.1)') }">
+                            <span :style="{ color: c.is_dominant ? '#f59e0b' : '#a78bfa', fontWeight:700 }">
+                                Cluster {{ c.id }}{{ c.is_dominant ? ' ★' : '' }}
+                            </span>
+                            <span style="color:#e0e0e0;">MFE <strong>{{ c.mfe.toFixed(2) }}%</strong> · MAE <strong>{{ c.mae.toFixed(2) }}%</strong></span>
+                            <span style="color:#a0aec0;">n={{ c.size }} · WR {{ c.win_rate.toFixed(1) }}% · E={{ c.expectancy_r != null ? (c.expectancy_r >= 0 ? '+' : '') + c.expectancy_r.toFixed(2) + 'R' : '—' }}</span>
+                        </div>
+                    </div>
+
+                    <!-- MAE vs MFE scatter -->
+                    <div style="margin-bottom:1.25rem;">
+                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
+                            MAE vs MFE Scatter
+                            <span style="text-transform:none; color:#666;"> <template v-if="maeMfeView === '__all__'">all trades; cluster centroids (stars), recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span> (dashed lines)</template><template v-else><strong :style="{ color: (regimeColors[maeMfeView] || {}).text }">{{ maeMfeView.replace(/_/g, ' ') }}</strong> trades only; dashed lines = this regime's recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span></template></span>
+                        </div>
+                        <div id="maeMfeScatter" style="height:420px;"></div>
+                    </div>
+
+                    <!-- Per-regime chart -->
+                    <div v-if="maeMfe.per_regime && Object.keys(maeMfe.per_regime).length > 1" style="margin-bottom:1.25rem;">
+                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
+                            MFE / MAE by Regime — bars show median, whiskers show P25–P75 range
+                        </div>
+                        <div id="maeMfeRegimeChart" style="height:300px;"></div>
+                    </div>
+
+                    <!-- Per-regime table -->
+                    <div v-if="maeMfe.per_regime && Object.keys(maeMfe.per_regime).length">
+                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
+                            Recommended Per-Regime MAE / MFE %: <span style="text-transform:none; color:#888;"> the dynamic <strong style="color:#f59e0b;">MFE %</strong> (take-profit) &amp; <strong style="color:#ef4444;">MAE %</strong> (stop-loss) to feed your regime exit calculator</span>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr>
+                                    <th>Regime</th>
+                                    <th># Trades</th>
+                                    <th>Win%</th>
+                                    <th title="Favorable excursion (MFE) distribution for this regime: the recommended MFE % is drawn from here">MFE band<br><span style="font-weight:400; color:#888;">median (P25–P75)</span></th>
+                                    <th title="Adverse excursion (MAE) distribution for this regime: the recommended MAE % is drawn from here">MAE band<br><span style="font-weight:400; color:#888;">median (P25–P75)</span></th>
+                                    <th title="Recommended MFE % for this regime: the favorable-excursion take-profit level, drawn from the MFE distribution at the point that maximises expectancy. Bracket = how often this MFE % is actually reached.">▶ Recommended MFE %<br><span style="font-weight:400; color:#888;">→ take-profit</span></th>
+                                    <th title="Recommended MAE % for this regime: the adverse-excursion stop level, drawn from the MAE distribution at the point that maximises expectancy. Bracket = how often this MAE % is actually hit.">▶ Recommended MAE %<br><span style="font-weight:400; color:#888;">→ stop-loss</span></th>
+                                    <th title="Mean modelled per-trade outcome in R-multiples, where 1R = the recommended MAE % stop (the risk taken). Comparable across regimes regardless of stop width.">Expectancy R<br><span style="font-weight:400; color:#888;">per trade · 1R = MAE stop</span></th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="(rg, name) in maeMfe.per_regime" :key="name">
+                                        <td>
+                                            <span :style="{ color: (regimeColors[name] || {}).text || '#e0e0e0', fontWeight:700 }">
+                                                {{ name.replace(/_/g, ' ') }}
+                                            </span>
+                                            <span v-if="!rg.confident" title="Fewer than 30 trades: optimum is statistically shaky"
+                                                  style="color:#eab308; margin-left:4px; cursor:help;">⚠</span>
+                                        </td>
+                                        <td>{{ rg.count }}</td>
+                                        <td :class="rg.win_rate >= 50 ? 'pos' : 'neg'">{{ rg.win_rate.toFixed(1) }}%</td>
+                                        <td class="pos">
+                                            <strong>{{ rg.mfe_median.toFixed(2) }}%</strong>
+                                            <span style="color:#666; font-size:0.92em;"> ({{ rg.mfe_p25.toFixed(1) }}–{{ rg.mfe_p75.toFixed(1) }})</span>
+                                        </td>
+                                        <td class="neg">
+                                            <strong>{{ rg.mae_median.toFixed(2) }}%</strong>
+                                            <span style="color:#666; font-size:0.92em;"> ({{ rg.mae_p25.toFixed(1) }}–{{ rg.mae_p75.toFixed(1) }})</span>
+                                        </td>
+                                        <td style="background:rgba(245,158,11,0.08);">
+                                            <strong style="color:#f59e0b; font-size:1.05em;">{{ rg.best_tp.toFixed(2) }}%</strong>
+                                            <span v-if="rg.tp_hit_rate != null" style="color:#888; font-size:0.85em; display:block;">reached by {{ rg.tp_hit_rate.toFixed(0) }}%</span>
+                                        </td>
+                                        <td style="background:rgba(239,68,68,0.08);">
+                                            <strong style="color:#ef4444; font-size:1.05em;">{{ rg.best_sl.toFixed(2) }}%</strong>
+                                            <span v-if="rg.sl_hit_rate != null" style="color:#888; font-size:0.85em; display:block;">hit by {{ rg.sl_hit_rate.toFixed(0) }}%</span>
+                                        </td>
+                                        <td v-if="rg.best_exp_r != null" :class="rg.best_exp_r >= 0 ? 'pos' : 'neg'">
+                                            <strong>{{ rg.best_exp_r >= 0 ? '+' : '' }}{{ rg.best_exp_r.toFixed(2) }}R</strong>
+                                        </td>
+                                        <td v-else style="color:#666;">—</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="font-size:0.72rem; color:#888; margin:0.5rem 0 0;">
+                            These are the dynamic <strong style="color:#f59e0b;">MFE %</strong> and <strong style="color:#ef4444;">MAE %</strong> to use per regime. Put them into your
+                            MAE SLs & MFE TPs per regime. Both are drawn from that regime's own excursion distributions at the level that maximised modelled expectancy.
+                        </p>
+                    </div>
+
+                </template>
+            </div>
+
             <div class="card"><h3>Hourly P&amp;L</h3><div id="hourlyPnlChart" style="height:340px;"></div></div>
             <div class="card"><h3>Hourly Profit Factor</h3><div id="hourlyPfChart" style="height:340px;"></div></div>
             <div class="card"><h3>Hourly Max Drawdown</h3><div id="hourlyDdChart" style="height:340px;"></div></div>
@@ -963,11 +1196,11 @@
                     <!-- Candle-data coverage warning -->
                     <div v-if="timing.summary.trades_skipped && timing.summary.trades_analyzed === 0"
                          class="alert" style="margin-bottom:0.75rem;">
-                        All trades were skipped — the OHLCV data files don't appear to cover the backtest's date range. Make sure the data directory has data for the same timerange that was used for the backtest.
+                        All trades were skipped, the OHLCV data files don't appear to cover the backtest's date range. Make sure the data directory has data for the same timerange that was used for the backtest.
                     </div>
                     <div v-else-if="timing.summary.trades_skipped > timing.summary.trades_analyzed * 0.25"
                          style="background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); border-radius:6px; padding:0.5rem 0.75rem; margin-bottom:0.75rem; font-size:0.82rem; color:#fbbf24;">
-                        ⚠ {{ timing.summary.trades_skipped }} trades skipped — candle data may not cover the full backtest period.
+                        ⚠ {{ timing.summary.trades_skipped }} trades skipped, candle data may not cover the full backtest period.
                     </div>
 
                     <!-- Entry/Exit improvement summary -->
@@ -1013,7 +1246,7 @@
                     <!-- Simulated performance comparison -->
                     <div v-if="timing.simulated_metrics" style="margin:1.2rem 0 0.5rem;">
                         <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.6rem 0;">
-                            Simulated Timing Performance — optimal entry/exit within window
+                            Simulated Timing Performance: optimal entry/exit within window
                         </h4>
                         <div style="overflow-x:auto;">
                             <table style="width:100%; border-collapse:collapse; font-size:0.8rem;">
@@ -1062,7 +1295,7 @@
                             </table>
                         </div>
                         <p style="font-size:0.7rem; color:#718096; margin:0.4rem 0 0;">
-                            * Theoretical upper bound — each trade is assigned the best available price within ±N candles of the actual open/close (hindsight). Shows how much performance headroom exists in your entry/exit timing. With a limit-order strategy you can capture part of this gap. Sharpe is annualised by trade frequency.
+                            * Theoretical upper bound: each trade is assigned the best available price within ±N candles of the actual open/close (hindsight). Shows how much performance headroom exists in your entry/exit timing. With a limit-order strategy you can capture part of this gap. Sharpe is annualised by trade frequency.
                         </p>
                     </div>
 
@@ -1070,19 +1303,19 @@
                     <div v-if="timing.entry_lag_curve && timing.entry_lag_curve.length"
                          style="margin:1.2rem 0 0.5rem;">
                         <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
-                            Timing Lag Curves — avg P&amp;L impact of fixed entry/exit offset
+                            Timing Lag Curves: avg P&amp;L impact of fixed entry/exit offset
                         </h4>
                         <p style="font-size:0.72rem; color:#718096; margin:0 0 0.75rem;">
                             Each row answers: <em>"if I always entered/exited exactly Δ bars from the signal, what would the average per-trade P&amp;L change be?"</em>
                             Green = better than actual · Red = worse. <strong>Peak green = optimal limit-order lag.</strong>
-                            Entry shows only Δ≥0 (forward) — looking backward is not actionable and is trivially better for trending strategies.
+                            Entry shows only Δ≥0 (forward), looking backward is not actionable and is trivially better for trending strategies.
                             Exit shows Δ&lt;0 (exit earlier) and Δ&gt;0 (hold longer).
                         </p>
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
                             <!-- Entry lag curve -->
                             <div>
                                 <div style="font-size:0.78rem; color:#60a5fa; font-weight:600; margin-bottom:0.5rem;">
-                                    Entry lag — wait Δ bars after signal, limit order at candle low/high
+                                    Entry lag: wait Δ bars after signal, limit order at candle low/high
                                     <span v-if="timingEntryBestDelta !== null" style="color:#34d399; font-size:0.72rem; margin-left:0.5rem;">
                                         ★ best: +{{ timingEntryBestDelta }} bar{{ timingEntryBestDelta !== 1 ? 's' : '' }}
                                     </span>
@@ -1392,6 +1625,14 @@ createApp({
                 'BEAR':         { solid: '#f87171', text: '#f87171', bg: 'rgba(239,68,68,0.10)' },
                 'EXTREME_BEAR': { solid: '#ef4444', text: '#ef4444', bg: 'rgba(239,68,68,0.22)' },
             },
+            // --- MAE / MFE Analysis ---
+            maeMfe: null,
+            maeMfeLoading: false,
+            maeMfeError: null,
+            maeMfeRegimePair: '__all__',
+            maeMfeClusters: 4,
+            maeMfeHelp: false,
+            maeMfeView: '__all__',  // regime filter for metrics + scatter
         };
     },
     computed: {
@@ -1527,6 +1768,19 @@ createApp({
             this.enrichedTrades.forEach(t => { if (t.pair) seen.add(t.pair); });
             return [...seen].sort();
         },
+        // --- MAE/MFE regime filter ---
+        maeMfeRegimeOptions() {
+            if (!this.maeMfe || !this.maeMfe.per_regime) return [];
+            const order = ['EXTREME_BULL', 'BULL', 'RANGING', 'BEAR', 'EXTREME_BEAR'];
+            const keys = Object.keys(this.maeMfe.per_regime).filter(k => k !== 'ALL');
+            return keys.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        },
+        // Stats for the currently-selected view (overall or one regime)
+        maeMfeStat() {
+            if (!this.maeMfe) return {};
+            if (this.maeMfeView === '__all__') return this.maeMfe.global || {};
+            return (this.maeMfe.per_regime || {})[this.maeMfeView] || {};
+        },
         runningJobCount() { return this.jobs.filter(j => j.status === 'running' || j.status === 'queued').length; },
         selectedJob() { return this.jobs.find(j => j.id === this.selectedJobId) || null; },
         pfRunning() { return this.pfJob && (this.pfJob.status === 'running' || this.pfJob.status === 'queued'); },
@@ -1592,9 +1846,13 @@ createApp({
             this.regimeAnalysis = null;
             this.regimeError = null;
             this.selectedRegime = null;
+            this.maeMfe = null;
+            this.maeMfeError = null;
         },
         regimeAnalysis() { this.selectedRegime = null; this.$nextTick(() => this.renderRegimeCharts()); },
         selectedRegime() { this.$nextTick(() => this.renderRegimeCharts()); },
+        maeMfe() { this.maeMfeView = '__all__'; this.$nextTick(() => this.renderMaeMfeCharts()); },
+        maeMfeView() { this.$nextTick(() => this.renderMaeMfeCharts()); },
     },
     async mounted() {
         if (!this.token) { window.location.href = '/login'; return; }
@@ -2056,7 +2314,7 @@ createApp({
                 });
             };
             if (sameChart && this.__lwChart) {
-                // Chart already loaded — just scroll/highlight
+                // Chart already loaded, just scroll/highlight
                 const el = this.$refs.pairChartEl;
                 if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 if (trade.open_date) {
@@ -2097,7 +2355,7 @@ createApp({
 
                 this._destroyPairChart();
 
-                // Use explicit dimensions — autoSize can return 0 during layout transitions
+                // Use explicit dimensions, autoSize can return 0 during layout transitions
                 const w = el.clientWidth || el.offsetWidth || 900;
                 const h = 520;
 
@@ -2154,7 +2412,7 @@ createApp({
                     priceFormat: { type: 'volume' },
                     priceScaleId: 'vol',
                 });
-                // Use series.priceScale() — more reliable than chart.priceScale(id)
+                // Use series.priceScale(), more reliable than chart.priceScale(id)
                 this.__lwVolume.priceScale().applyOptions({
                     scaleMargins: { top: 0.85, bottom: 0 },
                 });
@@ -2186,7 +2444,7 @@ createApp({
                     this.__lwTf = candles[1].time - candles[0].time;
                 }
 
-                // Build trade markers — ensure timestamps are parsed as UTC
+                // Build trade markers: ensure timestamps are parsed as UTC
                 const toUtcTs = d => {
                     if (!d) return NaN;
                     const s = String(d);
@@ -2397,6 +2655,173 @@ createApp({
                         line: { color: 'rgba(255,255,255,0.3)', dash: 'dash', width: 1 },
                     }],
                 }), { responsive: true, displaylogo: false, displayModeBar: false, scrollZoom: false });
+            }
+        },
+
+        // ----- MAE / MFE analysis -----
+        async loadMaeMfe() {
+            if (!this.selectedBacktest) return;
+            this.maeMfeLoading = true;
+            this.maeMfeError = null;
+            try {
+                const rp = this.maeMfeRegimePair === '__btc__' ? '' : (this.maeMfeRegimePair || '__all__');
+                const url = '/api/backtests/' + encodeURIComponent(this.selectedBacktest)
+                    + '/mae_mfe?regime_pair=' + encodeURIComponent(rp)
+                    + '&n_clusters=' + this.maeMfeClusters;
+                this.maeMfe = await this.authedFetch(url);
+            } catch (e) {
+                this.maeMfeError = e.message;
+                this.maeMfe = null;
+            } finally {
+                this.maeMfeLoading = false;
+            }
+        },
+
+        renderMaeMfeCharts() {
+            if (!this.maeMfe) return;
+            const d = this.maeMfe;
+            const cfg = { responsive: true, displaylogo: false, scrollZoom: true, displayModeBar: false };
+
+            // ── Scatter: MAE vs MFE ──────────────────────────────────────────
+            const scEl = document.getElementById('maeMfeScatter');
+            if (scEl) {
+                const view = this.maeMfeView;
+                const isAll = view === '__all__';
+                const pts = isAll ? d.scatter : d.scatter.filter(r => r.regime === view);
+                const wins  = pts.filter(r => r.win);
+                const losses = pts.filter(r => !r.win);
+                const hov = r => `${r.pair}<br>MFE ${r.mfe.toFixed(2)}%<br>MAE ${r.mae.toFixed(2)}%<br>PnL ${r.pnl_pct.toFixed(2)}%`
+                    + (r.regime && r.regime !== 'ALL' ? `<br>Regime ${r.regime}` : '');
+                // Recommendation lines: overall = cluster TP/SL, regime = optimised TP/SL
+                const regStat = isAll ? null : ((d.per_regime || {})[view] || {});
+                const recTp = isAll ? d.recommended_tp : regStat.best_tp;
+                const recSl = isAll ? d.recommended_sl : regStat.best_sl;
+                const tpLabel = isAll ? 'Rec. MFE % (TP)' : 'Rec. MFE % (TP)';
+                const slLabel = isAll ? 'Rec. MAE % (SL)' : 'Rec. MAE % (SL)';
+
+                const traces = [
+                    {
+                        x: losses.map(r => r.mae), y: losses.map(r => r.mfe),
+                        mode: 'markers', type: 'scatter', name: 'Loss',
+                        text: losses.map(hov),
+                        hoverinfo: 'text',
+                        marker: { color: 'rgba(239,68,68,0.45)', size: 5, symbol: 'circle' },
+                    },
+                    {
+                        x: wins.map(r => r.mae), y: wins.map(r => r.mfe),
+                        mode: 'markers', type: 'scatter', name: 'Win',
+                        text: wins.map(hov),
+                        hoverinfo: 'text',
+                        marker: { color: 'rgba(16,185,129,0.55)', size: 5, symbol: 'circle' },
+                    },
+                ];
+
+                // Cluster centroids (global clusters: only meaningful in the overall view)
+                if (isAll && d.clusters && d.clusters.length) {
+                    traces.push({
+                        x: d.clusters.map(c => c.mae),
+                        y: d.clusters.map(c => c.mfe),
+                        mode: 'markers+text',
+                        type: 'scatter',
+                        name: 'Cluster',
+                        text: d.clusters.map(c => `C${c.id}`),
+                        textposition: 'top center',
+                        hovertext: d.clusters.map(c =>
+                            `Cluster ${c.id}${c.is_dominant ? ' ★' : ''}<br>`
+                            + `MAE ${c.mae.toFixed(2)}%  MFE ${c.mfe.toFixed(2)}%<br>`
+                            + `n=${c.size}  WR=${c.win_rate.toFixed(1)}%<br>`
+                            + `E=${c.expectancy_r != null ? (c.expectancy_r >= 0 ? '+' : '') + c.expectancy_r.toFixed(2) + 'R' : '—'}`),
+                        hoverinfo: 'text',
+                        marker: {
+                            size: d.clusters.map(c => c.is_dominant ? 18 : 13),
+                            symbol: 'star',
+                            color: d.clusters.map(c => c.is_dominant ? '#f59e0b' : '#a78bfa'),
+                            line: { width: 2, color: '#fff' },
+                        },
+                    });
+                }
+
+                // Diagonal break-even guide: MFE = MAE
+                const maxVal = Math.max(...pts.map(r => Math.max(r.mae, r.mfe)), 1);
+                traces.push({
+                    x: [0, maxVal], y: [0, maxVal],
+                    mode: 'lines', type: 'scatter', name: 'MAE = MFE',
+                    line: { color: 'rgba(255,255,255,0.18)', dash: 'dash', width: 1 },
+                    hoverinfo: 'none',
+                });
+
+                // TP / SL recommendation lines (cluster-based overall, optimised per-regime)
+                if (recTp != null) {
+                    traces.push({
+                        x: [0, maxVal], y: [recTp, recTp],
+                        mode: 'lines', type: 'scatter', name: `${tpLabel} ${recTp.toFixed(2)}%`,
+                        line: { color: '#f59e0b', dash: 'dot', width: 1.5 },
+                        hoverinfo: 'none',
+                    });
+                }
+                if (recSl != null) {
+                    traces.push({
+                        x: [recSl, recSl], y: [0, maxVal],
+                        mode: 'lines', type: 'scatter', name: `${slLabel} ${recSl.toFixed(2)}%`,
+                        line: { color: '#ef4444', dash: 'dot', width: 1.5 },
+                        hoverinfo: 'none',
+                    });
+                }
+
+                Plotly.react('maeMfeScatter', traces, this._layout({
+                    xaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'MAE % (adverse)', fixedrange: false },
+                    yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'MFE % (favorable)', fixedrange: false },
+                    showlegend: true,
+                    legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0.5)', font: { size: 10 } },
+                    margin: { t: 20, r: 20, b: 50, l: 60 },
+                }), cfg);
+            }
+
+            // ── Per-regime MFE/MAE grouped bar ───────────────────────────────
+            const rgEl = document.getElementById('maeMfeRegimeChart');
+            if (rgEl && d.per_regime && Object.keys(d.per_regime).length) {
+                const regOrder = ['EXTREME_BULL', 'BULL', 'RANGING', 'BEAR', 'EXTREME_BEAR'];
+                const regKeys = regOrder.filter(r => d.per_regime[r])
+                    .concat(Object.keys(d.per_regime).filter(r => !regOrder.includes(r)));
+                const rc = this.regimeColors;
+                const getColor = r => (rc[r] || {}).solid || '#a0aec0';
+
+                Plotly.react('maeMfeRegimeChart', [
+                    {
+                        name: 'Median MFE %',
+                        x: regKeys.map(r => r.replace('_', ' ')),
+                        y: regKeys.map(r => d.per_regime[r].mfe_median),
+                        type: 'bar',
+                        marker: { color: regKeys.map(r => getColor(r)), opacity: 0.85 },
+                        error_y: {
+                            type: 'data', symmetric: false,
+                            array:       regKeys.map(r => d.per_regime[r].mfe_p75 - d.per_regime[r].mfe_median),
+                            arrayminus:  regKeys.map(r => d.per_regime[r].mfe_median - d.per_regime[r].mfe_p25),
+                            color: 'rgba(255,255,255,0.4)', thickness: 1.5, width: 5,
+                        },
+                        text: regKeys.map(r => `${d.per_regime[r].mfe_median.toFixed(1)}%`),
+                        textposition: 'outside',
+                        textfont: { size: 10 },
+                    },
+                    {
+                        name: 'Median MAE %',
+                        x: regKeys.map(r => r.replace('_', ' ')),
+                        y: regKeys.map(r => -d.per_regime[r].mae_median),
+                        type: 'bar',
+                        marker: { color: regKeys.map(r => getColor(r)), opacity: 0.45 },
+                        text: regKeys.map(r => `-${d.per_regime[r].mae_median.toFixed(1)}%`),
+                        textposition: 'outside',
+                        textfont: { size: 10 },
+                    },
+                ], this._layout({
+                    barmode: 'overlay',
+                    xaxis: { fixedrange: true, gridcolor: 'rgba(255,255,255,0.05)' },
+                    yaxis: { title: 'MFE % / -MAE %', gridcolor: 'rgba(255,255,255,0.05)',
+                             zeroline: true, zerolinecolor: 'rgba(255,255,255,0.2)' },
+                    showlegend: true,
+                    legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0.5)', font: { size: 10 } },
+                    margin: { t: 20, r: 20, b: 60, l: 60 },
+                }), { ...cfg, scrollZoom: false });
             }
         },
 

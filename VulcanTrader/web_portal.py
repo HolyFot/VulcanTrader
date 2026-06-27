@@ -848,6 +848,16 @@ class WebPortal:
         def api_bt_regime_analysis(name: str, regime_pair: str = "") -> dict:
             return self._backtest_regime_analysis(name, regime_pair)
 
+        @app.get("/api/backtests/{name}/mae_mfe", dependencies=[Depends(auth)])
+        def api_bt_mae_mfe(
+            name: str,
+            regime_pair: str = "__all__",
+            n_clusters: int = 4,
+        ) -> dict:
+            return self._bt_mae_mfe_analysis(
+                name, regime_pair=regime_pair, n_clusters=n_clusters
+            )
+
         @app.get("/api/backtests/{name}/pair_candles", dependencies=[Depends(auth)])
         def api_bt_pair_candles(name: str, pair: str) -> dict:
             return self._bt_pair_candles(name, pair)
@@ -3075,6 +3085,352 @@ class WebPortal:
 
     # ------------------------------------------------------------------
     # Regime analysis
+    # ------------------------------------------------------------------
+
+    def _bt_mae_mfe_analysis(
+        self,
+        name: str,
+        regime_pair: str = "__all__",
+        n_clusters: int = 4,
+    ) -> dict:
+        """
+        MAE / MFE analysis with K-Means clustering and per-regime excursion statistics.
+
+        Uses min_rate / max_rate stored in each trade record — no candle data
+        needed for the core analysis. Regime classification is attempted from
+        candle data (same logic as _backtest_regime_analysis) and is skipped
+        gracefully if data are unavailable.
+        """
+        try:
+            import numpy as np
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail=f"numpy not available: {exc}")
+
+        bt = self._load_backtest(name)
+        trades, tf, trading_mode = self._bt_extract_trades_and_meta(bt)
+
+        if not trades:
+            raise HTTPException(status_code=400, detail="No trades in backtest result")
+
+        # --- Step 1: Compute MAE / MFE per trade -------------------------
+        trade_rows: list[dict] = []
+        for t in trades:
+            open_rate = float(t.get("open_rate") or 0)
+            if open_rate <= 0:
+                continue
+            min_rate = t.get("min_rate")
+            max_rate = t.get("max_rate")
+            if min_rate is None or max_rate is None:
+                continue
+            min_rate = float(min_rate)
+            max_rate = float(max_rate)
+            is_short = bool(t.get("is_short", False))
+            leverage = float(t.get("leverage") or 1.0)
+            profit_ratio = float(t.get("profit_ratio") or 0)
+
+            if is_short:
+                mfe = max(0.0, (open_rate - min_rate) / open_rate * 100.0 * leverage)
+                mae = max(0.0, (max_rate - open_rate) / open_rate * 100.0 * leverage)
+            else:
+                mfe = max(0.0, (max_rate - open_rate) / open_rate * 100.0 * leverage)
+                mae = max(0.0, (open_rate - min_rate) / open_rate * 100.0 * leverage)
+
+            trade_rows.append({
+                "pair":        t.get("pair", ""),
+                "open_date":   str(t.get("open_date") or "")[:19],
+                "enter_tag":   str(t.get("enter_tag") or ""),
+                "exit_reason": str(t.get("exit_reason") or ""),
+                "mae":         round(float(mae), 3),
+                "mfe":         round(float(mfe), 3),
+                "pnl_pct":     round(float(profit_ratio * 100.0), 3),
+                "win":         profit_ratio > 0,
+                "regime":      "ALL",
+                "cluster":     -1,
+            })
+
+        if not trade_rows:
+            raise HTTPException(
+                status_code=400,
+                detail="No trades contain min_rate / max_rate. "
+                       "Ensure the backtest was run with freqtrade >= 2023.",
+            )
+
+        # --- Step 2: Classify regimes (optional) -------------------------
+        # Regime = market state at each trade's entry (from regime_analysis).
+        chosen_regime_pair = "N/A"
+        try:
+            import bisect as _bisect
+            import pandas as pd
+            from datetime import datetime as _dt
+            from VulcanTrader.regime_analysis import BacktestRegimeAnalyzer
+            from VulcanTrader.data.history import load_pair_history
+            from VulcanTrader.enums import CandleType, TradingMode
+
+            if tf and self._datadir().is_dir():
+                datadir = self._datadir()
+                data_format = self.config.get("dataformat_ohlcv", "feather")
+                try:
+                    tm_enum = TradingMode(trading_mode) if trading_mode else TradingMode.SPOT
+                except Exception:
+                    tm_enum = TradingMode.SPOT
+                candle_type = CandleType.get_default(tm_enum.value)
+
+                def _try_load_r(pair: str):
+                    try:
+                        df = load_pair_history(
+                            pair=pair, timeframe=tf, datadir=datadir,
+                            data_format=data_format, candle_type=candle_type,
+                        )
+                        return df if df is not None and len(df) > 50 else None
+                    except Exception:
+                        return None
+
+                def _norm_regime(df):
+                    if "date" in df.columns:
+                        df = df.copy()
+                        df["date"] = pd.to_datetime(df["date"])
+                        if hasattr(df["date"].dtype, "tz") and df["date"].dtype.tz is not None:
+                            df["date"] = df["date"].dt.tz_localize(None)
+                    return BacktestRegimeAnalyzer.classify_regime(df)
+
+                def _bisect_regime(dates, labels, dt_str: str) -> str:
+                    try:
+                        dt = _dt.fromisoformat(str(dt_str)[:19].replace(" ", "T"))
+                    except ValueError:
+                        return "RANGING"
+                    idx = _bisect.bisect_right(dates, dt) - 1
+                    if idx < 0:
+                        return labels[0] if labels else "RANGING"
+                    if idx >= len(labels):
+                        return labels[-1]
+                    return labels[idx]
+
+                def _build_pc(df):
+                    rdf = _norm_regime(df)
+                    raw = pd.to_datetime(rdf["date"])
+                    if hasattr(raw.dtype, "tz") and raw.dtype.tz is not None:
+                        raw = raw.dt.tz_localize(None)
+                    return raw.to_list(), rdf["regime"].to_list()
+
+                traded_pairs = list(dict.fromkeys(r["pair"] for r in trade_rows if r["pair"]))
+                rp_lower = (regime_pair or "").lower()
+
+                if rp_lower in ("", "__all__", "all"):
+                    pair_cache: dict = {}
+                    for pair in traded_pairs:
+                        df = _try_load_r(pair)
+                        if df is not None:
+                            pair_cache[pair] = _build_pc(df)
+                    if pair_cache:
+                        for row in trade_rows:
+                            pc = pair_cache.get(row["pair"])
+                            if pc:
+                                row["regime"] = _bisect_regime(pc[0], pc[1], row["open_date"])
+                        chosen_regime_pair = "ALL"
+                else:
+                    btc_cands = ["BTC/USDT", "BTC/USDT:USDT", "BTC/USD", "BTC/BUSD"]
+                    cands = ([regime_pair] if regime_pair else []) + btc_cands + traded_pairs
+                    for pair in cands:
+                        df = _try_load_r(pair)
+                        if df is None:
+                            continue
+                        r_dates, r_labels = _build_pc(df)
+                        for row in trade_rows:
+                            row["regime"] = _bisect_regime(r_dates, r_labels, row["open_date"])
+                        chosen_regime_pair = pair
+                        break
+        except Exception as _re:
+            logger.debug(f"MAE/MFE regime classification skipped: {_re}")
+
+        # --- Step 3: K-Means clustering ----------------------------------
+        mae_arr = np.array([r["mae"] for r in trade_rows])
+        mfe_arr = np.array([r["mfe"] for r in trade_rows])
+        pnl_arr = np.array([r["pnl_pct"] for r in trade_rows])
+        cluster_results: list[dict] = []
+        recommended_tp: float | None = None
+        recommended_sl: float | None = None
+        km_labels_arr = np.full(len(trade_rows), -1, dtype=int)
+
+        if len(trade_rows) >= max(3, n_clusters):
+            try:
+                from sklearn.cluster import KMeans
+                from sklearn.preprocessing import StandardScaler
+
+                n_k = max(2, min(n_clusters, len(trade_rows) // 10))
+                X = np.column_stack([mae_arr, mfe_arr])
+                scaler = StandardScaler()
+                X_sc = scaler.fit_transform(X)
+                km = KMeans(n_clusters=n_k, n_init=10, random_state=42)
+                km_labels_arr = km.fit_predict(X_sc).astype(int)
+                centers = scaler.inverse_transform(km.cluster_centers_)
+
+                for ci in range(n_k):
+                    mask = km_labels_arr == ci
+                    ct = [r for r, m in zip(trade_rows, mask) if m]
+                    if not ct:
+                        continue
+                    wins_c  = [r for r in ct if r["win"]]
+                    loss_c  = [r for r in ct if not r["win"]]
+                    wr_f    = len(wins_c) / len(ct)
+                    avg_win = float(np.mean([r["pnl_pct"] for r in wins_c])) if wins_c else 0.0
+                    avg_los = float(np.mean([abs(r["pnl_pct"]) for r in loss_c])) if loss_c else 0.0
+                    expect  = wr_f * avg_win - (1.0 - wr_f) * avg_los
+                    c_mae   = float(max(0.0, centers[ci][0]))
+                    # 1R = the cluster's adverse-excursion centroid (its MAE % stop)
+                    expect_r = round(expect / c_mae, 3) if c_mae > 0.01 else None
+                    cluster_results.append({
+                        "id":           int(ci),
+                        "mae":          round(c_mae, 3),
+                        "mfe":          round(float(max(0.0, centers[ci][1])), 3),
+                        "size":         len(ct),
+                        "win_rate":     round(wr_f * 100.0, 1),
+                        "avg_pnl_pct":  round(float(np.mean([r["pnl_pct"] for r in ct])), 3),
+                        "avg_win_pct":  round(avg_win, 3),
+                        "avg_los_pct":  round(avg_los, 3),
+                        "expectancy":   round(expect, 3),
+                        "expectancy_r": expect_r,
+                        "is_dominant":  False,
+                    })
+
+                for idx, row in enumerate(trade_rows):
+                    row["cluster"] = int(km_labels_arr[idx])
+
+                if cluster_results:
+                    # Dominant = highest expectancy × size (balances quality and frequency)
+                    best_c = max(cluster_results, key=lambda c: c["expectancy"] * c["size"])
+                    for c in cluster_results:
+                        c["is_dominant"] = c["id"] == best_c["id"]
+                    recommended_tp = best_c["mfe"]
+                    recommended_sl = best_c["mae"]
+
+            except Exception as _ke:
+                logger.warning(f"MAE/MFE K-means failed: {_ke}")
+
+        # --- Expectancy model (shared by global + per-regime) ------------
+        # Joint TP/SL "what-if": replay every trade against a hard TP and SL
+        # using its recorded excursions. Conservative on the first-touch overlap
+        # (if both barriers were reached we assume the stop hit first):
+        #   * -SL  if the adverse excursion reached the stop   (MAE >= SL)
+        #   * +TP  elif the favourable excursion reached target (MFE >= TP)
+        #   * realised PnL otherwise (neither barrier touched)
+        # Expectancy = mean per-trade outcome.
+        def _expectancy(mae_a, mfe_a, pnl_a, tp: float, sl: float) -> float:
+            out = np.where(mae_a >= sl, -sl, np.where(mfe_a >= tp, tp, pnl_a))
+            return float(out.mean())
+
+        def _optimise_tp_sl(mae_a, mfe_a, pnl_a):
+            # Search each barrier over its own empirical distribution so we never
+            # recommend a level the trades in this bucket don't actually reach.
+            if len(mfe_a) < 1:
+                return None
+            tp_grid = np.unique(np.round(
+                np.percentile(mfe_a, np.linspace(25, 92, 14)), 2))
+            sl_grid = np.unique(np.round(
+                np.percentile(mae_a, [45, 55, 65, 72, 80, 88]), 2))
+            sl_grid = sl_grid[sl_grid > 0.01]
+            tp_grid = tp_grid[tp_grid > 0.01]
+            if len(tp_grid) == 0 or len(sl_grid) == 0:
+                return None
+            best = None
+            for sl in sl_grid:
+                for tp in tp_grid:
+                    e = _expectancy(mae_a, mfe_a, pnl_a, float(tp), float(sl))
+                    if best is None or e > best[2]:
+                        best = (float(tp), float(sl), e)
+            return best  # (tp, sl, expectancy)
+
+        # --- Step 4: Per-regime excursion stats + optimised TP/SL --------
+        # The recommendation is now the (TP, SL) pair that MAXIMISES expectancy
+        # on this regime's own trades — not a raw percentile. Below ~30 trades
+        # the optimum is statistically shaky, so we flag it as low-confidence.
+        MIN_OPT_TRADES = 30
+
+        def _bucket_stats(rows: list[dict]) -> dict:
+            mae_r = np.array([row["mae"] for row in rows])
+            mfe_r = np.array([row["mfe"] for row in rows])
+            pnl_r = np.array([row["pnl_pct"] for row in rows])
+            wins_r = sum(1 for row in rows if row["win"])
+
+            opt = _optimise_tp_sl(mae_r, mfe_r, pnl_r)
+            if opt is not None:
+                best_tp, best_sl, best_exp = (
+                    round(opt[0], 2), round(opt[1], 2), round(opt[2], 3)
+                )
+            else:
+                best_tp = round(float(np.median(mfe_r)), 2)
+                best_sl = round(float(np.percentile(mae_r, 75)), 2)
+                best_exp = None
+
+            # Expectancy in R-multiples: 1R = the risk taken = the recommended
+            # MAE % stop, so each trade's outcome / SL is its R, and the mean is
+            # expectancy_pct / SL. R is the comparable, regime-agnostic measure.
+            best_exp_r = (
+                round(best_exp / best_sl, 3)
+                if best_exp is not None and best_sl and best_sl > 0.01
+                else None
+            )
+
+            return {
+                "count":         len(rows),
+                "win_rate":      round(wins_r / len(rows) * 100.0, 1),
+                "mfe_p25":       round(float(np.percentile(mfe_r, 25)), 2),
+                "mfe_median":    round(float(np.median(mfe_r)), 2),
+                "mfe_p75":       round(float(np.percentile(mfe_r, 75)), 2),
+                "mae_p25":       round(float(np.percentile(mae_r, 25)), 2),
+                "mae_median":    round(float(np.median(mae_r)), 2),
+                "mae_p75":       round(float(np.percentile(mae_r, 75)), 2),
+                # Expectancy-optimised exits for THIS regime.
+                # best_tp is drawn from the MFE (favourable) distribution → the
+                # MFE-based take-profit; best_sl from the MAE (adverse)
+                # distribution → the MAE-based stop-loss.
+                "best_tp":       best_tp,
+                "best_sl":       best_sl,
+                "best_exp":      best_exp,
+                "best_exp_r":    best_exp_r,
+                # How often each recommended level is actually reached in this
+                # regime: share of trades whose MFE >= TP / whose MAE >= SL.
+                "tp_hit_rate":   round(float((mfe_r >= best_tp).mean() * 100.0), 1),
+                "sl_hit_rate":   round(float((mae_r >= best_sl).mean() * 100.0), 1),
+                "confident":     len(rows) >= MIN_OPT_TRADES and opt is not None,
+            }
+
+        per_regime: dict = {}
+        for regime in sorted(set(r["regime"] for r in trade_rows)):
+            rr = [row for row in trade_rows if row["regime"] == regime]
+            if rr:
+                per_regime[regime] = _bucket_stats(rr)
+
+        # --- Global stats ------------------------------------------------
+        global_stats = {
+            "total":      len(trade_rows),
+            "win_count":  sum(1 for r in trade_rows if r["win"]),
+            "mfe_p25":    round(float(np.percentile(mfe_arr, 25)), 2),
+            "mfe_median": round(float(np.median(mfe_arr)), 2),
+            "mfe_p75":    round(float(np.percentile(mfe_arr, 75)), 2),
+            "mfe_p90":    round(float(np.percentile(mfe_arr, 90)), 2),
+            "mae_p25":    round(float(np.percentile(mae_arr, 25)), 2),
+            "mae_median": round(float(np.median(mae_arr)), 2),
+            "mae_p75":    round(float(np.percentile(mae_arr, 75)), 2),
+            "mae_p90":    round(float(np.percentile(mae_arr, 90)), 2),
+        }
+
+        # Thin scatter to ≤5000 pts for frontend performance
+        scatter = trade_rows
+        if len(scatter) > 5000:
+            step = len(scatter) // 5000 + 1
+            scatter = scatter[::step]
+
+        return {
+            "scatter":        scatter,
+            "clusters":       cluster_results,
+            "recommended_tp": recommended_tp,
+            "recommended_sl": recommended_sl,
+            "per_regime":     per_regime,
+            "global":         global_stats,
+            "regime_pair":    chosen_regime_pair,
+            "timeframe":      tf or "",
+        }
+
     # ------------------------------------------------------------------
 
     def _backtest_regime_analysis(self, name: str, regime_pair: str = "") -> dict:
