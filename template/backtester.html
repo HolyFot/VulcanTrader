@@ -1101,11 +1101,167 @@
                         </div>
                         <p style="font-size:0.72rem; color:#888; margin:0.5rem 0 0;">
                             These are the dynamic <strong style="color:#f59e0b;">MFE %</strong> and <strong style="color:#ef4444;">MAE %</strong> to use per regime. Put them into your
-                            MAE SLs & MFE TPs per regime. Both are drawn from that regime's own excursion distributions at the level that maximised modelled expectancy.
+                            dynamic <strong style="color:#f59e0b;">MAE SLs</strong> & <strong style="color:#ef4444;">MFE TPs</strong> system per regime. Both are drawn from that regime's own excursion distributions at the level that maximised modelled expectancy.
+                            The MAE MFE bands are recommendations for your basic SL/TP if you dont have a dynamic MAE SLs/MFE TPs system inplace.
+                            Both methods are better than just hyperopt (overfitting) your SL/ROI TPs.
                         </p>
                     </div>
 
                 </template>
+            </div>
+
+            <!-- === 3D ANALYSIS EXPLORER === -->
+            <style>
+                #bt-3d-panel .axis3d-label { font-size:0.65rem; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; }
+                .ctrl3d-btn { font-size:0.72rem; color:#a0aec0; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:3px 10px; cursor:pointer; transition:all 0.15s; white-space:nowrap; }
+                .ctrl3d-btn:hover { background:rgba(167,139,250,0.12); color:#c4b5fd; border-color:rgba(167,139,250,0.3); }
+                .ctrl3d-btn.active { background:rgba(167,139,250,0.2); color:#c4b5fd; border-color:#a78bfa; box-shadow:0 0 6px rgba(167,139,250,0.25); }
+                #bt-3d-panel select.sel3d { font-size:0.8rem; padding:5px 8px; }
+            </style>
+            <div class="card" id="bt-3d-panel" v-if="enrichedTrades.length > 0">
+                <h3 style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <span>3D Analysis Explorer</span>
+                    <span id="ctrl3d-bar" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-weight:400;">
+                        <button class="ctrl3d-btn" id="ctrl3d-rotate" onclick="_set3DDragMode('turntable', this)">&#8635; Rotate</button>
+                        <button class="ctrl3d-btn" id="ctrl3d-pan"    onclick="_set3DDragMode('pan',       this)">&#10021; Pan</button>
+                        <button class="ctrl3d-btn" id="ctrl3d-zoom"   onclick="_set3DDragMode('zoom',      this)">&#128269; Zoom</button>
+                        <button class="ctrl3d-btn"                    onclick="_reset3DCamera()">&#8962; Reset</button>
+                    </span>
+                </h3>
+                <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:16px;">
+                    <!-- Axes group -->
+                    <div style="display:flex; gap:8px; align-items:flex-end; padding:8px 10px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.07);">
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">X Axis</label>
+                            <select id="3d-x-axis" class="form-input sel3d" style="width:160px;" onchange="_render3DPlot()">
+                                <option value="trade_idx" selected>Trade #</option>
+                                <option value="trade_roi">Trade ROI %</option>
+                                <option value="cum_roi">Cumulative ROI %</option>
+                                <option value="mae">MAE %</option>
+                                <option value="mfe">MFE %</option>
+                                <option value="duration">Trade Duration (min)</option>
+                                <option value="rolling_wr">Running Win Rate %</option>
+                                <option value="rolling_wr_w">Rolling Win Rate %</option>
+                                <option value="cum_sharpe">Cumulative Sharpe</option>
+                                <option value="rolling_sharpe">Rolling Sharpe</option>
+                                <option value="running_sortino">Cumulative Sortino</option>
+                                <option value="rolling_sortino">Rolling Sortino</option>
+                                <option value="running_pf">Running Profit Factor</option>
+                                <option value="rolling_pf">Rolling Profit Factor</option>
+                                <option value="rolling_snr">Rolling SNR</option>
+                                <option value="expectancy_r">Running Expectancy R</option>
+                                <option value="running_rr">Running R:R</option>
+                                <option value="running_cagr">Running CAGR %</option>
+                                <option value="running_dd">Running Max DD %</option>
+                                <option value="leverage">Eff. Leverage</option>
+                                <option value="sl_pct">SL Proximity %</option>
+                                <option value="tp_pct">TP Proximity %</option>
+                                <option value="roi_tp_pct">ROI-exit ROI %</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">Y Axis</label>
+                            <select id="3d-y-axis" class="form-input sel3d" style="width:160px;" onchange="_render3DPlot()">
+                                <option value="trade_idx">Trade #</option>
+                                <option value="trade_roi">Trade ROI %</option>
+                                <option value="cum_roi">Cumulative ROI %</option>
+                                <option value="mae">MAE %</option>
+                                <option value="mfe" selected>MFE %</option>
+                                <option value="duration">Trade Duration (min)</option>
+                                <option value="rolling_wr">Running Win Rate %</option>
+                                <option value="rolling_wr_w">Rolling Win Rate %</option>
+                                <option value="cum_sharpe">Cumulative Sharpe</option>
+                                <option value="rolling_sharpe">Rolling Sharpe</option>
+                                <option value="running_sortino">Cumulative Sortino</option>
+                                <option value="rolling_sortino">Rolling Sortino</option>
+                                <option value="running_pf">Running Profit Factor</option>
+                                <option value="rolling_pf">Rolling Profit Factor</option>
+                                <option value="rolling_snr">Rolling SNR</option>
+                                <option value="expectancy_r">Running Expectancy R</option>
+                                <option value="running_rr">Running R:R</option>
+                                <option value="running_cagr">Running CAGR %</option>
+                                <option value="running_dd">Running Max DD %</option>
+                                <option value="leverage">Eff. Leverage</option>
+                                <option value="sl_pct">SL Proximity %</option>
+                                <option value="tp_pct">TP Proximity %</option>
+                                <option value="roi_tp_pct">ROI-exit ROI %</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">Z Axis</label>
+                            <select id="3d-z-axis" class="form-input sel3d" style="width:160px;" onchange="_render3DPlot()">
+                                <option value="trade_idx">Trade #</option>
+                                <option value="trade_roi" selected>Trade ROI %</option>
+                                <option value="cum_roi">Cumulative ROI %</option>
+                                <option value="mae">MAE %</option>
+                                <option value="mfe">MFE %</option>
+                                <option value="duration">Trade Duration (min)</option>
+                                <option value="rolling_wr">Running Win Rate %</option>
+                                <option value="rolling_wr_w">Rolling Win Rate %</option>
+                                <option value="cum_sharpe">Cumulative Sharpe</option>
+                                <option value="rolling_sharpe">Rolling Sharpe</option>
+                                <option value="running_sortino">Cumulative Sortino</option>
+                                <option value="rolling_sortino">Rolling Sortino</option>
+                                <option value="running_pf">Running Profit Factor</option>
+                                <option value="rolling_pf">Rolling Profit Factor</option>
+                                <option value="rolling_snr">Rolling SNR</option>
+                                <option value="expectancy_r">Running Expectancy R</option>
+                                <option value="running_rr">Running R:R</option>
+                                <option value="running_cagr">Running CAGR %</option>
+                                <option value="running_dd">Running Max DD %</option>
+                                <option value="leverage">Eff. Leverage</option>
+                                <option value="sl_pct">SL Proximity %</option>
+                                <option value="tp_pct">TP Proximity %</option>
+                                <option value="roi_tp_pct">ROI-exit ROI %</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- Display group -->
+                    <div style="display:flex; gap:8px; align-items:flex-end; padding:8px 10px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.07);">
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">Color By</label>
+                            <select id="3d-color-by" class="form-input sel3d" style="width:96px;" onchange="_render3DPlot()">
+                                <option value="z">Z axis</option>
+                                <option value="x">X axis</option>
+                                <option value="y">Y axis</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">Surface</label>
+                            <select id="3d-plot-type" class="form-input sel3d" style="width:128px;" onchange="_render3DPlot()">
+                                <option value="scatter">Scatter Points</option>
+                                <option value="surface" selected>Heightmap</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label" title="Look-back window for rolling metrics (Rolling Sharpe / SNR / Win Rate)">Window</label>
+                            <select id="3d-window" class="form-input sel3d" style="width:80px;" onchange="_render3DPlot()">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="30" selected>30</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:3px;">
+                            <label class="axis3d-label">Gradient</label>
+                            <select id="3d-colorscale" class="form-input sel3d" style="width:104px;" onchange="_render3DPlot()">
+                                <option value="Viridis" selected>Viridis</option>
+                                <option value="Plasma">Plasma</option>
+                                <option value="Turbo">Turbo</option>
+                                <option value="Cividis">Cividis</option>
+                                <option value="Jet">Jet</option>
+                                <option value="Hot">Hot</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="chart-3d" style="width:100%; min-height:624px;"></div>
+                <div style="margin-top:8px; font-size:0.7rem; color:#4b5563; line-height:1.5;">
+                    One point per closed trade. <strong style="color:#5b6470;">Trade axes</strong> (MAE, MFE, Trade ROI, Duration, Leverage) are per-trade values;
+                    <strong style="color:#5b6470;">cumulative / rolling axes</strong> (Cum ROI, Win Rate, Sharpe, Sortino, Profit Factor, SNR, Expectancy R, R:R, CAGR, Max DD) are computed incrementally in trade order.
+                    Rolling metrics use the <strong style="color:#5b6470;">Window</strong> look-back. MAE / MFE are leverage-adjusted, drawn from each trade's min/max price.
+                </div>
             </div>
 
             <div class="card"><h3>Hourly P&amp;L</h3><div id="hourlyPnlChart" style="height:340px;"></div></div>
@@ -1841,7 +1997,7 @@ createApp({
     },
     watch: {
         trades() {
-            this.$nextTick(() => this.renderCharts());
+            this.$nextTick(() => { this.renderCharts(); this.render3DAnalysis(); });
             // Reset regime analysis when a new backtest is loaded
             this.regimeAnalysis = null;
             this.regimeError = null;
@@ -2903,8 +3059,576 @@ createApp({
                 marker: { color: '#ef4444' },
             }], barLayout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Max DD' } }), barCfg);
         },
+        // ----- 3D Analysis Explorer -----
+        render3DAnalysis() {
+            if (typeof window.render3DChart !== 'function') return;
+            if (!this.trades || this.trades.length === 0) return;
+            window.render3DChart(this.trades, this._bt3DMeta());
+        },
+        // Best-effort extraction of stoploss / ROI-target from the backtest config,
+        // used only for the SL/TP-proximity axes (0 when unavailable).
+        _bt3DMeta() {
+            let stoploss_pct = 0, roi_target_pct = 0;
+            try {
+                const j = this.raw || {};
+                let s = null;
+                if (j.strategy && typeof j.strategy === 'object') {
+                    const k = Object.keys(j.strategy);
+                    if (k.length) s = j.strategy[k[0]];
+                }
+                s = s || j;
+                if (s.stoploss != null) stoploss_pct = Math.abs(+s.stoploss) * 100;
+                const roi = s.minimal_roi || s.minimalRoi;
+                if (roi && typeof roi === 'object') {
+                    const vals = Object.values(roi).map(Number).filter(v => !isNaN(v));
+                    if (vals.length) roi_target_pct = Math.max(...vals) * 100;
+                }
+            } catch (e) { /* proximity axes simply stay at 0 */ }
+            return { stoploss_pct, roi_target_pct, startingCapital: this.startingCapital };
+        },
     },
 }).mount('#app');
+
+// =========================================================
+// 3D ANALYSIS EXPLORER  (global; driven by inline onchange handlers)
+// =========================================================
+
+// _3dLastData = { trades: <raw freqtrade trades[]>, meta: { stoploss_pct, roi_target_pct } }
+let _3dLastData = null;
+
+// Axis registry. Every key maps to an option <value> in the X/Y/Z selects.
+const _3D_AXIS_DEFS = {
+    trade_idx:      { label: 'Trade #',                get: t => +(t.trade_idx     || 0) },
+    trade_roi:      { label: 'Trade ROI %',            get: t => +(t.trade_roi     || 0) },
+    cum_roi:        { label: 'Cumulative ROI %',       get: t => +(t.cum_roi       || 0) },
+    mae:            { label: 'MAE %',                  get: t => +(t.mae           || 0) },
+    mfe:            { label: 'MFE %',                  get: t => +(t.mfe           || 0) },
+    duration:       { label: 'Trade Duration (min)',   get: t => +(t.duration      || 0) },
+    rolling_wr:     { label: 'Running Win Rate %',     get: t => +(t.rolling_wr    || 0) },
+    rolling_wr_w:   { label: 'Rolling Win Rate %',     get: t => +(t.rolling_wr_w  || 0) },
+    cum_sharpe:     { label: 'Cumulative Sharpe',      get: t => +(t.cum_sharpe    || 0) },
+    rolling_sharpe: { label: 'Rolling Sharpe',         get: t => +(t.rolling_sharpe|| 0) },
+    running_sortino:{ label: 'Cumulative Sortino',     get: t => +(t.running_sortino|| 0) },
+    rolling_sortino:{ label: 'Rolling Sortino',        get: t => +(t.rolling_sortino|| 0) },
+    running_pf:     { label: 'Running Profit Factor',  get: t => +(t.running_pf    || 0) },
+    rolling_pf:     { label: 'Rolling Profit Factor',  get: t => +(t.rolling_pf    || 0) },
+    rolling_snr:    { label: 'Rolling SNR',            get: t => +(t.rolling_snr   || 0) },
+    expectancy_r:   { label: 'Running Expectancy R',   get: t => +(t.expectancy_r  || 0) },
+    running_rr:     { label: 'Running R:R',            get: t => +(t.running_rr    || 0) },
+    running_cagr:   { label: 'Running CAGR %',         get: t => +(t.running_cagr  || 0) },
+    running_dd:     { label: 'Running Max DD %',       get: t => +(t.running_dd    || 0) },
+    leverage:       { label: 'Eff. Leverage',         get: t => +(t.leverage      || 1) },
+    sl_pct:         { label: 'SL Proximity %',         get: t => +(t.sl_prox       || 0) },
+    tp_pct:         { label: 'TP Proximity %',         get: t => +(t.tp_prox       || 0) },
+    roi_tp_pct:     { label: 'ROI-exit ROI %',         get: t => +(t.roi_tp_pct    || 0) },
+};
+
+// Build one point per closed trade. Per-trade values come straight off the raw
+// freqtrade trade record; cumulative/rolling values are accumulated in order.
+function _build3DTradePoints(trades, meta) {
+    meta = meta || {};
+    const sl_pct_const = +(meta.stoploss_pct   || 0);   // e.g. 3.0 (absolute %)
+    const tp_pct_const = +(meta.roi_target_pct || 0);   // e.g. 6.0
+    const WIN = Math.max(2, +(meta.window || 30));      // rolling look-back window
+    const startCap = +(meta.startingCapital || 0);      // for Running CAGR
+
+    // Incremental accumulators
+    let wins = 0, cumPnl = 0, runningPeak = 0;
+    let winCnt = 0, lossCnt = 0, grossWinAbs = 0, grossLossAbs = 0, cumPnlAbs = 0;
+    let sumNegSqExp = 0;            // expanding downside-squared sum (cumulative Sortino)
+    let firstDateMs = null;         // first trade's open time (for Running CAGR)
+    const allReturns = [];          // expanding window (cumulative Sharpe / Sortino)
+    const retWindow  = [];          // fixed-window returns (rolling Sharpe / SNR / Sortino / PF)
+    const wrWindow   = [];          // fixed-window win flags (rolling win rate)
+
+    const points = (trades || []).map((t, i) => {
+        const p         = +(t.profit_ratio != null ? t.profit_ratio : (t.close_profit || 0)); // fraction
+        const open_rate = +(t.open_rate || 0);
+        const min_rate  = t.min_rate != null ? +t.min_rate : open_rate;
+        const max_rate  = t.max_rate != null ? +t.max_rate : open_rate;
+        const lev       = +(t.leverage || 1) || 1;
+        const is_short  = !!t.is_short;
+
+        // MAE / MFE %, leverage-adjusted, matching the backend (web_portal.py).
+        let mfePct = 0, maePct = 0;
+        if (open_rate > 0) {
+            if (is_short) {
+                mfePct = Math.max(0, (open_rate - min_rate) / open_rate * 100 * lev);
+                maePct = Math.max(0, (max_rate - open_rate) / open_rate * 100 * lev);
+            } else {
+                mfePct = Math.max(0, (max_rate - open_rate) / open_rate * 100 * lev);
+                maePct = Math.max(0, (open_rate - min_rate) / open_rate * 100 * lev);
+            }
+        }
+        maePct = +maePct.toFixed(3);
+        mfePct = +mfePct.toFixed(3);
+        const tROI = +(p * 100).toFixed(3);
+
+        // Trade duration in minutes (prefer freqtrade's field, else derive from dates).
+        let durMin = +(t.trade_duration || 0);
+        if (!durMin && t.open_date && t.close_date) {
+            const od = new Date(t.open_date), cd = new Date(t.close_date);
+            if (!isNaN(od) && !isNaN(cd)) durMin = Math.round((cd - od) / 60000);
+        }
+
+        // Cumulative / rolling stats (updated before use so this trade is included).
+        const pAbs = +(t.profit_abs != null ? t.profit_abs : (t.close_profit_abs || 0)); // quote currency
+        cumPnl += p;
+        cumPnlAbs += pAbs;
+        allReturns.push(p);
+        const isWin = p > 0, isLoss = p < 0;
+        if (isWin)  { wins++; winCnt++;  grossWinAbs  += pAbs; }
+        if (isLoss) { lossCnt++; grossLossAbs += Math.abs(pAbs); }
+
+        const cum_roi    = +(cumPnl * 100).toFixed(3);
+        const rolling_wr = +((wins / (i + 1)) * 100).toFixed(2);
+
+        // Running win/loss size stats → R:R, Expectancy R, Profit Factor (currency,
+        // matching the headline metrics() definitions used elsewhere in the app).
+        const avgWinAbs  = winCnt  > 0 ? grossWinAbs  / winCnt  : 0;
+        const avgLossAbs = lossCnt > 0 ? grossLossAbs / lossCnt : 0;
+        const running_rr = avgLossAbs > 0 ? +(avgWinAbs / avgLossAbs).toFixed(4) : (avgWinAbs > 0 ? 99 : 0);
+        const wrFrac     = wins / (i + 1);
+        const expectancy_r = +(wrFrac * running_rr - (1 - wrFrac)).toFixed(4);
+        const running_pf = grossLossAbs > 0 ? +(grossWinAbs / grossLossAbs).toFixed(4) : (grossWinAbs > 0 ? 999.99 : 0);
+
+        // Running CAGR % — annualised return of the equity curve up to this trade.
+        // Noisy/undefined until enough wall-clock time has elapsed, so guarded.
+        const cd = t.close_date ? new Date(t.close_date) : null;
+        if (firstDateMs === null) {
+            const od = t.open_date ? new Date(t.open_date) : cd;
+            firstDateMs = od && !isNaN(od) ? od.getTime() : null;
+        }
+        let running_cagr = 0;
+        if (firstDateMs !== null && cd && !isNaN(cd) && startCap > 0) {
+            const years = (cd.getTime() - firstDateMs) / (365.25 * 86400000);
+            const finalEq = startCap + cumPnlAbs;
+            if (years >= 0.02 && finalEq > 0) {   // require >= ~1 week to avoid blow-ups
+                running_cagr = (Math.pow(finalEq / startCap, 1 / years) - 1) * 100;
+                running_cagr = +Math.max(-100, Math.min(10000, running_cagr)).toFixed(3);
+            }
+        }
+
+        // Running max drawdown from equity peak (simple sum, non-compounded).
+        if (cumPnl > runningPeak) runningPeak = cumPnl;
+        const running_dd = +((runningPeak - cumPnl) * 100).toFixed(3);
+
+        // Cumulative (expanding-window) Sharpe & Sortino — mean / (std | downside-dev).
+        if (isLoss) sumNegSqExp += p * p;
+        let cum_sharpe = 0, running_sortino = 0;
+        if (allReturns.length >= 2) {
+            const mean = cumPnl / allReturns.length;
+            const variance = allReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / (allReturns.length - 1);
+            const std = Math.sqrt(variance);
+            cum_sharpe = std > 0 ? +(mean / std).toFixed(4) : 0;
+            const downDev = Math.sqrt(sumNegSqExp / allReturns.length);   // target 0
+            running_sortino = downDev > 0 ? +(mean / downDev).toFixed(4) : (mean > 0 ? 9.9999 : 0);
+        }
+
+        // Rolling (fixed-window) Sharpe / SNR / Sortino / Profit Factor over last WIN trades.
+        retWindow.push(p);
+        if (retWindow.length > WIN) retWindow.shift();
+        let rolling_sharpe = 0, rolling_snr = 0, rolling_sortino = 0, rolling_pf = 0;
+        {
+            let wSum = 0, wPos = 0, wNegAbs = 0, wNegSq = 0;
+            for (const r of retWindow) {
+                wSum += r;
+                if (r > 0) wPos += r; else if (r < 0) { wNegAbs += -r; wNegSq += r * r; }
+            }
+            rolling_pf = wNegAbs > 0 ? +(wPos / wNegAbs).toFixed(4) : (wPos > 0 ? 999.99 : 0);
+            if (retWindow.length >= 2) {
+                const wMean = wSum / retWindow.length;
+                // Sharpe: sample variance (÷N-1). SNR: population variance (÷N, matches Rust engine).
+                const ssq = retWindow.reduce((s, r) => s + (r - wMean) ** 2, 0);
+                const sampStd = Math.sqrt(ssq / (retWindow.length - 1));
+                const popStd  = Math.sqrt(ssq / retWindow.length);
+                const downDev = Math.sqrt(wNegSq / retWindow.length);
+                rolling_sharpe  = sampStd > 0 ? +(wMean / sampStd).toFixed(4) : 0;
+                rolling_snr     = popStd  > 0 ? +(wMean / popStd ).toFixed(4) : (wMean > 0 ? 9.9999 : 0);
+                rolling_sortino = downDev > 0 ? +(wMean / downDev).toFixed(4) : (wMean > 0 ? 9.9999 : 0);
+            }
+        }
+
+        // Rolling (fixed-window) win rate over the last WIN trades.
+        wrWindow.push(isWin ? 1 : 0);
+        if (wrWindow.length > WIN) wrWindow.shift();
+        const rolling_wr_w = +((wrWindow.reduce((a, b) => a + b, 0) / wrWindow.length) * 100).toFixed(2);
+
+        // Exit-reason-derived axes.
+        const exit_name = (t.exit_reason || 'Unknown');
+        const roi_tp_pct = /roi/i.test(exit_name) ? tROI : 0;
+        const sl_prox  = sl_pct_const > 0 ? +(maePct / sl_pct_const * 100).toFixed(2) : 0;
+        const tp_prox  = tp_pct_const > 0 ? +(tROI   / tp_pct_const * 100).toFixed(2) : 0;
+
+        return {
+            trade_idx:  i + 1,
+            trade_roi:  tROI,
+            mae:        maePct,
+            mfe:        mfePct,
+            duration:   durMin,
+            cum_roi,
+            running_pf,
+            rolling_pf,
+            rolling_wr,
+            rolling_wr_w,
+            cum_sharpe,
+            rolling_sharpe,
+            running_sortino,
+            rolling_sortino,
+            rolling_snr,
+            expectancy_r,
+            running_rr,
+            running_cagr,
+            running_dd,
+            leverage:   +lev.toFixed(3),
+            sl_prox,
+            tp_prox,
+            roi_tp_pct,
+            exit_name,
+            pair:       t.pair || '',
+        };
+    });
+
+    return { points };
+}
+
+function render3DChart(trades, meta) {
+    _3dLastData = { trades: trades || [], meta: meta || {} };
+    const panel = document.getElementById('bt-3d-panel');
+    if (!panel) return;                       // Vue v-if controls visibility
+    if (!_3dLastData.trades.length) return;
+    _render3DPlot();
+}
+
+function _render3DPlot() {
+    if (!_3dLastData) return;
+    const g = id => document.getElementById(id);
+    if (!g('3d-x-axis')) return;              // panel not in DOM yet
+    const xKey       = g('3d-x-axis').value;
+    const yKey       = g('3d-y-axis').value;
+    const zKey       = g('3d-z-axis').value;
+    const colorAxis  = g('3d-color-by').value || 'z';   // 'x' | 'y' | 'z'
+    const colorKey   = colorAxis === 'x' ? xKey : colorAxis === 'y' ? yKey : zKey;
+    const plotType   = g('3d-plot-type').value;
+    const colorscale = g('3d-colorscale').value;
+    const windowSize = +(g('3d-window') ? g('3d-window').value : 30) || 30;
+
+    const xDef     = _3D_AXIS_DEFS[xKey];
+    const yDef     = _3D_AXIS_DEFS[yKey];
+    const zDef     = _3D_AXIS_DEFS[zKey];
+    const colorDef = _3D_AXIS_DEFS[colorKey] || zDef;
+    if (!xDef || !yDef || !zDef) return;
+
+    const meta    = Object.assign({}, _3dLastData.meta, { window: windowSize });
+    const catInfo = _build3DTradePoints(_3dLastData.trades, meta);
+    const points  = catInfo.points;
+
+    const chartEl = document.getElementById('chart-3d');
+    if (!points || points.length === 0) {
+        if (chartEl) chartEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#6b7280;font-size:0.9rem;">No data for selected axes</div>';
+        return;
+    }
+
+    const xVals  = points.map(p => xDef.get(p));
+    const yVals  = points.map(p => yDef.get(p));
+    const zVals  = points.map(p => zDef.get(p));
+    const cVals  = points.map(p => colorDef.get(p));
+
+    const fmt = v => (typeof v === 'number' ? v.toFixed(3) : String(v));
+
+    const hoverText = points.map((p, i) => {
+        return `<b>${xDef.label}:</b> ${fmt(xVals[i])}<br>`
+             + `<b>${yDef.label}:</b> ${fmt(yVals[i])}<br>`
+             + `<b>${zDef.label}:</b> ${fmt(zVals[i])}<br>`
+             + `${p.pair ? p.pair + '<br>' : ''}`
+             + `Exit: ${p.exit_name || '-'}<br>`
+             + `Duration: ${p.duration}m  Lev: ${p.leverage}x  Trade #${p.trade_idx}`;
+    });
+
+    const axStyle = {
+        gridcolor:     'rgba(255,255,255,0.08)',
+        zerolinecolor: 'rgba(255,255,255,0.2)',
+        tickfont:      { color: '#a0aec0', size: 10 },
+        titlefont:     { color: '#c4b5fd', size: 11 },
+    };
+
+    let traces = [];
+
+    if (plotType === 'surface') {
+        // Build a bin-mapped grid so continuous-output metrics produce a smooth 3-D surface.
+        const MAX_BINS = 28;
+        const _buildBinMapper = (vals) => {
+            const uniq = [...new Set(vals)].sort((a, b) => a - b);
+            if (uniq.length <= MAX_BINS) {
+                return { bins: uniq, idx: v => uniq.findIndex(u => u === v) };
+            }
+            const mn = uniq[0], rng = uniq[uniq.length - 1] - mn;
+            if (rng === 0) return { bins: [mn], idx: _ => 0 };
+            const n = MAX_BINS;
+            const bins = Array.from({length: n}, (_, i) => mn + rng * i / (n - 1));
+            const idx  = v => Math.max(0, Math.min(n - 1, Math.round((v - mn) / rng * (n - 1))));
+            return { bins, idx };
+        };
+        const bx = _buildBinMapper(xVals);
+        const by = _buildBinMapper(yVals);
+        // Clear any previous surface-fallback warning
+        { const _w = document.getElementById('3d-surface-warn'); if (_w) _w.remove(); }
+        if (bx.bins.length < 2 || by.bins.length < 2) {
+            // Grid surface needs >=2 distinct values on both axes - fall back to scatter with a note.
+            const _axLbl = bx.bins.length < 2 ? xDef.label : yDef.label;
+            const _warn = document.createElement('div');
+            _warn.id = '3d-surface-warn';
+            _warn.style.cssText = 'font-size:0.72rem;color:#f59e0b;margin-top:4px;';
+            _warn.textContent = `"${_axLbl}" has only 1 unique value - showing scatter. Try different axes.`;
+            const _chartDiv = document.getElementById('chart-3d');
+            if (_chartDiv && _chartDiv.nextSibling) _chartDiv.parentNode.insertBefore(_warn, _chartDiv.nextSibling);
+            traces = [];
+            traces.push({
+                type: 'scatter3d',
+                x: xVals, y: yVals, z: zVals,
+                mode: 'markers',
+                text: hoverText,
+                hovertemplate: '%{text}<extra></extra>',
+                marker: {
+                    size:       3,
+                    color:      cVals,
+                    colorscale,
+                    opacity:    0.85,
+                    showscale:  true,
+                    colorbar: {
+                        title:    { text: colorDef.label, font: { color: '#a0aec0', size: 11 } },
+                        thickness: 14,
+                        tickfont:  { color: '#a0aec0', size: 9 },
+                        len:       0.8,
+                        x:         1.02,
+                        xanchor:   'left',
+                        y:         0.5,
+                        yanchor:   'middle',
+                    },
+                },
+            });
+        } else {
+        const xIdxArr = xVals.map(v => bx.idx(v));
+        const yIdxArr = yVals.map(v => by.idx(v));
+        // Aggregate z values into each (xi, yi) bin
+        const binSums = {}, binCounts = {};
+        for (let i = 0; i < zVals.length; i++) {
+            const k = xIdxArr[i] + ',' + yIdxArr[i];
+            binSums[k]   = (binSums[k]   || 0) + zVals[i];
+            binCounts[k] = (binCounts[k] || 0) + 1;
+        }
+        const zGridRaw = by.bins.map((_, yi) => bx.bins.map((_, xi) => {
+            const k = xi + ',' + yi;
+            return binCounts[k] ? binSums[k] / binCounts[k] : null;
+        }));
+        // Flood-fill null bins with neighbour-averaged values so Plotly renders
+        // a continuous surface instead of isolated spikes.
+        const _fillGrid = (gr) => {
+            const rows = gr.length, cols = gr[0].length;
+            const f = gr.map(r => r.slice());
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        if (f[r][c] !== null) continue;
+                        const nb = [];
+                        if (r > 0      && f[r-1][c] !== null) nb.push(f[r-1][c]);
+                        if (r < rows-1 && f[r+1][c] !== null) nb.push(f[r+1][c]);
+                        if (c > 0      && f[r][c-1] !== null) nb.push(f[r][c-1]);
+                        if (c < cols-1 && f[r][c+1] !== null) nb.push(f[r][c+1]);
+                        if (nb.length) { f[r][c] = nb.reduce((a,b)=>a+b,0)/nb.length; changed = true; }
+                    }
+                }
+            }
+            const all = f.flat().filter(v=>v!==null);
+            const gm  = all.length ? all.reduce((a,b)=>a+b,0)/all.length : 0;
+            return f.map(r => r.map(v => v !== null ? v : gm));
+        };
+        const zGrid = _fillGrid(zGridRaw);
+        traces.push({
+            type: 'surface',
+            x: bx.bins, y: by.bins, z: zGrid,
+            colorscale,
+            colorbar: {
+                title:    { text: zDef.label, font: { color: '#a0aec0', size: 11 } },
+                thickness: 14,
+                tickfont:  { color: '#a0aec0', size: 9 },
+                len:       0.8,
+                x:         1.02,
+                xanchor:   'left',
+                y:         0.5,
+                yanchor:   'middle',
+            },
+            hovertemplate: `${xDef.label}: %{x:.3f}<br>${yDef.label}: %{y:.3f}<br>${zDef.label}: %{z:.3f}<extra></extra>`,
+            lighting:      { ambient: 0.7, diffuse: 0.8, roughness: 0.5, specular: 0.3 },
+            lightposition: { x: 100, y: 200, z: 150 },
+        });
+        }  // end bins-sufficient else
+    } else {
+        traces.push({
+            type: 'scatter3d',
+            x: xVals, y: yVals, z: zVals,
+            mode: 'markers',
+            text: hoverText,
+            hovertemplate: '%{text}<extra></extra>',
+            marker: {
+                size:       3,
+                color:      cVals,
+                colorscale,
+                opacity:    0.75,
+                showscale:  true,
+                colorbar: {
+                    title:    { text: colorDef.label, font: { color: '#a0aec0', size: 11 } },
+                    thickness: 14,
+                    tickfont:  { color: '#a0aec0', size: 9 },
+                    len:       0.8,
+                    x:         1.02,
+                    xanchor:   'left',
+                    y:         0.5,
+                    yanchor:   'middle',
+                },
+                line: {},
+            },
+        });
+    }
+
+    // Clear any stale surface-fallback warning when the plot renders successfully
+    { const _w = document.getElementById('3d-surface-warn'); if (_w) _w.remove(); }
+
+    // Preserve the current camera angle so controls don't reset the view
+    const _3dEl = document.getElementById('chart-3d');
+    let savedCamera = null;
+    try {
+        const sc = _3dEl && _3dEl._fullLayout && _3dEl._fullLayout.scene;
+        if (sc && sc.camera) savedCamera = JSON.parse(JSON.stringify(sc.camera));
+    } catch (_) {}
+
+    const layout = {
+        paper_bgcolor: 'transparent',
+        plot_bgcolor:  'transparent',
+        font:   { color: '#a0aec0', size: 11 },
+        margin: { t: 20, r: 140, b: 20, l: 20 },
+        scene: {
+            xaxis:   { ...axStyle, title: xDef.label },
+            yaxis:   { ...axStyle, title: yDef.label },
+            zaxis:   { ...axStyle, title: zDef.label },
+            bgcolor: 'rgba(0,0,0,0)',
+            camera:  savedCamera || { eye: { x: 1.5, y: 1.5, z: 0.9 } },
+        },
+        height: 624,
+    };
+
+    Plotly.newPlot('chart-3d', traces, layout, {
+        responsive:                true,
+        displayModeBar:            true,
+        displaylogo:               false,
+        modeBarButtonsToRemove:    ['sendDataToCloud'],
+    }).then(() => {
+        const el = document.getElementById('chart-3d');
+        _attach3DMiddleClickPan(el);
+        _attach3DZoomDampen(el);
+        _sync3DControlBar();
+    });
+}
+
+function set3DPreset(x, y, z, type, colorBy) {
+    const g = id => document.getElementById(id);
+    if (!g('3d-x-axis')) return;
+    g('3d-x-axis').value = x;
+    g('3d-y-axis').value = y;
+    g('3d-z-axis').value = z;
+    if (type) g('3d-plot-type').value = type;
+    const cb = g('3d-color-by');
+    if (cb) cb.value = colorBy || 'z';
+    _render3DPlot();
+}
+
+// Track active dragmode so the control bar stays in sync across renders.
+window._3dDragMode = 'turntable';
+
+function _set3DDragMode(mode, btn) {
+    const el = document.getElementById('chart-3d');
+    if (!el || !el.data) return;
+    // Toggle off: clicking the already-active mode returns to rotate.
+    if (window._3dDragMode === mode && mode !== 'turntable') {
+        mode = 'turntable';
+    }
+    window._3dDragMode = mode;
+    Plotly.relayout(el, { 'scene.dragmode': mode });
+    _sync3DControlBar();
+}
+
+function _reset3DCamera() {
+    window._3dDragMode = 'turntable';
+    const el = document.getElementById('chart-3d');
+    if (!el || !el.data) return;
+    Plotly.relayout(el, {
+        'scene.camera': { eye: { x: 1.5, y: 1.5, z: 0.9 } },
+        'scene.dragmode': 'turntable',
+    });
+    _sync3DControlBar();
+}
+
+function _sync3DControlBar() {
+    const mode = window._3dDragMode || 'turntable';
+    const map = { turntable: 'ctrl3d-rotate', pan: 'ctrl3d-pan', zoom: 'ctrl3d-zoom' };
+    ['ctrl3d-rotate', 'ctrl3d-pan', 'ctrl3d-zoom'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.classList.toggle('active', map[mode] === id);
+    });
+}
+
+// Dampen scroll-wheel zoom to 35% of default Plotly sensitivity.
+function _attach3DZoomDampen(chartDiv) {
+    if (!chartDiv || chartDiv._zoomDampened) return;
+    chartDiv._zoomDampened = true;
+    chartDiv.addEventListener('wheel', (e) => {
+        if (e._scaled) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const ev = new WheelEvent('wheel', {
+            deltaY: e.deltaY * 0.35,
+            deltaX: e.deltaX * 0.35,
+            deltaMode: e.deltaMode,
+            bubbles: true, cancelable: true,
+            clientX: e.clientX, clientY: e.clientY,
+            screenX: e.screenX, screenY: e.screenY,
+            ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey,
+        });
+        ev._scaled = true;
+        chartDiv.dispatchEvent(ev);
+    }, { capture: true, passive: false });
+}
+
+// Remap middle mouse button -> right mouse button inside the Plotly 3D canvas
+// so middle-drag pans the camera instead of zooming (Plotly 3D: right-drag = pan).
+function _attach3DMiddleClickPan(chartDiv) {
+    if (!chartDiv) return;
+    if (chartDiv._midPanDown) chartDiv.removeEventListener('mousedown', chartDiv._midPanDown, true);
+    if (chartDiv._midCtxMenu) chartDiv.removeEventListener('contextmenu', chartDiv._midCtxMenu, true);
+
+    const onDown = (e) => {
+        if (e.button !== 1) return;        // only intercept middle button
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        e.target.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true,
+            view: e.view,
+            button: 2, buttons: 2,
+            clientX: e.clientX, clientY: e.clientY,
+            screenX: e.screenX, screenY: e.screenY,
+            movementX: e.movementX || 0, movementY: e.movementY || 0,
+            ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey,
+        }));
+    };
+    const onCtxMenu = (e) => { if (e._midPan) { e.preventDefault(); e.stopImmediatePropagation(); } };
+
+    chartDiv.addEventListener('mousedown', onDown, true);
+    chartDiv.addEventListener('contextmenu', (e) => e.preventDefault(), true);
+    chartDiv._midPanDown = onDown;
+    chartDiv._midCtxMenu = onCtxMenu;
+}
 </script>
 </body>
 </html>

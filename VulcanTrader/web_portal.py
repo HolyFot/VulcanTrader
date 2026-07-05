@@ -3146,6 +3146,15 @@ class WebPortal:
                 "win":         profit_ratio > 0,
                 "regime":      "ALL",
                 "cluster":     -1,
+                # Fields used by the forward re-simulation (Step 2.5).
+                "open_rate":   open_rate,
+                "leverage":    leverage,
+                "is_short":    is_short,
+                # Forward-path running excursions (filled in if candle data loads);
+                # _adv/_fav are leverage-adjusted running-max % by bar from entry.
+                "_adv":        None,
+                "_fav":        None,
+                "_mtm":        round(float(profit_ratio * 100.0), 3),
             })
 
         if not trade_rows:
@@ -3242,6 +3251,96 @@ class WebPortal:
         except Exception as _re:
             logger.debug(f"MAE/MFE regime classification skipped: {_re}")
 
+        # --- Step 2.5: Forward re-simulation path -----------------------
+        # For each trade, walk the candles FORWARD from entry and record the
+        # leverage-adjusted running-max adverse (_adv) and favourable (_fav)
+        # excursions per bar. This lets the optimiser evaluate a candidate
+        # SL/TP by FIRST-TOUCH (which barrier the price reaches first) instead
+        # of freezing the excursions recorded under the original exit policy —
+        # removing the look-ahead bias of the old expectancy model.
+        SIM_MAX_BARS = 480          # cap forward window (~5 days on 15m)
+        sim_ready = False
+        try:
+            import bisect as _bisect2
+            import numpy as _np2
+            import pandas as pd
+            from VulcanTrader.data.history import load_pair_history
+            from VulcanTrader.enums import CandleType, TradingMode
+
+            if tf and self._datadir().is_dir():
+                datadir = self._datadir()
+                data_format = self.config.get("dataformat_ohlcv", "feather")
+                try:
+                    tm_enum = TradingMode(trading_mode) if trading_mode else TradingMode.SPOT
+                except Exception:
+                    tm_enum = TradingMode.SPOT
+                candle_type = CandleType.get_default(tm_enum.value)
+
+                def _load_ohlcv(pair: str):
+                    try:
+                        df = load_pair_history(
+                            pair=pair, timeframe=tf, datadir=datadir,
+                            data_format=data_format, candle_type=candle_type,
+                        )
+                        if df is None or len(df) == 0:
+                            return None
+                        dts = pd.to_datetime(df["date"])
+                        if hasattr(dts.dtype, "tz") and dts.dtype.tz is not None:
+                            dts = dts.dt.tz_localize(None)
+                        return (
+                            dts.to_list(),
+                            df["high"].to_numpy(dtype=float),
+                            df["low"].to_numpy(dtype=float),
+                            df["close"].to_numpy(dtype=float),
+                        )
+                    except Exception:
+                        return None
+
+                ohlcv_cache: dict = {}
+                for pair in dict.fromkeys(r["pair"] for r in trade_rows if r["pair"]):
+                    oc = _load_ohlcv(pair)
+                    if oc is not None:
+                        ohlcv_cache[pair] = oc
+
+                filled = 0
+                for row in trade_rows:
+                    oc = ohlcv_cache.get(row["pair"])
+                    if not oc:
+                        continue
+                    dates, high, low, close = oc
+                    try:
+                        odt = _dt.fromisoformat(str(row["open_date"])[:19].replace(" ", "T"))
+                    except ValueError:
+                        continue
+                    i0 = _bisect2.bisect_left(dates, odt)
+                    if i0 >= len(close):
+                        continue
+                    i1 = min(i0 + SIM_MAX_BARS, len(close))
+                    o = row["open_rate"]
+                    lev = row["leverage"]
+                    if o <= 0 or i1 <= i0:
+                        continue
+                    h = high[i0:i1]; l = low[i0:i1]; c = close[i1 - 1]
+                    if row["is_short"]:
+                        adv = (h - o) / o * 100.0 * lev      # adverse = price up
+                        fav = (o - l) / o * 100.0 * lev      # favourable = price down
+                        mtm = (o - c) / o * 100.0 * lev
+                    else:
+                        adv = (o - l) / o * 100.0 * lev      # adverse = price down
+                        fav = (h - o) / o * 100.0 * lev      # favourable = price up
+                        mtm = (c - o) / o * 100.0 * lev
+                    # Running maxima → monotonic non-decreasing, so first-touch of
+                    # a level is a single searchsorted.
+                    row["_adv"] = _np2.maximum.accumulate(_np2.clip(adv, 0.0, None)).astype("float32")
+                    row["_fav"] = _np2.maximum.accumulate(_np2.clip(fav, 0.0, None)).astype("float32")
+                    row["_mtm"] = round(float(mtm), 3)
+                    filled += 1
+
+                sim_ready = filled >= max(1, int(0.5 * len(trade_rows)))
+        except Exception as _se:
+            logger.debug(f"MAE/MFE forward re-simulation unavailable: {_se}")
+            sim_ready = False
+
         # --- Step 3: K-Means clustering ----------------------------------
         mae_arr = np.array([r["mae"] for r in trade_rows])
         mfe_arr = np.array([r["mfe"] for r in trade_rows])
@@ -3307,91 +3406,148 @@ class WebPortal:
                 logger.warning(f"MAE/MFE K-means failed: {_ke}")
 
         # --- Expectancy model (shared by global + per-regime) ------------
-        # Joint TP/SL "what-if": replay every trade against a hard TP and SL
-        # using its recorded excursions. Conservative on the first-touch overlap
-        # (if both barriers were reached we assume the stop hit first):
-        #   * -SL  if the adverse excursion reached the stop   (MAE >= SL)
-        #   * +TP  elif the favourable excursion reached target (MFE >= TP)
-        #   * realised PnL otherwise (neither barrier touched)
-        # Expectancy = mean per-trade outcome.
-        def _expectancy(mae_a, mfe_a, pnl_a, tp: float, sl: float) -> float:
+        # Two implementations:
+        #
+        #  FROZEN (fallback, no candle data): replay each trade against a hard
+        #  TP/SL using only its recorded full-hold excursions. This has a known
+        #  look-ahead bias — the excursions were produced under the ORIGINAL
+        #  exit policy, so a tighter SL "borrows" favourable moves / recoveries
+        #  that the tighter SL would actually have truncated.
+        #
+        #  RESIM (preferred, candle data available): walk each trade's candles
+        #  FORWARD from entry and decide the outcome by FIRST TOUCH — whichever
+        #  of the SL / TP barrier the price reaches first. This is what a real
+        #  sequential backtest does, so the recommendation is self-consistent
+        #  with the policy it implies.
+        def _expectancy_frozen(mae_a, mfe_a, pnl_a, tp: float, sl: float) -> float:
             out = np.where(mae_a >= sl, -sl, np.where(mfe_a >= tp, tp, pnl_a))
             return float(out.mean())
 
-        def _optimise_tp_sl(mae_a, mfe_a, pnl_a):
-            # Search each barrier over its own empirical distribution so we never
-            # recommend a level the trades in this bucket don't actually reach.
-            if len(mfe_a) < 1:
-                return None
-            tp_grid = np.unique(np.round(
-                np.percentile(mfe_a, np.linspace(25, 92, 14)), 2))
-            sl_grid = np.unique(np.round(
-                np.percentile(mae_a, [45, 55, 65, 72, 80, 88]), 2))
-            sl_grid = sl_grid[sl_grid > 0.01]
-            tp_grid = tp_grid[tp_grid > 0.01]
-            if len(tp_grid) == 0 or len(sl_grid) == 0:
-                return None
-            best = None
-            for sl in sl_grid:
-                for tp in tp_grid:
-                    e = _expectancy(mae_a, mfe_a, pnl_a, float(tp), float(sl))
-                    if best is None or e > best[2]:
-                        best = (float(tp), float(sl), e)
-            return best  # (tp, sl, expectancy)
+        def _sim_outcomes(rows: list[dict], tp: float, sl: float):
+            """Per-trade outcome (%) under (tp, sl) by forward first-touch."""
+            out = np.empty(len(rows), dtype=float)
+            for i, r in enumerate(rows):
+                adv = r["_adv"]; fav = r["_fav"]
+                if adv is None or fav is None:
+                    # Fall back to frozen logic for this trade.
+                    if r["mae"] >= sl:      out[i] = -sl
+                    elif r["mfe"] >= tp:    out[i] = tp
+                    else:                   out[i] = r["pnl_pct"]
+                    continue
+                n = adv.shape[0]
+                a = int(np.searchsorted(adv, sl, side="left"))   # first bar SL touched
+                f = int(np.searchsorted(fav, tp, side="left"))   # first bar TP touched
+                if a >= n and f >= n:
+                    out[i] = r["_mtm"]          # neither barrier hit in the window
+                elif a <= f:
+                    out[i] = -sl                # SL first (ties → SL, conservative)
+                else:
+                    out[i] = tp                 # TP first
+            return out
 
-        # --- Step 4: Per-regime excursion stats + optimised TP/SL --------
-        # The recommendation is now the (TP, SL) pair that MAXIMISES expectancy
-        # on this regime's own trades — not a raw percentile. Below ~30 trades
-        # the optimum is statistically shaky, so we flag it as low-confidence.
+        def _auc(score: np.ndarray, positive: np.ndarray) -> float:
+            """Probability a random positive outranks a random negative (Mann-Whitney
+            U / ROC-AUC). 0.5 = the excursion carries no information about outcome."""
+            n = len(score)
+            n1 = int(positive.sum()); n0 = n - n1
+            if n1 == 0 or n0 == 0:
+                return 0.5
+            order = np.argsort(score, kind="mergesort")
+            ranks = np.empty(n, dtype=float); ranks[order] = np.arange(1, n + 1)
+            return float((ranks[positive].sum() - n1 * (n1 + 1) / 2.0) / (n1 * n0))
+
+        # --- Step 4: Per-regime exits from WINNER/LOSER EXCURSION SEPARATION
+        # ------------------------------------------------------------------
+        # Concept (Sweeney's MAE/MFE): an exit can only add expectancy when the
+        # excursion is PREDICTIVE of outcome — i.e. losers reach a level winners
+        # rarely do. So instead of curve-fitting a tight SL/TP to past P&L (which
+        # overfits and kills winners), we:
+        #   * place the stop at a HIGH percentile of WINNERS' MAE — most winners
+        #     never reach it, but most losers do (cuts losers, keeps winners);
+        #   * read the MFE give-back curve to set a profit-LOCK / trail trigger
+        #     (the level past which trades stop giving gains back);
+        #   * report AUC predictiveness so the user knows, honestly, whether an
+        #     exit can help this strategy at all (AUC≈0.5 → it cannot; fix entry).
         MIN_OPT_TRADES = 30
+        WINNER_KEEP = 92          # preserve ~92% of winners with the stop
+        GIVEBACK_MAX = 10.0       # trail trigger where ≤10% of trades give it all back
 
         def _bucket_stats(rows: list[dict]) -> dict:
             mae_r = np.array([row["mae"] for row in rows])
             mfe_r = np.array([row["mfe"] for row in rows])
-            pnl_r = np.array([row["pnl_pct"] for row in rows])
-            wins_r = sum(1 for row in rows if row["win"])
+            win_m = np.array([bool(row["win"]) for row in rows])
+            n = len(rows)
+            wins_r = int(win_m.sum())
 
-            opt = _optimise_tp_sl(mae_r, mfe_r, pnl_r)
-            if opt is not None:
-                best_tp, best_sl, best_exp = (
-                    round(opt[0], 2), round(opt[1], 2), round(opt[2], 3)
-                )
+            auc_mae = round(_auc(mae_r, ~win_m), 3)   # MAE predicts a LOSER
+            auc_mfe = round(_auc(mfe_r, win_m), 3)    # MFE predicts a WINNER
+            predictive = auc_mae >= 0.55              # is a stop informative here?
+
+            # Stop = high percentile of WINNERS' MAE (preserve winners, cut losers).
+            if wins_r >= 5 and predictive:
+                best_sl = round(float(np.percentile(mae_r[win_m], WINNER_KEEP)), 2)
             else:
-                best_tp = round(float(np.median(mfe_r)), 2)
                 best_sl = round(float(np.percentile(mae_r, 75)), 2)
-                best_exp = None
+            best_sl = max(best_sl, 0.05)
 
-            # Expectancy in R-multiples: 1R = the risk taken = the recommended
-            # MAE % stop, so each trade's outcome / SL is its R, and the mean is
-            # expectancy_pct / SL. R is the comparable, regime-agnostic measure.
-            best_exp_r = (
-                round(best_exp / best_sl, 3)
-                if best_exp is not None and best_sl and best_sl > 0.01
-                else None
-            )
+            # MFE give-back trail trigger: lowest MFE level where the share of
+            # trades that reach it yet end as losers drops to ≤ GIVEBACK_MAX %.
+            trail_trigger = None
+            for y in np.round(np.percentile(mfe_r, np.linspace(30, 90, 13)), 2):
+                if y <= 0.01:
+                    continue
+                reached = mfe_r >= y
+                if reached.sum() < max(10, 0.05 * n):
+                    continue
+                giveback = float((~win_m[reached]).mean() * 100.0)
+                if giveback <= GIVEBACK_MAX:
+                    trail_trigger = float(y)
+                    break
+            if trail_trigger is None:
+                trail_trigger = round(float(np.percentile(mfe_r[win_m], 50)), 2) if wins_r else 0.0
+
+            # Expectancy of the recommended STOP (no fixed TP — winners ride),
+            # via forward first-touch re-sim with the TP barrier disabled.
+            if sim_ready:
+                oc = _sim_outcomes(rows, 1e9, best_sl)
+                best_exp = round(float(oc.mean()), 3)
+                sl_rate = round(float((oc < 0).mean() * 100.0), 1)
+                sim_win_rate = round(float((oc > 0).mean() * 100.0), 1)
+            else:
+                best_exp = None; sl_rate = None; sim_win_rate = None
+            best_exp_r = (round(best_exp / best_sl, 3)
+                          if best_exp is not None and best_sl > 0.01 else None)
+
+            # Share of WINNERS preserved by the stop and LOSERS it cuts.
+            winners_kept = round(float((mae_r[win_m] < best_sl).mean() * 100.0), 1) if wins_r else 0.0
+            losers_cut = round(float((mae_r[~win_m] >= best_sl).mean() * 100.0), 1) if (n - wins_r) else 0.0
 
             return {
-                "count":         len(rows),
-                "win_rate":      round(wins_r / len(rows) * 100.0, 1),
+                "count":         n,
+                "win_rate":      round(wins_r / n * 100.0, 1),
+                "sim_win_rate":  sim_win_rate,
                 "mfe_p25":       round(float(np.percentile(mfe_r, 25)), 2),
                 "mfe_median":    round(float(np.median(mfe_r)), 2),
                 "mfe_p75":       round(float(np.percentile(mfe_r, 75)), 2),
                 "mae_p25":       round(float(np.percentile(mae_r, 25)), 2),
                 "mae_median":    round(float(np.median(mae_r)), 2),
                 "mae_p75":       round(float(np.percentile(mae_r, 75)), 2),
-                # Expectancy-optimised exits for THIS regime.
-                # best_tp is drawn from the MFE (favourable) distribution → the
-                # MFE-based take-profit; best_sl from the MAE (adverse)
-                # distribution → the MAE-based stop-loss.
-                "best_tp":       best_tp,
+                # Recommended exits (winner-preserving stop + MFE trail trigger).
                 "best_sl":       best_sl,
+                "best_tp":       round(trail_trigger, 2),    # MFE trail/lock trigger
                 "best_exp":      best_exp,
                 "best_exp_r":    best_exp_r,
-                # How often each recommended level is actually reached in this
-                # regime: share of trades whose MFE >= TP / whose MAE >= SL.
-                "tp_hit_rate":   round(float((mfe_r >= best_tp).mean() * 100.0), 1),
-                "sl_hit_rate":   round(float((mae_r >= best_sl).mean() * 100.0), 1),
-                "confident":     len(rows) >= MIN_OPT_TRADES and opt is not None,
+                "tp_hit_rate":   round(float((mfe_r >= trail_trigger).mean() * 100.0), 1),
+                "sl_hit_rate":   sl_rate if sl_rate is not None
+                                 else round(float((mae_r >= best_sl).mean() * 100.0), 1),
+                # New diagnostics: is the excursion predictive, and what does the
+                # recommended stop do to winners vs losers.
+                "auc_mae":       auc_mae,
+                "auc_mfe":       auc_mfe,
+                "predictive":    bool(predictive),
+                "winners_kept":  winners_kept,
+                "losers_cut":    losers_cut,
+                "confident":     n >= MIN_OPT_TRADES,
             }
 
         per_regime: dict = {}
@@ -3414,11 +3570,14 @@ class WebPortal:
             "mae_p90":    round(float(np.percentile(mae_arr, 90)), 2),
         }
 
-        # Thin scatter to ≤5000 pts for frontend performance
-        scatter = trade_rows
-        if len(scatter) > 5000:
-            step = len(scatter) // 5000 + 1
-            scatter = scatter[::step]
+        # Thin scatter to ≤5000 pts for frontend performance, and strip the
+        # internal re-simulation fields (numpy arrays — not JSON serialisable).
+        _DROP = {"_adv", "_fav", "_mtm", "open_rate", "leverage", "is_short"}
+        rows_for_scatter = trade_rows
+        if len(rows_for_scatter) > 5000:
+            step = len(rows_for_scatter) // 5000 + 1
+            rows_for_scatter = rows_for_scatter[::step]
+        scatter = [{k: v for k, v in r.items() if k not in _DROP} for r in rows_for_scatter]
 
         return {
             "scatter":        scatter,
@@ -3429,6 +3588,9 @@ class WebPortal:
             "global":         global_stats,
             "regime_pair":    chosen_regime_pair,
             "timeframe":      tf or "",
+            # "resim" = forward first-touch re-simulation (bias-free);
+            # "frozen" = legacy excursion model (candle data unavailable).
+            "method":         "resim" if sim_ready else "frozen",
         }
 
     # ------------------------------------------------------------------
