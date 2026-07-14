@@ -355,7 +355,7 @@
                 <div>
                     <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
                     <select v-model="runForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">(from config)</option>
+                        <option value="">-select strategy-</option>
                         <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
                     </select>
                 </div>

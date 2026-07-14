@@ -2,12 +2,12 @@
     "$schema": "https://schema.freqtrade.io/schema.json",
     "max_open_trades": 3,
     "stake_currency": "USDC",
-    "max_stake_amount": 50000,
+    "max_stake_amount": 20000,
     "stake_amount": 10000,
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
     "dry_run": true,
-    "dry_run_wallet": 12000,
+    "dry_run_wallet": 100000,
     "cancel_open_orders_on_exit": true,
     "trading_mode": "futures",
     "margin_mode": "isolated",
@@ -68,6 +68,7 @@
             "DOGE/USDC:USDC",
             "BNB/USDC:USDC",
             "XPL/USDC:USDC",
+            "WLD/USDC:USDC",
             "XYZ-CRCL/USDC:USDC",
             "LINK/USDC:USDC",
             "XYZ-TSLA/USDC:USDC",
@@ -95,24 +96,7 @@
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 30,
-            "sort_key": "quoteVolume",
-            "min_value": 5000000,
-            "refresh_period": 3600
-        },
-        {
-            "method": "AgeFilter",
-            "min_days_listed": 14
-        },
-        {
-            "method": "PrecisionFilter"
-        },
-        {
-            "method": "RangeStabilityFilter",
-            "lookback_days": 3,
-            "min_rate_of_change": 0.03,
-            "refresh_period": 1440
+            "method": "StaticPairList"
         }
     ],
     "telegram": {
