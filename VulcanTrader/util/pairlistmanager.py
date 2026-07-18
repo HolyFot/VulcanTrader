@@ -3,7 +3,9 @@ PairList manager class
 """
 
 import logging
+import re
 from functools import partial
+from pathlib import Path
 
 from cachetools import LRUCache, cached
 
@@ -62,25 +64,48 @@ class PairListManager(LoggingMixin):
         refresh_period = config.get("pairlist_refresh_period", 3600)
         LoggingMixin.__init__(self, logger, refresh_period)
 
+    def _discover_pairs_from_datadir(self) -> list[str]:
+        """
+        Scan the configured data directory for OHLCV feather files and derive pair names.
+
+        Filename convention: {BASE}_{STAKE}-{TIMEFRAME}.feather
+        For futures mode the settle currency (same as stake) is appended: BASE/STAKE:SETTLE
+        """
+        datadir: Path | None = self._config.get("datadir")
+        if not datadir or not Path(datadir).is_dir():
+            return []
+
+        timeframe = self._config.get("timeframe", "15m")
+        stake = self._config.get("stake_currency", "USDC")
+        is_futures = self._config.get("trading_mode", "spot") in ("futures", "margin")
+
+        pattern = re.compile(
+            rf"^(.+)_{re.escape(stake)}-{re.escape(timeframe)}\.feather$",
+            re.IGNORECASE,
+        )
+        pairs: list[str] = []
+        try:
+            for fname in sorted(Path(datadir).iterdir()):
+                m = pattern.match(fname.name)
+                if m:
+                    base = m.group(1)
+                    pairs.append(
+                        f"{base}/{stake}:{stake}" if is_futures else f"{base}/{stake}"
+                    )
+        except OSError:
+            pass
+        return pairs
+
     def _check_backtest(self) -> None:
         if self._config["runmode"] not in (RunMode.BACKTEST, RunMode.HYPEROPT):
             return
 
-        dynamic_pairlist = self._config.get("enable_dynamic_pairlist", False)
-
         pairlist_errors: list[str] = []
         noaction_pairlists: list[str] = []
         biased_pairlists: list[str] = []
-        for i, pairlist_handler in enumerate(self._pairlist_handlers):
+        for pairlist_handler in self._pairlist_handlers:
             if pairlist_handler.supports_backtesting == SupportsBacktesting.NO:
-                if dynamic_pairlist:
-                    # Generator runs live; non-generator filters are skipped (only_first=True).
-                    if i == 0:
-                        biased_pairlists.append(pairlist_handler.name)
-                    else:
-                        noaction_pairlists.append(pairlist_handler.name)
-                else:
-                    pairlist_errors.append(pairlist_handler.name)
+                pairlist_errors.append(pairlist_handler.name)
             if pairlist_handler.supports_backtesting == SupportsBacktesting.NO_ACTION:
                 noaction_pairlists.append(pairlist_handler.name)
             if pairlist_handler.supports_backtesting == SupportsBacktesting.BIASED:
@@ -100,9 +125,43 @@ class PairListManager(LoggingMixin):
                 "'winner bias'."
             )
         if pairlist_errors:
-            raise OperationalException(
-                f"Pairlist Handlers {', '.join(pairlist_errors)} do not support backtesting."
+            static_whitelist = list(
+                self._config.get("exchange", {}).get("pair_whitelist") or []
             )
+            if not static_whitelist:
+                # No pairs configured — try to discover from available data files so that
+                # backtesting can proceed even when the config is designed for live trading.
+                static_whitelist = self._discover_pairs_from_datadir()
+                if static_whitelist:
+                    logger.warning(
+                        f"Pairlist Handlers {', '.join(pairlist_errors)} do not support "
+                        f"backtesting and exchange.pair_whitelist is empty. "
+                        f"Auto-discovered {len(static_whitelist)} pairs from the data directory."
+                    )
+                else:
+                    logger.warning(
+                        f"Pairlist Handlers {', '.join(pairlist_errors)} do not support "
+                        "backtesting and exchange.pair_whitelist is empty. "
+                        "No data files found either — backtest will have no pairs."
+                    )
+            else:
+                logger.warning(
+                    f"Pairlist Handlers {', '.join(pairlist_errors)} do not support backtesting. "
+                    f"Automatically falling back to StaticPairList with "
+                    f"{len(static_whitelist)} pairs from exchange.pair_whitelist."
+                )
+            # Inject the whitelist so StaticPairList.gen_pairlist finds it.
+            self._config.setdefault("exchange", {})["pair_whitelist"] = static_whitelist
+            static_handler = PairListResolver.load_pairlist(
+                "StaticPairList",
+                exchange=self._exchange,
+                pairlistmanager=self,
+                config=self._config,
+                pairlistconfig={"method": "StaticPairList"},
+                pairlist_pos=0,
+            )
+            self._pairlist_handlers = [static_handler]
+            self._tickers_needed = False
 
     @property
     def whitelist(self) -> list[str]:
@@ -178,6 +237,18 @@ class PairListManager(LoggingMixin):
         # Validation against blacklist happens after the chain of Pairlist Handlers
         # to ensure blacklist is respected.
         pairlist = self.verify_blacklist(pairlist, logger.warning)
+
+        # Safety net for backtest/hyperopt: if the chain returned an empty list but the
+        # config whitelist is non-empty, fall back to the raw config whitelist so that
+        # the backtesting engine can proceed and load available OHLCV data.
+        if not pairlist and self._config["runmode"] in (RunMode.BACKTEST, RunMode.HYPEROPT):
+            fallback = list(self._config.get("exchange", {}).get("pair_whitelist") or [])
+            if fallback:
+                logger.warning(
+                    f"Pairlist is empty after the full handler chain. "
+                    f"Using exchange.pair_whitelist directly ({len(fallback)} pairs)."
+                )
+                pairlist = fallback
 
         self.log_once(f"Whitelist with {len(pairlist)} pairs: {pairlist}", logger.info)
 

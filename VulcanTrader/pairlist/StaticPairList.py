@@ -68,18 +68,22 @@ class StaticPairList(IPairList):
         pairlist = self._bt_pair_cache.get("pairlist")
 
         if not pairlist:
-            wl = self.verify_whitelist(
-                self._config["exchange"]["pair_whitelist"], logger.info, keep_invalid=True
-            )
-            if self._allow_inactive:
-                pairlist = wl
-            else:
-                # Avoid implicit filtering of "verify_whitelist" to keep
-                # proper warnings in the log
-                pairlist = self._whitelist_for_active_markets(wl)
-
             if self._config["runmode"] in (RunMode.BACKTEST, RunMode.HYPEROPT):
+                # Skip all exchange validation in backtest/hyperopt — use the configured
+                # whitelist directly. Pairs with no local OHLCV data are skipped naturally
+                # by the backtesting engine when it tries to load them.
+                pairlist = list(self._config["exchange"].get("pair_whitelist") or [])
                 self._bt_pair_cache["pairlist"] = pairlist.copy()
+            else:
+                wl = self.verify_whitelist(
+                    self._config["exchange"]["pair_whitelist"], logger.info, keep_invalid=True
+                )
+                if self._allow_inactive:
+                    pairlist = wl
+                else:
+                    # Avoid implicit filtering of "verify_whitelist" to keep
+                    # proper warnings in the log
+                    pairlist = self._whitelist_for_active_markets(wl)
 
         return pairlist
 

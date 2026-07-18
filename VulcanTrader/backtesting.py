@@ -253,11 +253,9 @@ class Backtesting:
         self.init_backtest()
 
     def _validate_pairlists_for_backtesting(self):
-        dynamic_pairlist = self.config.get("enable_dynamic_pairlist", False)
-        if "VolumePairList" in self.pairlists.name_list and not dynamic_pairlist:
+        if "VolumePairList" in self.pairlists.name_list:
             raise OperationalException(
-                "VolumePairList not allowed for backtesting. Please use StaticPairList instead "
-                "or set enable_dynamic_pairlist=true in your config."
+                "VolumePairList not allowed for backtesting. Please use StaticPairList instead."
             )
 
         if len(self.strategylist) > 1 and "PrecisionFilter" in self.pairlists.name_list:
