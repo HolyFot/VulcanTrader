@@ -12,7 +12,6 @@ numpy==2.4.6
 pandas==3.0.3
 bottleneck==1.6.0
 numexpr==2.14.1
-polars==1.41.1
 
 # Indicator libraries
 ft-pandas-ta==0.3.16
@@ -38,6 +37,7 @@ jinja2==3.1.6
 joblib==1.5.3
 rich==15.0.0
 pyarrow==24.0.0; platform_machine != 'armv7l'
+polars==1.41.2
 
 # Load ticker files 30% faster
 python-rapidjson==1.23
@@ -85,3 +85,9 @@ mplfinance>=0.12
 
 # VulcanTrader-specific: Discord bot (slash commands + webhook notifications)
 discord.py>=2.3
+
+# Builds the vulcan_rust_indicators Python extension from the Rust backtester
+# crate (VulcanTrader/backtester, `--features extension-module`) - a PyO3 bridge
+# into the engine's own indicator code, used by AllIndicatorsDemoStrategy.py and
+# the ATR calc in several user_data/strategies/*.py
+maturin==1.14.1

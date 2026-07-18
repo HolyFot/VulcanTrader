@@ -9,8 +9,7 @@ Drop a Freqtrade-style `IStrategy` subclass into
 
 ## Requirements
 
-- **Python 3.12**. Python 3.12 currently has wheel gaps for
-  `pyarrow`, `TA-Lib` and `ccxt.pro` and is not recommended.
+- **Python 3.12**
 - **Visual Studio Code** https://code.visualstudio.com/
    install VS Code, you pick Open Folder and open this folder.
 
@@ -35,7 +34,6 @@ Re-activate the venv later with:
 ```
 ---
 
-
 ### Start the web dashboard only (no trading)
 
 Launches the FastAPI portal so you can browse backtest results, review
@@ -57,7 +55,8 @@ Then open **http://localhost:8080** in your browser (default password: `VulcanTr
 
 
 ### Start a paper-trading session
-You will need to edit this to point to your strategy & config.
+
+Note: you will have to edit this bat to specify your config & strategy.
 
 Windows:
 ```powershell/terminal:
@@ -70,8 +69,9 @@ Linux / macOS:
 ```
 
 ### Start a live (real-money) session
+
 The live launchers prompt for confirmation before placing real orders.
-You will need to edit this to point to your strategy & config.
+Note: you will have to edit this bat to specify your config & strategy.
 
 Windows:
 ```powershell
@@ -82,7 +82,6 @@ Linux / macOS:
 ```bash
 ./run-live.sh
 ```
-
 
 ### Override the defaults
 
@@ -245,6 +244,47 @@ without hitting an exchange first.
 
 ---
 
+## Rust backtester & indicator bridge
+
+`VulcanTrader/backtester/` is a single **Rust** crate that is two things at
+once: a fast backtest engine plus a library of the 23 standard indicators
+(`fast_indicators`), and — when built with the `extension-module` feature — a
+[PyO3](https://pyo3.rs) Python extension module, `vulcan_rust_indicators`.
+Strategies are **not** written in Rust — they live in Python under
+[user_data/strategies/](user_data/strategies); the crate holds no strategies.
+
+A strategy can pull the engine's standard indicator series straight from Rust —
+the exact same code the engine uses — instead of recomputing them in TA-Lib:
+
+```python
+import vulcan_rust_indicators as vri
+
+ind = vri.calculate_standard_indicators(close, high, low, volume)  # float64 arrays
+dataframe["rsi"] = ind[0]    # RSI(14)
+dataframe["atr"] = ind[14]   # ATR(14)
+```
+
+`ind` is a dict `{index: array}` of all 23 standard series — see
+`AllIndicatorsDemoStrategy` for the full index table. Anything the standard set
+doesn't cover you build yourself in pandas/numpy; see `FisherStatReversion` and
+`IchimokuCloud` for custom-indicator examples (Fisher Transform, z-score,
+linreg slope, the full Ichimoku system), and `DonchianBreakout` for a mix
+(bridge RSI/ATR + custom Donchian channels).
+
+The crate is built automatically by `install.bat` / `install.sh`, which need a
+Rust toolchain (`cargo`) and `maturin`. To rebuild the extension by hand into
+the active venv:
+
+```
+cd VulcanTrader/backtester
+maturin develop --release --features extension-module
+```
+
+> The `backtest` CLI command runs the Python `backtesting.py` engine; the Rust
+> crate currently feeds Python only through this indicator bridge.
+
+---
+
 ## CLI (Advanced)
 
 All commands funnel through [VulcanTrader/bot.py](VulcanTrader/bot.py):
@@ -293,6 +333,7 @@ VulcanTrader/            ← Python package (imported as VulcanTrader.*)
   web_portal.py          ← FastAPI dashboard + notification sink
   pairs_bt_finder.py     ← utility: find best pairs for backtesting
   regime_analysis.py     ← market-regime detection helpers
+  backtester/            ← Rust crate: backtest engine + `vulcan_rust_indicators` PyO3 module (no strategies)
   config/                ← Configuration loader + JSON-schema validation
   data/                  ← OHLCV loaders, converters, btanalysis, metrics
   enums/                 ← All Enum types

@@ -1,0 +1,28 @@
+[package]
+name = "backtester"
+version = "0.1.0"
+edition = "2021"
+
+# This one crate is BOTH the pure-Rust backtest engine (rlib, used by its own
+# tests) and — when built with the `extension-module` feature that maturin uses
+# — the `vulcan_rust_indicators` Python extension (see src/python.rs). The lib is
+# named for the Python module because a PyO3 extension's import name must equal
+# its compiled cdylib name.
+[lib]
+name = "vulcan_rust_indicators"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+rayon = "1"
+# Optional — only compiled for the Python extension build (see [features]).
+pyo3 = { version = "0.22", features = ["abi3-py39"], optional = true }
+
+[features]
+# Compile the PyO3 bridge module (src/python.rs).
+python = ["dep:pyo3"]
+# What maturin builds with: the bridge plus PyO3's extension-module mode (don't
+# link libpython). Kept OFF for `cargo test`, which links a real interpreter.
+extension-module = ["python", "pyo3/extension-module"]

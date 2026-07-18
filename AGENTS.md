@@ -35,6 +35,8 @@ VulcanTrader/               ← Python package root
   strategy/                 ← IStrategy interface + HyperOpt mixin
   trader_types/             ← Shared TypedDict / annotation types
   util/                     ← PairListManager, ProtectionManager, discord, charts, …
+  backtester/               ← Rust crate: fast backtest engine + indicator library, and (with the
+                              `extension-module` feature) the `vulcan_rust_indicators` PyO3 module. No strategies.
 
 user_data/
   configs/                  ← JSON config files (resolved by CLI)
@@ -236,6 +238,82 @@ Backtesting.start()
 - No exchange connectivity; candle data comes from local cache (`user_data/data/`).
 - Stop-loss fills are assumed perfect (no slippage simulation).
 - `bot.py` fans out multiple strategies concurrently via `asyncio.gather`.
+
+---
+
+## backtester/ — Rust engine + indicator bridge
+
+**One** Rust crate that is both the backtest engine and the Python indicator
+module. Strategies are never written in Rust — they are Python `IStrategy`
+subclasses in `user_data/strategies/`. The crate holds no strategies.
+
+`[lib]` is `name = "vulcan_rust_indicators"`, `crate-type = ["cdylib", "rlib"]`
+(the lib is named for the Python module because a PyO3 extension's import name
+must equal its cdylib name; the `[package]` is still `backtester`).
+
+| Module | Purpose |
+|---|---|
+| `src/fast_indicators.rs` | The 23 standard indicators; `calculate_standard_indicators(close, high, low, volume) -> HashMap<usize, Vec<f32>>` |
+| `src/cpu_engine.rs` | Simulation loop (`run_strategy_backtest*`, `run_param_sweep`) |
+| `src/backtest.rs` | Shared types, configs, and the `Strategy` trait |
+| `src/metrics.rs` | Result metrics (Sharpe, Sortino, CAGR, drawdown, …) |
+| `src/python.rs` | PyO3 bridge (`#[cfg(feature = "python")]`) — the `vulcan_rust_indicators` module |
+
+There is **no** `src/strategies/` — strategy ports were removed; strategies live
+in Python. The `Strategy` trait and `&dyn Strategy` engine interface remain but
+are exercised only by the crate's own Rust tests. The engine is not yet invoked
+by the `backtest` CLI command (that still uses Python `backtesting.py`); today
+its only Python-facing use is the indicator bridge.
+
+### Feature gating (important)
+
+- Default build / `cargo test` → pure engine, **no** PyO3 (`pyo3` is an optional
+  dep). Tests link a real interpreter, so they must not enable extension-module.
+- `--features extension-module` (what maturin builds with) → compiles
+  `src/python.rs` and PyO3's extension-module mode, producing the
+  `vulcan_rust_indicators` cdylib. Never enable this for `cargo test`.
+
+### The bridge module
+
+`src/python.rs` exposes one function as the Python module `vulcan_rust_indicators`:
+
+```python
+import vulcan_rust_indicators as vri
+ind = vri.calculate_standard_indicators(close, high, low, volume)  # float64 arrays in
+# ind: {index: [f32, ...]} — 23 series by fixed index; NaN during warmup
+dataframe["rsi"] = ind[0]    # RSI(14)
+dataframe["atr"] = ind[14]   # ATR(14)
+```
+
+Index → series map is documented in `AllIndicatorsDemoStrategy` (indices 0–22:
+rsi, sma10/20/50, ema9/21/55, macd/signal/hist, bb_pos/upper/mid/lower, atr,
+roc, mfi, cci, adx, fvg, vwap, chop, trend_eff). Periods are **fixed** (RSI 14,
+ATR 14, …) — a strategy needing a tunable period must compute that one itself.
+
+### Strategy authoring pattern
+
+- **Standard indicators** → pull from the bridge (identical to the engine, no
+  TA-Lib recompute). Example: `AllIndicatorsDemoStrategy`.
+- **Custom indicators** → compute in pandas/numpy. Examples: `FisherStatReversion`
+  (Fisher Transform, return z-score, linreg slope), `IchimokuCloud` (full
+  Ichimoku system). `DonchianBreakout` mixes both (bridge RSI/ATR + custom
+  Donchian channels).
+
+### Build notes (agents: read before touching Rust)
+
+- `install.bat` / `install.sh` build the crate with
+  `maturin develop --release --features extension-module` from
+  `VulcanTrader/backtester` (maturin compiles the engine too).
+- On Windows, `cargo`/`maturin` fail to link (`LNK1181: kernel32.lib`) unless the
+  MSVC dev environment is loaded first. Load `vcvars64.bat` (VS 2022 BuildTools),
+  e.g. from PowerShell:
+  `cmd /c '"…\VC\Auxiliary\Build\vcvars64.bat" && cargo build --release --features extension-module'`.
+- The bridge uses `abi3-py39` (one artifact for any CPython ≥ 3.9). Building
+  against a Python newer than PyO3 knows needs `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`
+  (the install scripts set it).
+- Manual install without maturin: build with `--features extension-module`, then
+  copy `VulcanTrader/backtester/target/release/vulcan_rust_indicators.dll` to
+  `<site-packages>/vulcan_rust_indicators.pyd`.
 
 ---
 

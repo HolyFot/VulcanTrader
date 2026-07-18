@@ -12,17 +12,38 @@ Turtle Trading rules, adapted here for crypto futures on a 15m timeframe.
   Exit Short:  price rises back above mid-channel OR RSI reaches oversold
   Stop:        ATR-based fixed stop anchored to entry price
   TF:          15m (breakouts need slightly more candle resolution than 5m scalps)
+
+## Indicator sourcing
+
+RSI(14) and ATR(14) come straight from the Rust backtester's own indicator
+code via the `vulcan_rust_indicators` bridge (built from
+`VulcanTrader/backtester_py`, a PyO3 wrapper around
+`backtester::fast_indicators`) — the exact same series the Rust engine uses,
+rather than a second TA-Lib recompute. See `AllIndicatorsDemoStrategy` for the
+full standard-indicator index table and build instructions
+(`cd VulcanTrader/backtester_py && maturin develop --release`).
+
+The bridge's standard set is fixed-period, so RSI and ATR are locked at 14
+here (both previously defaulted to 14, so default behaviour is unchanged).
+The Donchian channels and the volume ratio aren't part of the standard set,
+so they stay as plain pandas below.
 """
 
 import logging
 
 import numpy as np
-import talib.abstract as ta
+import vulcan_rust_indicators as vri
 from pandas import DataFrame
 
 from VulcanTrader.strategy import DecimalParameter, IntParameter, IStrategy
 
 logger = logging.getLogger(__name__)
+
+# Standard-indicator indices consumed from the Rust bridge, matching
+# fast_indicators::calculate_standard_indicators (see the table in
+# AllIndicatorsDemoStrategy). RSI(14) and ATR(14) are fixed-period.
+_RSI_IDX = 0
+_ATR_IDX = 14
 
 
 class DonchianBreakout(IStrategy):
@@ -56,12 +77,13 @@ class DonchianBreakout(IStrategy):
     exit_profit_only = False
 
     # ── Hyperopt parameters ──────────────────────────────────────────────────
+    # Note: RSI and ATR *periods* are not optimizable — the Rust bridge computes
+    # them at a fixed 14. Only the threshold/multiplier params below are tuned.
 
     # Donchian period
     don_period_p = IntParameter(15, 40, default=20, space="buy", optimize=True)
 
-    # RSI
-    rsi_period_p    = IntParameter(7,  21, default=14, space="buy",  optimize=True)
+    # RSI thresholds (period fixed at 14 by the bridge)
     rsi_long_min_p  = IntParameter(45, 60, default=50, space="buy",  optimize=True)
     rsi_short_max_p = IntParameter(40, 55, default=50, space="sell", optimize=True)
     rsi_ob_p        = IntParameter(65, 80, default=70, space="sell", optimize=True)
@@ -71,8 +93,7 @@ class DonchianBreakout(IStrategy):
     vol_factor_p = DecimalParameter(1.0, 2.5, default=1.5, decimals=1,
                                     space="buy", optimize=True)
 
-    # ATR stop
-    atr_period_p  = IntParameter(7, 21, default=14, space="buy", optimize=True)
+    # ATR stop (ATR period fixed at 14 by the bridge; only the multiplier is tuned)
     atr_stop_mult = DecimalParameter(1.5, 4.0, default=2.0, decimals=1,
                                      space="buy", optimize=True)
 
@@ -81,24 +102,31 @@ class DonchianBreakout(IStrategy):
     # -----------------------------------------------------------------------
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # ── Standard indicators from the Rust engine's own code ────────────────
+        # One call returns every standard series by its fixed index; we read the
+        # two this strategy uses (RSI, ATR) instead of recomputing them in TA-Lib.
+        rust_indicators = vri.calculate_standard_indicators(
+            dataframe["close"].to_numpy(dtype=np.float64),
+            dataframe["high"].to_numpy(dtype=np.float64),
+            dataframe["low"].to_numpy(dtype=np.float64),
+            dataframe["volume"].to_numpy(dtype=np.float64),
+        )
+        dataframe["rsi"] = rust_indicators[_RSI_IDX]
+        dataframe["atr"] = rust_indicators[_ATR_IDX]
+
+        # ── Custom indicators (not in the Rust standard set) — plain pandas ────
         period = self.don_period_p.value
 
-        # ── Donchian Channels ─────────────────────────────────────────────────
+        # Donchian Channels
         dataframe["don_upper"] = dataframe["high"].rolling(period).max()
         dataframe["don_lower"] = dataframe["low"].rolling(period).min()
         dataframe["don_mid"]   = (dataframe["don_upper"] + dataframe["don_lower"]) / 2.0
 
-        # ── RSI ──────────────────────────────────────────────────────────────
-        dataframe["rsi"] = ta.RSI(dataframe, timeperiod=self.rsi_period_p.value)
-
-        # ── Volume ratio (current vs 20-bar average) ───────────────────────────
+        # Volume ratio (current vs 20-bar average)
         dataframe["vol_ma"]    = dataframe["volume"].rolling(20).mean()
         dataframe["vol_ratio"] = (
             dataframe["volume"] / dataframe["vol_ma"].replace(0, np.nan)
         ).fillna(1.0)
-
-        # ── ATR ───────────────────────────────────────────────────────────────
-        dataframe["atr"] = ta.ATR(dataframe, timeperiod=self.atr_period_p.value)
 
         return dataframe
 
