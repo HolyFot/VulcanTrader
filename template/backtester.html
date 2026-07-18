@@ -92,6 +92,10 @@
             border: 1px solid rgba(255,255,255,0.05);
             border-radius: 8px;
             transition: all 0.3s ease;
+            /* Centers wrapped lines too: align-items only centers the box, so a
+               value long enough to wrap (e.g. Max Drawdown + its abs figure)
+               would otherwise fall back to left-aligned text. */
+            text-align: center;
         }
         .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
         .metric-label {
@@ -100,6 +104,24 @@
             margin-bottom: 0.4rem; text-align: center;
         }
         .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
+        /* compact UTC/Local toggle in the hourly chart headers.
+           Deliberately NOT .btn — that class is 150px-min-width Cinzel styling. */
+        .tz-btn {
+            font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em;
+            font-family: inherit; text-transform: uppercase;
+            padding: 2px 7px; line-height: 1.5;
+            border-radius: 4px; cursor: pointer;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #a0aec0; transition: all 0.15s ease;
+        }
+        .tz-btn:hover {
+            background: rgba(105,95,245,0.18); color: #c4b5fd;
+            border-color: rgba(105,95,245,0.4);
+        }
+        .tz-btn.active {
+            background: rgba(105,95,245,0.28); border-color: #695ff5; color: #fff;
+        }
         .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
         .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
 
@@ -344,7 +366,10 @@
                 </span>
             </h3>
             <div v-if="runError" class="alert"><strong>Error:</strong> {{ runError }}</div>
-            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:0.75rem; align-items:end;">
+            <!-- 5 columns for 5 children: config / strategy / timerange / engine / button.
+                 Timerange is fixed-width (it only ever holds a date range) so the run
+                 button fits on the same row instead of wrapping onto its own line. -->
+            <div style="display:grid; grid-template-columns: minmax(140px,1fr) minmax(160px,1fr) 190px 150px auto; gap:0.75rem; align-items:end;">
                 <div>
                     <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
                     <select v-model="runForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
@@ -360,8 +385,19 @@
                     </select>
                 </div>
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Timerange (YYYYMMDD-YYYYMMDD)</label>
-                    <input v-model="runForm.timerange" class="form-input" placeholder="20240101-20240601" style="width:100%; margin-top:0.25rem;">
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                           title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)">Timerange</label>
+                    <input v-model="runForm.timerange" class="form-input" placeholder="20240101-20240601"
+                           title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)"
+                           style="width:100%; margin-top:0.25rem;">
+                </div>
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Engine</label>
+                    <select v-model="runForm.engine" class="form-input" style="width:100%; margin-top:0.25rem;"
+                            title="Python = full fidelity. Rust = fast, simplified (no DCA / callbacks / protections).">
+                        <option value="python">Python (full)</option>
+                        <option value="rust">Rust (fast)</option>
+                    </select>
                 </div>
                 <button class="btn" @click="startRun"
                         :disabled="runSubmitting || !runForm.config || runningJobCount >= jobsMaxConcurrent">
@@ -405,10 +441,17 @@
                 </div>
 
                 <div v-if="selectedJob" style="margin-top:0.75rem;">
-                    <div style="font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem;">
-                        Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem;">
+                        <span>Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)</span>
+                        <button class="btn" @click="toggleJobLogSize"
+                                :title="jobLogExpanded ? 'Collapse log to default height' : 'Expand log to double height'"
+                                style="font-size:0.7rem; padding:2px 9px; white-space:nowrap;">
+                            {{ jobLogExpanded ? '▲ Collapse' : '▼ Expand' }}
+                        </button>
                     </div>
-                    <pre ref="jobLogPre" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; max-height:280px; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap;">{{ jobLogText || '(no output yet)' }}</pre>
+                    <pre ref="jobLogPre"
+                         :style="{ maxHeight: jobLogExpanded ? '560px' : '280px' }"
+                         style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap; transition:max-height 0.2s ease;">{{ jobLogText || '(no output yet)' }}</pre>
                 </div>
             </div>
         </div>
@@ -419,12 +462,7 @@
 
         <!-- === PAIRS FINDER === -->
         <div class="card">
-            <h3>
-                Pairs Finder
-                <span style="font-size:0.75rem; color:#a0aec0; font-weight:400;">
-                    backtest each whitelist pair individually and rank by metric
-                </span>
-            </h3>
+            <h3>Pairs Finder</h3>
             <div v-if="pfError" class="alert"><strong>Error:</strong> {{ pfError }}</div>
             <div style="display:grid; grid-template-columns: repeat(6, 1fr) auto; gap:0.6rem; align-items:end;">
                 <div>
@@ -779,6 +817,170 @@
             <!-- === CHARTS === -->
             <div class="card"><h3>Equity Curve</h3><div id="equityChart" style="height:380px;"></div></div>
             <div class="card"><h3>Drawdown</h3><div id="drawdownChart" style="height:340px;"></div></div>
+            <!-- Hourly charts. Each header carries its own UTC/Local toggle, but they
+                 share `hourlyTz`, so switching one re-buckets all three. -->
+            <div class="card">
+                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+                    <span>Hourly P&amp;L</span>
+                    <span style="display:flex; gap:0.25rem;">
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
+                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
+                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
+                                @click="setHourlyTz('local')">Local</button>
+                    </span>
+                </h3>
+                <div id="hourlyPnlChart" style="height:340px;"></div>
+            </div>
+            <div class="card">
+                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+                    <span>Hourly Profit Factor</span>
+                    <span style="display:flex; gap:0.25rem;">
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
+                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
+                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
+                                @click="setHourlyTz('local')">Local</button>
+                    </span>
+                </h3>
+                <div id="hourlyPfChart" style="height:340px;"></div>
+            </div>
+            <div class="card">
+                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+                    <span>Hourly Max Drawdown</span>
+                    <span style="display:flex; gap:0.25rem;">
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
+                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
+                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
+                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
+                                @click="setHourlyTz('local')">Local</button>
+                    </span>
+                </h3>
+                <div id="hourlyDdChart" style="height:340px;"></div>
+            </div>
+
+            <!-- === BEST/WORST PAIRS === -->
+            <div class="card" v-if="pairs.length > 0">
+                <h3>Best / Worst Pairs</h3>
+                <div class="pair-grid">
+                    <div class="pair-section">
+                        <h4>Top 10 Performers</h4>
+                        <div class="table-wrap" style="max-height:400px;">
+                            <table>
+                                <thead><tr>
+                                    <th>Pair</th><th>Trades</th><th>Win%</th><th>PnL</th><th>PF</th><th>Avg R</th><th>Sharpe</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="p in bestPairs" :key="'b-' + p.pair">
+                                        <td class="pair-cell">{{ p.pair }}</td>
+                                        <td>{{ p.trades }}</td>
+                                        <td :class="p.winRate >= 50 ? 'pos' : 'neg'">{{ p.winRate.toFixed(1) }}%</td>
+                                        <td :class="p.pnl >= 0 ? 'pos' : 'neg'">{{ fmt(p.pnl) }}</td>
+                                        <td>{{ isFinite(p.pf) ? p.pf.toFixed(2) : '∞' }}</td>
+                                        <td :class="p.avgR >= 0 ? 'pos' : 'neg'">{{ p.avgR.toFixed(3) }}</td>
+                                        <td :class="p.sharpe >= 1 ? 'pos' : (p.sharpe < 0 ? 'neg' : '')">{{ p.sharpe.toFixed(2) }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="pair-section">
+                        <h4>Bottom 10 Performers</h4>
+                        <div class="table-wrap" style="max-height:400px;">
+                            <table>
+                                <thead><tr>
+                                    <th>Pair</th><th>Trades</th><th>Win%</th><th>PnL</th><th>PF</th><th>Avg R</th><th>Sharpe</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="p in worstPairs" :key="'w-' + p.pair">
+                                        <td class="pair-cell">{{ p.pair }}</td>
+                                        <td>{{ p.trades }}</td>
+                                        <td :class="p.winRate >= 50 ? 'pos' : 'neg'">{{ p.winRate.toFixed(1) }}%</td>
+                                        <td :class="p.pnl >= 0 ? 'pos' : 'neg'">{{ fmt(p.pnl) }}</td>
+                                        <td>{{ isFinite(p.pf) ? p.pf.toFixed(2) : '∞' }}</td>
+                                        <td :class="p.avgR >= 0 ? 'pos' : 'neg'">{{ p.avgR.toFixed(3) }}</td>
+                                        <td :class="p.sharpe >= 1 ? 'pos' : (p.sharpe < 0 ? 'neg' : '')">{{ p.sharpe.toFixed(2) }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- === TRADING CHART === -->
+            <div class="card" v-if="enrichedTrades.length > 0">
+                <h3>
+                    Trading Chart
+                    <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
+                        <select v-model="chartPair" @change="loadPairChart(chartPair)" class="form-input" style="font-size:0.8rem; min-width:220px;">
+                            <option value="">— select pair —</option>
+                            <option v-for="p in uniquePairs" :key="p" :value="p">{{ p }}</option>
+                        </select>
+                        <span v-if="chartLoading" class="spinner"></span>
+                        <span style="font-size:0.72rem; color:#a0aec0;">or click any trade row below</span>
+                    </span>
+                </h3>
+                <div v-if="chartError" class="alert"><strong>Chart error:</strong> {{ chartError }}</div>
+                <div ref="pairChartEl" style="height:520px;"></div>
+            </div>
+
+            <!-- === TRADES TABLE === -->
+            <div class="card">
+                <h3>
+                    Trades ({{ enrichedTrades.length }})
+                    <input v-model="tradeFilter" @input="tradesLimit = 20" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
+                </h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr>
+                            <th>#</th><th>Pair</th><th>Side</th>
+                            <th>Open</th><th>Close</th><th>Duration</th>
+                            <th>Open Rate</th><th>Close Rate</th>
+                            <th>PnL</th><th>PnL %</th>
+                            <th>R</th><th>R:R</th><th>PF</th>
+                            <th>Sharpe</th><th>Expectancy R</th>
+                            <th>Exit</th>
+                        </tr></thead>
+                        <tbody>
+                            <tr v-for="(t, i) in filteredTrades" :key="t.__idx"
+                                @click="openTradeChart(t)"
+                                style="cursor:pointer;"
+                                :class="{ 'chart-active-pair': chartPair === t.pair }">
+                                <td>{{ i + 1 }}</td>
+                                <td class="pair-cell">{{ t.pair }}</td>
+                                <td :class="t.is_short ? 'side-short' : 'side-long'">
+                                    {{ t.is_short ? 'SHORT' : 'LONG' }}
+                                </td>
+                                <td>{{ formatDate(t.open_date) }}</td>
+                                <td>{{ formatDate(t.close_date) }}</td>
+                                <td>{{ formatMinutes(t.__durationMin) }}</td>
+                                <td>{{ fmtRate(t.open_rate) }}</td>
+                                <td>{{ fmtRate(t.close_rate) }}</td>
+                                <td :class="t.__pnl >= 0 ? 'pos' : 'neg'">{{ fmt(t.__pnl) }}</td>
+                                <td :class="t.__pnl >= 0 ? 'pos' : 'neg'">{{ (t.__pnlPct * 100).toFixed(2) }}%</td>
+                                <td :class="t.__r >= 0 ? 'pos' : 'neg'">{{ t.__r.toFixed(3) }}</td>
+                                <td>{{ t.__rr.toFixed(2) }}</td>
+                                <td>{{ isFinite(t.__pf) ? t.__pf.toFixed(2) : '∞' }}</td>
+                                <td :class="t.__sharpe >= 0 ? 'pos' : 'neg'">{{ t.__sharpe.toFixed(2) }}</td>
+                                <td :class="t.__expectancyR >= 0 ? 'pos' : 'neg'">{{ t.__expectancyR.toFixed(3) }}</td>
+                                <td>{{ t.exit_reason || '-' }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div v-if="filteredTradesTotal > tradesLimit" style="text-align:center;margin-top:1rem;">
+                    <button class="btn" @click="tradesLimit += 100" style="margin-right:0.5rem;">
+                        Load 100 more ({{ filteredTradesTotal - tradesLimit }} remaining)
+                    </button>
+                    <button class="btn" @click="tradesLimit = filteredTradesTotal">
+                        Load all {{ filteredTradesTotal }}
+                    </button>
+                </div>
+                <div v-else-if="filteredTradesTotal > 0" style="text-align:center;margin-top:0.75rem;color:#888;font-size:0.85rem;">
+                    Showing all {{ filteredTradesTotal }} trades
+                </div>
+            </div>
 
             <!-- === REGIME ANALYSIS === -->
             <div class="card">
@@ -1016,8 +1218,8 @@
                     </div>
 
                     <!-- Cluster summary badges (global: shown only in the overall view) -->
-                    <div v-if="maeMfeView === '__all__' && maeMfe.clusters && maeMfe.clusters.length" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
-                        <div v-for="c in maeMfe.clusters" :key="c.id"
+                    <div v-if="maeMfeViewClusters.length" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <div v-for="c in maeMfeViewClusters" :key="c.id"
                              :style="{ display:'flex', flexDirection:'column', gap:'0.15rem', padding:'0.45rem 0.7rem',
                                        borderRadius:'6px', fontSize:'0.75rem', lineHeight:'1.3',
                                        background: c.is_dominant ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)',
@@ -1034,77 +1236,9 @@
                     <div style="margin-bottom:1.25rem;">
                         <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
                             MAE vs MFE Scatter
-                            <span style="text-transform:none; color:#666;"> <template v-if="maeMfeView === '__all__'">all trades; cluster centroids (stars), recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span> (dashed lines)</template><template v-else><strong :style="{ color: (regimeColors[maeMfeView] || {}).text }">{{ maeMfeView.replace(/_/g, ' ') }}</strong> trades only; dashed lines = this regime's recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span></template></span>
+                            <span style="text-transform:none; color:#666;"> <template v-if="maeMfeView === '__all__'">all trades; cluster centroids (stars), recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span> (dashed lines)</template><template v-else><strong :style="{ color: (regimeColors[maeMfeView] || {}).text }">{{ maeMfeView.replace(/_/g, ' ') }}</strong> trades only; this regime's cluster centroids (stars), dashed lines = this regime's recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span></template></span>
                         </div>
                         <div id="maeMfeScatter" style="height:420px;"></div>
-                    </div>
-
-                    <!-- Per-regime chart -->
-                    <div v-if="maeMfe.per_regime && Object.keys(maeMfe.per_regime).length > 1" style="margin-bottom:1.25rem;">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
-                            MFE / MAE by Regime — bars show median, whiskers show P25–P75 range
-                        </div>
-                        <div id="maeMfeRegimeChart" style="height:300px;"></div>
-                    </div>
-
-                    <!-- Per-regime table -->
-                    <div v-if="maeMfe.per_regime && Object.keys(maeMfe.per_regime).length">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
-                            Recommended Per-Regime MAE / MFE %: <span style="text-transform:none; color:#888;"> the dynamic <strong style="color:#f59e0b;">MFE %</strong> (take-profit) &amp; <strong style="color:#ef4444;">MAE %</strong> (stop-loss) to feed your regime exit calculator</span>
-                        </div>
-                        <div class="table-wrap">
-                            <table>
-                                <thead><tr>
-                                    <th>Regime</th>
-                                    <th># Trades</th>
-                                    <th>Win%</th>
-                                    <th title="Favorable excursion (MFE) distribution for this regime: the recommended MFE % is drawn from here">MFE band<br><span style="font-weight:400; color:#888;">median (P25–P75)</span></th>
-                                    <th title="Adverse excursion (MAE) distribution for this regime: the recommended MAE % is drawn from here">MAE band<br><span style="font-weight:400; color:#888;">median (P25–P75)</span></th>
-                                    <th title="Recommended MFE % for this regime: the favorable-excursion take-profit level, drawn from the MFE distribution at the point that maximises expectancy. Bracket = how often this MFE % is actually reached.">▶ Recommended MFE %<br><span style="font-weight:400; color:#888;">→ take-profit</span></th>
-                                    <th title="Recommended MAE % for this regime: the adverse-excursion stop level, drawn from the MAE distribution at the point that maximises expectancy. Bracket = how often this MAE % is actually hit.">▶ Recommended MAE %<br><span style="font-weight:400; color:#888;">→ stop-loss</span></th>
-                                    <th title="Mean modelled per-trade outcome in R-multiples, where 1R = the recommended MAE % stop (the risk taken). Comparable across regimes regardless of stop width.">Expectancy R<br><span style="font-weight:400; color:#888;">per trade · 1R = MAE stop</span></th>
-                                </tr></thead>
-                                <tbody>
-                                    <tr v-for="(rg, name) in maeMfe.per_regime" :key="name">
-                                        <td>
-                                            <span :style="{ color: (regimeColors[name] || {}).text || '#e0e0e0', fontWeight:700 }">
-                                                {{ name.replace(/_/g, ' ') }}
-                                            </span>
-                                            <span v-if="!rg.confident" title="Fewer than 30 trades: optimum is statistically shaky"
-                                                  style="color:#eab308; margin-left:4px; cursor:help;">⚠</span>
-                                        </td>
-                                        <td>{{ rg.count }}</td>
-                                        <td :class="rg.win_rate >= 50 ? 'pos' : 'neg'">{{ rg.win_rate.toFixed(1) }}%</td>
-                                        <td class="pos">
-                                            <strong>{{ rg.mfe_median.toFixed(2) }}%</strong>
-                                            <span style="color:#666; font-size:0.92em;"> ({{ rg.mfe_p25.toFixed(1) }}–{{ rg.mfe_p75.toFixed(1) }})</span>
-                                        </td>
-                                        <td class="neg">
-                                            <strong>{{ rg.mae_median.toFixed(2) }}%</strong>
-                                            <span style="color:#666; font-size:0.92em;"> ({{ rg.mae_p25.toFixed(1) }}–{{ rg.mae_p75.toFixed(1) }})</span>
-                                        </td>
-                                        <td style="background:rgba(245,158,11,0.08);">
-                                            <strong style="color:#f59e0b; font-size:1.05em;">{{ rg.best_tp.toFixed(2) }}%</strong>
-                                            <span v-if="rg.tp_hit_rate != null" style="color:#888; font-size:0.85em; display:block;">reached by {{ rg.tp_hit_rate.toFixed(0) }}%</span>
-                                        </td>
-                                        <td style="background:rgba(239,68,68,0.08);">
-                                            <strong style="color:#ef4444; font-size:1.05em;">{{ rg.best_sl.toFixed(2) }}%</strong>
-                                            <span v-if="rg.sl_hit_rate != null" style="color:#888; font-size:0.85em; display:block;">hit by {{ rg.sl_hit_rate.toFixed(0) }}%</span>
-                                        </td>
-                                        <td v-if="rg.best_exp_r != null" :class="rg.best_exp_r >= 0 ? 'pos' : 'neg'">
-                                            <strong>{{ rg.best_exp_r >= 0 ? '+' : '' }}{{ rg.best_exp_r.toFixed(2) }}R</strong>
-                                        </td>
-                                        <td v-else style="color:#666;">—</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <p style="font-size:0.72rem; color:#888; margin:0.5rem 0 0;">
-                            These are the dynamic <strong style="color:#f59e0b;">MFE %</strong> and <strong style="color:#ef4444;">MAE %</strong> to use per regime. Put them into your
-                            dynamic <strong style="color:#f59e0b;">MAE SLs</strong> & <strong style="color:#ef4444;">MFE TPs</strong> system per regime. Both are drawn from that regime's own excursion distributions at the level that maximised modelled expectancy.
-                            The MAE MFE bands are recommendations for your basic SL/TP if you dont have a dynamic MAE SLs/MFE TPs system inplace.
-                            Both methods are better than just hyperopt (overfitting) your SL/ROI TPs.
-                        </p>
                     </div>
 
                 </template>
@@ -1113,21 +1247,10 @@
             <!-- === 3D ANALYSIS EXPLORER === -->
             <style>
                 #bt-3d-panel .axis3d-label { font-size:0.65rem; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; }
-                .ctrl3d-btn { font-size:0.72rem; color:#a0aec0; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:3px 10px; cursor:pointer; transition:all 0.15s; white-space:nowrap; }
-                .ctrl3d-btn:hover { background:rgba(167,139,250,0.12); color:#c4b5fd; border-color:rgba(167,139,250,0.3); }
-                .ctrl3d-btn.active { background:rgba(167,139,250,0.2); color:#c4b5fd; border-color:#a78bfa; box-shadow:0 0 6px rgba(167,139,250,0.25); }
                 #bt-3d-panel select.sel3d { font-size:0.8rem; padding:5px 8px; }
             </style>
             <div class="card" id="bt-3d-panel" v-if="enrichedTrades.length > 0">
-                <h3 style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                    <span>3D Analysis Explorer</span>
-                    <span id="ctrl3d-bar" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-weight:400;">
-                        <button class="ctrl3d-btn" id="ctrl3d-rotate" onclick="_set3DDragMode('turntable', this)">&#8635; Rotate</button>
-                        <button class="ctrl3d-btn" id="ctrl3d-pan"    onclick="_set3DDragMode('pan',       this)">&#10021; Pan</button>
-                        <button class="ctrl3d-btn" id="ctrl3d-zoom"   onclick="_set3DDragMode('zoom',      this)">&#128269; Zoom</button>
-                        <button class="ctrl3d-btn"                    onclick="_reset3DCamera()">&#8962; Reset</button>
-                    </span>
-                </h3>
+                <h3>3D Analysis Explorer</h3>
                 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:16px;">
                     <!-- Axes group -->
                     <div style="display:flex; gap:8px; align-items:flex-end; padding:8px 10px; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.07);">
@@ -1248,10 +1371,12 @@
                             <select id="3d-colorscale" class="form-input sel3d" style="width:104px;" onchange="_render3DPlot()">
                                 <option value="Viridis" selected>Viridis</option>
                                 <option value="Plasma">Plasma</option>
-                                <option value="Turbo">Turbo</option>
-                                <option value="Cividis">Cividis</option>
                                 <option value="Jet">Jet</option>
                                 <option value="Hot">Hot</option>
+                                <option value="Spectral">Spectral</option>
+                                <option value="Sunset">Sunset</option>
+                                <option value="Aurora">Aurora</option>
+                                <option value="Terrain">Terrain</option>
                             </select>
                         </div>
                     </div>
@@ -1264,432 +1389,6 @@
                 </div>
             </div>
 
-            <div class="card"><h3>Hourly P&amp;L</h3><div id="hourlyPnlChart" style="height:340px;"></div></div>
-            <div class="card"><h3>Hourly Profit Factor</h3><div id="hourlyPfChart" style="height:340px;"></div></div>
-            <div class="card"><h3>Hourly Max Drawdown</h3><div id="hourlyDdChart" style="height:340px;"></div></div>
-
-            <!-- === BEST/WORST PAIRS === -->
-            <div class="card" v-if="pairs.length > 0">
-                <h3>Best / Worst Pairs</h3>
-                <div class="pair-grid">
-                    <div class="pair-section">
-                        <h4>Top 10 Performers</h4>
-                        <div class="table-wrap" style="max-height:400px;">
-                            <table>
-                                <thead><tr>
-                                    <th>Pair</th><th>Trades</th><th>Win%</th><th>PnL</th><th>PF</th><th>Avg R</th>
-                                </tr></thead>
-                                <tbody>
-                                    <tr v-for="p in bestPairs" :key="'b-' + p.pair">
-                                        <td class="pair-cell">{{ p.pair }}</td>
-                                        <td>{{ p.trades }}</td>
-                                        <td :class="p.winRate >= 50 ? 'pos' : 'neg'">{{ p.winRate.toFixed(1) }}%</td>
-                                        <td :class="p.pnl >= 0 ? 'pos' : 'neg'">{{ fmt(p.pnl) }}</td>
-                                        <td>{{ isFinite(p.pf) ? p.pf.toFixed(2) : '∞' }}</td>
-                                        <td :class="p.avgR >= 0 ? 'pos' : 'neg'">{{ p.avgR.toFixed(3) }}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                    <div class="pair-section">
-                        <h4>Bottom 10 Performers</h4>
-                        <div class="table-wrap" style="max-height:400px;">
-                            <table>
-                                <thead><tr>
-                                    <th>Pair</th><th>Trades</th><th>Win%</th><th>PnL</th><th>PF</th><th>Avg R</th>
-                                </tr></thead>
-                                <tbody>
-                                    <tr v-for="p in worstPairs" :key="'w-' + p.pair">
-                                        <td class="pair-cell">{{ p.pair }}</td>
-                                        <td>{{ p.trades }}</td>
-                                        <td :class="p.winRate >= 50 ? 'pos' : 'neg'">{{ p.winRate.toFixed(1) }}%</td>
-                                        <td :class="p.pnl >= 0 ? 'pos' : 'neg'">{{ fmt(p.pnl) }}</td>
-                                        <td>{{ isFinite(p.pf) ? p.pf.toFixed(2) : '∞' }}</td>
-                                        <td :class="p.avgR >= 0 ? 'pos' : 'neg'">{{ p.avgR.toFixed(3) }}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- === TRADE TIMING ANALYSIS === -->
-            <div class="card">
-                <h3>
-                    Trade Timing Analysis
-                    <span style="display:flex; gap:0.5rem; align-items:center;">
-                        <label style="font-size:0.75rem; color:#a0aec0;">Entry ±</label>
-                        <input v-model.number="timingParams.entry_window" type="number" min="0" max="500"
-                               class="form-input" style="width:70px; font-size:0.8rem;">
-                        <label style="font-size:0.75rem; color:#a0aec0;" title="Symmetric ± window around actual close: searches both earlier AND later exits">Exit ±</label>
-                        <input v-model.number="timingParams.exit_window" type="number" min="0" max="500"
-                               class="form-input" style="width:70px; font-size:0.8rem;"
-                               title="Symmetric ± window around actual close">
-                        <label style="font-size:0.75rem; color:#a0aec0;">SL Horizon</label>
-                        <input v-model.number="timingParams.sl_horizon" type="number" min="1" max="2000"
-                               class="form-input" style="width:80px; font-size:0.8rem;">
-                        <button class="btn" @click="loadTiming" :disabled="timingLoading || !selectedBacktest">
-                            {{ timingLoading ? 'Running…' : 'Run' }}
-                        </button>
-                        <button class="btn" @click="saveTimingCSV"
-                                :disabled="!timing || !timing.summary || !timing.summary.trades_analyzed"
-                                title="Download simulated metrics + per-trade data as CSV">
-                            Save CSV
-                        </button>
-                        <button class="btn" @click="saveTimingJSON"
-                                :disabled="!timing"
-                                title="Download full timing analysis as JSON">
-                            Save JSON
-                        </button>
-                    </span>
-                </h3>
-                <div v-if="timingError" class="alert"><strong>Error:</strong> {{ timingError }}</div>
-                <div v-if="timingLoading" class="loading"><span class="spinner"></span> Computing timing analysis…</div>
-
-                <template v-if="timing && !timingLoading">
-                    <!-- Candle-data coverage warning -->
-                    <div v-if="timing.summary.trades_skipped && timing.summary.trades_analyzed === 0"
-                         class="alert" style="margin-bottom:0.75rem;">
-                        All trades were skipped, the OHLCV data files don't appear to cover the backtest's date range. Make sure the data directory has data for the same timerange that was used for the backtest.
-                    </div>
-                    <div v-else-if="timing.summary.trades_skipped > timing.summary.trades_analyzed * 0.25"
-                         style="background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); border-radius:6px; padding:0.5rem 0.75rem; margin-bottom:0.75rem; font-size:0.82rem; color:#fbbf24;">
-                        ⚠ {{ timing.summary.trades_skipped }} trades skipped, candle data may not cover the full backtest period.
-                    </div>
-
-                    <!-- Entry/Exit improvement summary -->
-                    <div class="metrics-grid" style="margin-bottom:1rem;">
-                        <div class="metric">
-                            <div class="metric-label">Trades Analyzed</div>
-                            <div class="metric-value">{{ timing.summary.trades_analyzed }}<span v-if="timing.summary.trades_skipped" style="color:#a0aec0; font-size:0.7rem;"> ({{ timing.summary.trades_skipped }} skipped)</span></div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Improvable Entries</div>
-                            <div class="metric-value">{{ timing.summary.improvable_entries }}</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Improvable Exits</div>
-                            <div class="metric-value">{{ timing.summary.improvable_exits }}</div>
-                        </div>
-                        <div class="metric" title="Average quote-currency P&L gain per trade from entering at the best price within ±entry_window candles instead of the actual open">
-                            <div class="metric-label">Avg Δ Entry (quote)</div>
-                            <div class="metric-value pos">+{{ timing.summary.avg_entry_improvement_abs.toFixed(2) }}</div>
-                        </div>
-                        <div class="metric" title="Average quote-currency P&L gain per trade from exiting at the best price within ±exit_window candles instead of the actual close">
-                            <div class="metric-label">Avg Δ Exit (quote)</div>
-                            <div class="metric-value pos">+{{ timing.summary.avg_exit_improvement_abs.toFixed(2) }}</div>
-                        </div>
-                        <div class="metric" title="Sum of hypothetical entry improvement across all improvable trades, in quote currency">
-                            <div class="metric-label">Total Δ Entry (quote)</div>
-                            <div class="metric-value pos">+{{ timing.summary.total_entry_improvement_abs.toFixed(2) }}</div>
-                        </div>
-                        <div class="metric" title="Sum of hypothetical exit improvement across all improvable trades, in quote currency">
-                            <div class="metric-label">Total Δ Exit (quote)</div>
-                            <div class="metric-value pos">+{{ timing.summary.total_exit_improvement_abs.toFixed(2) }}</div>
-                        </div>
-                        <div class="metric" title="Trades where the best exit within the window was EARLIER than the actual close (exiting sooner would have been better)">
-                            <div class="metric-label">Earlier Exits Better</div>
-                            <div class="metric-value">{{ timing.summary.earlier_exits || 0 }}</div>
-                        </div>
-                        <div class="metric" title="Trades where the best exit within the window was AFTER the actual close (holding longer would have been better)">
-                            <div class="metric-label">Later Exits Better</div>
-                            <div class="metric-value">{{ timing.summary.later_exits || 0 }}</div>
-                        </div>
-                    </div>
-
-                    <!-- Simulated performance comparison -->
-                    <div v-if="timing.simulated_metrics" style="margin:1.2rem 0 0.5rem;">
-                        <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.6rem 0;">
-                            Simulated Timing Performance: optimal entry/exit within window
-                        </h4>
-                        <div style="overflow-x:auto;">
-                            <table style="width:100%; border-collapse:collapse; font-size:0.8rem;">
-                                <thead>
-                                    <tr style="color:#a0aec0; text-align:right; border-bottom:1px solid rgba(255,255,255,0.08);">
-                                        <th style="text-align:left; padding:0.3rem 0.6rem; font-weight:600;">Metric</th>
-                                        <th style="padding:0.3rem 0.6rem; font-weight:600;">Actual</th>
-                                        <th style="padding:0.3rem 0.6rem; font-weight:600; color:#60a5fa;" :title="'Best entry within ±' + timingParams.entry_window + ' candles'">Opt. Entry ±{{ timingParams.entry_window }}</th>
-                                        <th style="padding:0.3rem 0.6rem; font-weight:600; color:#a78bfa;" :title="'Best exit within ±' + timingParams.exit_window + ' candles'">Opt. Exit ±{{ timingParams.exit_window }}</th>
-                                        <th style="padding:0.3rem 0.6rem; font-weight:600; color:#34d399;" title="Both entry and exit optimised">Both Opt.</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="(row, ri) in hoSimRows" :key="ri"
-                                        :style="{ background: ri % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }">
-                                        <td style="padding:0.28rem 0.6rem; color:#a0aec0; white-space:nowrap;">{{ row.label }}</td>
-                                        <td style="padding:0.28rem 0.6rem; text-align:right;" :class="row.cls(timing.simulated_metrics.actual[row.key])">
-                                            {{ row.fmt(timing.simulated_metrics.actual[row.key]) }}
-                                        </td>
-                                        <td style="padding:0.28rem 0.6rem; text-align:right; color:#60a5fa;">
-                                            {{ row.fmt(timing.simulated_metrics.best_entry[row.key]) }}
-                                            <span v-if="row.delta && timing.simulated_metrics.best_entry[row.key] != null && timing.simulated_metrics.actual[row.key] != null"
-                                                  :class="row.deltaSign(timing.simulated_metrics.best_entry[row.key] - timing.simulated_metrics.actual[row.key])"
-                                                  style="font-size:0.72rem; margin-left:0.3rem;">
-                                                {{ row.deltaFmt(timing.simulated_metrics.best_entry[row.key] - timing.simulated_metrics.actual[row.key]) }}
-                                            </span>
-                                        </td>
-                                        <td style="padding:0.28rem 0.6rem; text-align:right; color:#a78bfa;">
-                                            {{ row.fmt(timing.simulated_metrics.best_exit[row.key]) }}
-                                            <span v-if="row.delta && timing.simulated_metrics.best_exit[row.key] != null && timing.simulated_metrics.actual[row.key] != null"
-                                                  :class="row.deltaSign(timing.simulated_metrics.best_exit[row.key] - timing.simulated_metrics.actual[row.key])"
-                                                  style="font-size:0.72rem; margin-left:0.3rem;">
-                                                {{ row.deltaFmt(timing.simulated_metrics.best_exit[row.key] - timing.simulated_metrics.actual[row.key]) }}
-                                            </span>
-                                        </td>
-                                        <td style="padding:0.28rem 0.6rem; text-align:right; color:#34d399;">
-                                            {{ row.fmt(timing.simulated_metrics.best_both[row.key]) }}
-                                            <span v-if="row.delta && timing.simulated_metrics.best_both[row.key] != null && timing.simulated_metrics.actual[row.key] != null"
-                                                  :class="row.deltaSign(timing.simulated_metrics.best_both[row.key] - timing.simulated_metrics.actual[row.key])"
-                                                  style="font-size:0.72rem; margin-left:0.3rem;">
-                                                {{ row.deltaFmt(timing.simulated_metrics.best_both[row.key] - timing.simulated_metrics.actual[row.key]) }}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <p style="font-size:0.7rem; color:#718096; margin:0.4rem 0 0;">
-                            * Theoretical upper bound: each trade is assigned the best available price within ±N candles of the actual open/close (hindsight). Shows how much performance headroom exists in your entry/exit timing. With a limit-order strategy you can capture part of this gap. Sharpe is annualised by trade frequency.
-                        </p>
-                    </div>
-
-                    <!-- Lag curves: avg improvement at each fixed bar offset -->
-                    <div v-if="timing.entry_lag_curve && timing.entry_lag_curve.length"
-                         style="margin:1.2rem 0 0.5rem;">
-                        <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
-                            Timing Lag Curves: avg P&amp;L impact of fixed entry/exit offset
-                        </h4>
-                        <p style="font-size:0.72rem; color:#718096; margin:0 0 0.75rem;">
-                            Each row answers: <em>"if I always entered/exited exactly Δ bars from the signal, what would the average per-trade P&amp;L change be?"</em>
-                            Green = better than actual · Red = worse. <strong>Peak green = optimal limit-order lag.</strong>
-                            Entry shows only Δ≥0 (forward), looking backward is not actionable and is trivially better for trending strategies.
-                            Exit shows Δ&lt;0 (exit earlier) and Δ&gt;0 (hold longer).
-                        </p>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
-                            <!-- Entry lag curve -->
-                            <div>
-                                <div style="font-size:0.78rem; color:#60a5fa; font-weight:600; margin-bottom:0.5rem;">
-                                    Entry lag: wait Δ bars after signal, limit order at candle low/high
-                                    <span v-if="timingEntryBestDelta !== null" style="color:#34d399; font-size:0.72rem; margin-left:0.5rem;">
-                                        ★ best: +{{ timingEntryBestDelta }} bar{{ timingEntryBestDelta !== 1 ? 's' : '' }}
-                                    </span>
-                                </div>
-                                <div v-for="row in timingEntryDist" :key="row.delta"
-                                     :style="{ display:'flex', alignItems:'center', gap:'0.4rem',
-                                               marginBottom:'0.16rem', fontSize:'0.74rem',
-                                               background: row.delta === timingEntryBestDelta ? 'rgba(52,211,153,0.07)' : 'transparent',
-                                               borderRadius:'3px' }">
-                                    <span :style="{ width:'3.4rem', textAlign:'right', flexShrink:'0',
-                                                    color: row.delta === 0 ? '#718096' : '#a0aec0',
-                                                    fontWeight: row.delta === timingEntryBestDelta ? '700' : '400' }">
-                                        {{ row.delta > 0 ? '+' + row.delta : row.delta }}
-                                    </span>
-                                    <!-- Diverging bar: positive right of centre, negative left -->
-                                    <div style="flex:1; height:12px; position:relative; border-radius:2px; overflow:hidden; background:rgba(255,255,255,0.03);">
-                                        <div style="position:absolute; left:50%; top:0; width:1px; height:100%; background:rgba(255,255,255,0.12);"></div>
-                                        <div v-if="row.avg_improvement > 0"
-                                             :style="{ position:'absolute', left:'50%', top:0, height:'100%',
-                                                       width: row._halfPct + '%',
-                                                       background: row.delta === timingEntryBestDelta ? 'rgba(52,211,153,0.85)' : 'rgba(52,211,153,0.55)' }"></div>
-                                        <div v-else-if="row.avg_improvement < 0"
-                                             :style="{ position:'absolute', right:'50%', top:0, height:'100%',
-                                                       width: row._halfPct + '%',
-                                                       background:'rgba(239,68,68,0.55)' }"></div>
-                                    </div>
-                                    <span style="width:5rem; text-align:right; flex-shrink:0; font-variant-numeric:tabular-nums;"
-                                          :class="row.avg_improvement >= 0 ? 'pos' : 'neg'">
-                                        {{ row.avg_improvement >= 0 ? '+' : '' }}{{ row.avg_improvement.toFixed(0) }}
-                                    </span>
-                                    <span style="width:3rem; text-align:right; flex-shrink:0; color:#718096; font-size:0.68rem;"
-                                          :title="'% of trades where this offset improved vs actual'">
-                                        {{ row.pct_better.toFixed(0) }}%
-                                    </span>
-                                </div>
-                                <div style="font-size:0.68rem; color:#718096; margin-top:0.4rem;">
-                                    Δ=0: same candle limit order (low vs open) · Δ=+N: wait N candles then limit order
-                                </div>
-                            </div>
-                            <!-- Exit lag curve -->
-                            <div>
-                                <div style="font-size:0.78rem; color:#a78bfa; font-weight:600; margin-bottom:0.5rem;">
-                                    Exit lag (close price at offset candle)
-                                    <span v-if="timingExitBestDelta !== null" style="color:#34d399; font-size:0.72rem; margin-left:0.5rem;">
-                                        ★ best: {{ timingExitBestDelta > 0 ? '+' : '' }}{{ timingExitBestDelta }} bar{{ Math.abs(timingExitBestDelta) !== 1 ? 's' : '' }}
-                                    </span>
-                                </div>
-                                <div v-for="row in timingExitDist" :key="row.delta"
-                                     :style="{ display:'flex', alignItems:'center', gap:'0.4rem',
-                                               marginBottom:'0.16rem', fontSize:'0.74rem',
-                                               background: row.delta === timingExitBestDelta ? 'rgba(52,211,153,0.07)' : 'transparent',
-                                               borderRadius:'3px' }">
-                                    <span :style="{ width:'3.4rem', textAlign:'right', flexShrink:'0',
-                                                    color: row.delta === 0 ? '#718096' : '#a0aec0',
-                                                    fontWeight: row.delta === timingExitBestDelta ? '700' : '400' }">
-                                        {{ row.delta > 0 ? '+' + row.delta : row.delta }}
-                                    </span>
-                                    <!-- Diverging bar: positive right of centre, negative left -->
-                                    <div style="flex:1; height:12px; position:relative; border-radius:2px; overflow:hidden; background:rgba(255,255,255,0.03);">
-                                        <div style="position:absolute; left:50%; top:0; width:1px; height:100%; background:rgba(255,255,255,0.12);"></div>
-                                        <div v-if="row.avg_improvement > 0"
-                                             :style="{ position:'absolute', left:'50%', top:0, height:'100%',
-                                                       width: row._halfPct + '%',
-                                                       background: row.delta === timingExitBestDelta ? 'rgba(52,211,153,0.85)' : 'rgba(52,211,153,0.55)' }"></div>
-                                        <div v-else-if="row.avg_improvement < 0"
-                                             :style="{ position:'absolute', right:'50%', top:0, height:'100%',
-                                                       width: row._halfPct + '%',
-                                                       background:'rgba(239,68,68,0.55)' }"></div>
-                                    </div>
-                                    <span style="width:5rem; text-align:right; flex-shrink:0; font-variant-numeric:tabular-nums;"
-                                          :class="row.avg_improvement >= 0 ? 'pos' : 'neg'">
-                                        {{ row.avg_improvement >= 0 ? '+' : '' }}{{ row.avg_improvement.toFixed(0) }}
-                                    </span>
-                                    <span style="width:3rem; text-align:right; flex-shrink:0; color:#718096; font-size:0.68rem;"
-                                          :title="'% of trades where this offset improved vs actual'">
-                                        {{ row.pct_better.toFixed(0) }}%
-                                    </span>
-                                </div>
-                                <div style="font-size:0.68rem; color:#718096; margin-top:0.4rem; display:flex; gap:0.75rem;">
-                                    <span>Δ&lt;0: exiting earlier</span>
-                                    <span>Δ&gt;0: holding longer</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- SL bypass summary -->
-                    <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:1rem 0 0.25rem 0;">
-                        Stop-Loss Bypass
-                    </h4>
-                    <p style="color:#666; font-size:0.78rem; margin:0 0 0.75rem 0;">
-                        Of every trade stopped out, what would have happened if you ignored the stop-loss and held for <strong style="color:#a0aec0;">{{ timingParams.sl_horizon }} more candles</strong> before closing?
-                    </p>
-                    <div v-if="!timing.summary.sl_count" style="color:#a0aec0; font-size:0.85rem;">No stoploss exits in this set.</div>
-                    <div v-else class="metrics-grid">
-                        <div class="metric">
-                            <div class="metric-label">Stop-Loss Exits</div>
-                            <div class="metric-value">{{ timing.summary.sl_count }}</div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">trades stopped out</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Price Recovered</div>
-                            <div class="metric-value pos">{{ timing.summary.sl_recovered_count }} <span style="font-size:0.75rem; color:#a0aec0;">({{ slPct(timing.summary.sl_recovered_count) }}%)</span></div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">price returned to at least entry price (break-even)</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Turned Profitable</div>
-                            <div class="metric-value pos">{{ timing.summary.sl_profitable_count }} <span style="font-size:0.75rem; color:#a0aec0;">({{ slPct(timing.summary.sl_profitable_count) }}%)</span></div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">went above entry price</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">SL Realized P&amp;L</div>
-                            <div class="metric-value" :class="timing.summary.sl_actual_total_pnl_abs >= 0 ? 'pos' : 'neg'">
-                                {{ fmt(timing.summary.sl_actual_total_pnl_abs) }}
-                            </div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">what the stop-outs actually made/lost</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">If Held: P&amp;L</div>
-                            <div class="metric-value" :class="timing.summary.sl_hypothetical_total_pnl_abs >= 0 ? 'pos' : 'neg'">
-                                {{ fmt(timing.summary.sl_hypothetical_total_pnl_abs) }}
-                            </div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">P&amp;L closing at +{{ timingParams.sl_horizon }}-bar price</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">P&amp;L Left on Table</div>
-                            <div class="metric-value" :class="timing.summary.sl_pnl_delta_abs >= 0 ? 'pos' : 'neg'">
-                                {{ fmt(timing.summary.sl_pnl_delta_abs) }}
-                            </div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">difference vs stop-loss exits</div>
-                        </div>
-                        <div class="metric">
-                            <div class="metric-label">Profit Factor</div>
-                            <div class="metric-value">
-                                <span style="color:#a0aec0;">SL:</span> {{ pfFmt(timing.summary.sl_profit_factor_actual) }}
-                                &nbsp;→&nbsp;
-                                <span style="color:#a0aec0;">Held:</span> <span :class="(timing.summary.sl_profit_factor_hypothetical || 0) >= (timing.summary.sl_profit_factor_actual || 0) ? 'pos' : 'neg'">{{ pfFmt(timing.summary.sl_profit_factor_hypothetical) }}</span>
-                            </div>
-                            <div style="font-size:0.68rem; color:#555; margin-top:0.2rem;">of stopped-out trades only</div>
-                        </div>
-                    </div>
-
-                </template>
-            </div>
-
-            <!-- === TRADING CHART === -->
-            <div class="card" v-if="enrichedTrades.length > 0">
-                <h3>
-                    Trading Chart
-                    <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
-                        <select v-model="chartPair" @change="loadPairChart(chartPair)" class="form-input" style="font-size:0.8rem; min-width:220px;">
-                            <option value="">— select pair —</option>
-                            <option v-for="p in uniquePairs" :key="p" :value="p">{{ p }}</option>
-                        </select>
-                        <span v-if="chartLoading" class="spinner"></span>
-                        <span style="font-size:0.72rem; color:#a0aec0;">or click any trade row below</span>
-                    </span>
-                </h3>
-                <div v-if="chartError" class="alert"><strong>Chart error:</strong> {{ chartError }}</div>
-                <div ref="pairChartEl" style="height:520px;"></div>
-            </div>
-
-            <!-- === TRADES TABLE === -->
-            <div class="card">
-                <h3>
-                    Trades ({{ enrichedTrades.length }})
-                    <input v-model="tradeFilter" @input="tradesLimit = 20" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
-                </h3>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr>
-                            <th>#</th><th>Pair</th><th>Side</th>
-                            <th>Open</th><th>Close</th><th>Duration</th>
-                            <th>Open Rate</th><th>Close Rate</th>
-                            <th>PnL</th><th>PnL %</th>
-                            <th>R</th><th>R:R</th><th>PF</th>
-                            <th>Sharpe</th><th>Expectancy R</th>
-                            <th>Exit</th>
-                        </tr></thead>
-                        <tbody>
-                            <tr v-for="(t, i) in filteredTrades" :key="t.__idx"
-                                @click="openTradeChart(t)"
-                                style="cursor:pointer;"
-                                :class="{ 'chart-active-pair': chartPair === t.pair }">
-                                <td>{{ i + 1 }}</td>
-                                <td class="pair-cell">{{ t.pair }}</td>
-                                <td :class="t.is_short ? 'side-short' : 'side-long'">
-                                    {{ t.is_short ? 'SHORT' : 'LONG' }}
-                                </td>
-                                <td>{{ formatDate(t.open_date) }}</td>
-                                <td>{{ formatDate(t.close_date) }}</td>
-                                <td>{{ formatMinutes(t.__durationMin) }}</td>
-                                <td>{{ fmtRate(t.open_rate) }}</td>
-                                <td>{{ fmtRate(t.close_rate) }}</td>
-                                <td :class="t.__pnl >= 0 ? 'pos' : 'neg'">{{ fmt(t.__pnl) }}</td>
-                                <td :class="t.__pnl >= 0 ? 'pos' : 'neg'">{{ (t.__pnlPct * 100).toFixed(2) }}%</td>
-                                <td :class="t.__r >= 0 ? 'pos' : 'neg'">{{ t.__r.toFixed(3) }}</td>
-                                <td>{{ t.__rr.toFixed(2) }}</td>
-                                <td>{{ isFinite(t.__pf) ? t.__pf.toFixed(2) : '∞' }}</td>
-                                <td :class="t.__sharpe >= 0 ? 'pos' : 'neg'">{{ t.__sharpe.toFixed(2) }}</td>
-                                <td :class="t.__expectancyR >= 0 ? 'pos' : 'neg'">{{ t.__expectancyR.toFixed(3) }}</td>
-                                <td>{{ t.exit_reason || '-' }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div v-if="filteredTradesTotal > tradesLimit" style="text-align:center;margin-top:1rem;">
-                    <button class="btn" @click="tradesLimit += 100" style="margin-right:0.5rem;">
-                        Load 100 more ({{ filteredTradesTotal - tradesLimit }} remaining)
-                    </button>
-                    <button class="btn" @click="tradesLimit = filteredTradesTotal">
-                        Load all {{ filteredTradesTotal }}
-                    </button>
-                </div>
-                <div v-else-if="filteredTradesTotal > 0" style="text-align:center;margin-top:0.75rem;color:#888;font-size:0.85rem;">
-                    Showing all {{ filteredTradesTotal }} trades
-                </div>
-            </div>
         </template>
     </div>
 </div>
@@ -1708,16 +1407,14 @@ createApp({
             loading: false,
             error: null,
             tradeFilter: '',
+            // Timezone used to bucket the hourly charts ('utc' | 'local').
+            hourlyTz: localStorage.getItem('VulcanTrader_hourlyTz') || 'utc',
             tradesLimit: 20,
             startingCapital: 1000,
-            timing: null,
-            timingLoading: false,
-            timingError: null,
-            timingParams: { entry_window: 10, exit_window: 10, sl_horizon: 50 },
             // --- New-run / job runner ---
             configs: [],
             strategies: [],
-            runForm: { config: '', strategy: '', timerange: '20250201-' },
+            runForm: { config: '', strategy: '', timerange: '20250201-', engine: 'rust' },
             runError: null,
             runSubmitting: false,
             jobs: [],
@@ -1726,6 +1423,7 @@ createApp({
             selectedJobId: null,
             jobLogText: '',
             jobLogTotal: 0,
+            jobLogExpanded: false,   // false = 280px (default), true = 560px
             // --- Pairs Finder ---
             pfForm: {
                 config: 'configHyperAll',
@@ -1792,6 +1490,16 @@ createApp({
         };
     },
     computed: {
+        // Label shown on the hourly charts, e.g. "UTC" or "Local (UTC+02:00)".
+        hourlyTzLabel() {
+            if (this.hourlyTz !== 'local') return 'UTC';
+            const off = -new Date().getTimezoneOffset();   // minutes east of UTC
+            const sign = off >= 0 ? '+' : '-';
+            const abs = Math.abs(off);
+            const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+            const mm = String(abs % 60).padStart(2, '0');
+            return `Local (UTC${sign}${hh}:${mm})`;
+        },
         enrichedTrades() {
             return this.trades.map((t, idx) => {
                 const pnl = +t.profit_abs ?? +t.close_profit_abs ?? 0;
@@ -1902,19 +1610,23 @@ createApp({
             const map = {};
             this.enrichedTrades.forEach(t => {
                 const p = t.pair || '?';
-                if (!map[p]) map[p] = { pair: p, trades: 0, wins: 0, pnl: 0, gw: 0, gl: 0, rsum: 0 };
+                if (!map[p]) map[p] = { pair: p, trades: 0, wins: 0, pnl: 0, gw: 0, gl: 0, rsum: 0, ts: [] };
                 const o = map[p];
                 o.trades++;
                 o.pnl += t.__pnl;
                 if (t.__pnl > 0) { o.wins++; o.gw += t.__pnl; }
                 else if (t.__pnl < 0) { o.gl += Math.abs(t.__pnl); }
                 o.rsum += t.__r;
+                o.ts.push(t);
             });
             return Object.values(map).map(o => ({
                 pair: o.pair, trades: o.trades, pnl: o.pnl,
                 winRate: (o.wins / o.trades) * 100,
                 pf: o.gl > 0 ? o.gw / o.gl : (o.gw > 0 ? Infinity : 0),
                 avgR: o.rsum / o.trades,
+                // Same methodology as the headline Sharpe: daily-aggregated
+                // returns over starting capital, annualised by sqrt(252).
+                sharpe: this._sharpe(this._dailyReturns(o.ts)),
             })).sort((a, b) => b.pnl - a.pnl);
         },
         bestPairs() { return this.pairs.slice(0, 10); },
@@ -1937,6 +1649,13 @@ createApp({
             if (this.maeMfeView === '__all__') return this.maeMfe.global || {};
             return (this.maeMfe.per_regime || {})[this.maeMfeView] || {};
         },
+        // Cluster centroids for the current view: global clusters for "all", or
+        // the selected regime's own clusters so the stars match the plotted points.
+        maeMfeViewClusters() {
+            if (!this.maeMfe) return [];
+            if (this.maeMfeView === '__all__') return this.maeMfe.clusters || [];
+            return ((this.maeMfe.per_regime || {})[this.maeMfeView] || {}).clusters || [];
+        },
         runningJobCount() { return this.jobs.filter(j => j.status === 'running' || j.status === 'queued').length; },
         selectedJob() { return this.jobs.find(j => j.id === this.selectedJobId) || null; },
         pfRunning() { return this.pfJob && (this.pfJob.status === 'running' || this.pfJob.status === 'queued'); },
@@ -1946,54 +1665,7 @@ createApp({
             return r.slice(0, n);
         },
         hoRunning() { return this.hoJob && (this.hoJob.status === 'running' || this.hoJob.status === 'queued'); },
-        timingEntryDist() {
-            const rows = (this.timing && this.timing.entry_lag_curve) || [];
-            const maxAbs = Math.max(1, ...rows.map(r => Math.abs(r.avg_improvement)));
-            // _halfPct: 0-50 so bars can diverge left/right from center
-            return rows.map(r => ({ ...r, _halfPct: (Math.abs(r.avg_improvement) / maxAbs) * 50 }));
-        },
-        timingExitDist() {
-            const rows = (this.timing && this.timing.exit_lag_curve) || [];
-            const maxAbs = Math.max(1, ...rows.map(r => Math.abs(r.avg_improvement)));
-            return rows.map(r => ({ ...r, _halfPct: (Math.abs(r.avg_improvement) / maxAbs) * 50 }));
-        },
-        timingEntryBestDelta() {
-            const rows = (this.timing && this.timing.entry_lag_curve) || [];
-            if (!rows.length) return null;
-            return rows.reduce((best, r) => r.avg_improvement > best.avg_improvement ? r : best, rows[0]).delta;
-        },
-        timingExitBestDelta() {
-            const rows = (this.timing && this.timing.exit_lag_curve) || [];
-            if (!rows.length) return null;
-            return rows.reduce((best, r) => r.avg_improvement > best.avg_improvement ? r : best, rows[0]).delta;
-        },
-        hoSimRows() {
-            const pos = v => v >= 0 ? 'pos' : 'neg';
-            const posGood = v => v >= 0 ? 'pos' : 'neg';   // higher is better
-            const negGood = v => v >= 0 ? 'neg' : 'pos';   // lower is better (drawdown)
-            const neutral = () => '';
-            const pct   = v => v == null ? '—' : v.toFixed(2) + '%';
-            const dec2  = v => v == null ? '—' : v.toFixed(2);
-            const dec3  = v => v == null ? '—' : v.toFixed(3);
-            const dec4  = v => v == null ? '—' : v.toFixed(4);
-            const fmtK  = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toLocaleString('en-US', {maximumFractionDigits:2});
-            const dpct  = d => (d >= 0 ? '+' : '') + d.toFixed(2) + '%';
-            const ddec2 = d => (d >= 0 ? '+' : '') + d.toFixed(2);
-            const ddec3 = d => (d >= 0 ? '+' : '') + d.toFixed(3);
-            const ddec4 = d => (d >= 0 ? '+' : '') + d.toFixed(4);
-            const dK    = d => (d >= 0 ? '+' : '') + d.toLocaleString('en-US', {maximumFractionDigits:2});
-            return [
-                { label:'Trades',        key:'num_trades',       fmt: v => v ?? '—',     delta:false, cls: neutral,  deltaSign: posGood, deltaFmt: ddec2 },
-                { label:'Win Rate',      key:'win_rate',         fmt: pct,               delta:true,  cls: posGood,  deltaSign: posGood, deltaFmt: dpct  },
-                { label:'PnL (quote)',   key:'total_pnl',        fmt: fmtK,              delta:true,  cls: pos,      deltaSign: posGood, deltaFmt: dK    },
-                { label:'ROI %',         key:'roi_pct',          fmt: pct,               delta:true,  cls: pos,      deltaSign: posGood, deltaFmt: dpct  },
-                { label:'CAGR %',        key:'cagr_pct',         fmt: pct,               delta:true,  cls: posGood,  deltaSign: posGood, deltaFmt: dpct  },
-                { label:'Sharpe',        key:'sharpe',           fmt: dec3,              delta:true,  cls: posGood,  deltaSign: posGood, deltaFmt: ddec3 },
-                { label:'Max Drawdown',  key:'max_drawdown_pct', fmt: v => v == null ? '—' : v.toFixed(2)+'%', delta:true, cls: v => v >= 0 ? '' : 'pos', deltaSign: negGood, deltaFmt: dpct },
-                { label:'Profit Factor', key:'profit_factor',    fmt: dec3,              delta:true,  cls: posGood,  deltaSign: posGood, deltaFmt: ddec3 },
-                { label:'Expectancy R',  key:'expectancy_r',     fmt: dec4,              delta:true,  cls: posGood,  deltaSign: posGood, deltaFmt: ddec4 },
-            ];
-        },
+        // Largest bucket sample across both curves — used to flag thin buckets.
     },
     watch: {
         trades() {
@@ -2104,6 +1776,7 @@ createApp({
                         config: this.runForm.config,
                         strategy: this.runForm.strategy || null,
                         timerange: this.runForm.timerange || null,
+                        engine: this.runForm.engine || 'rust',
                     }),
                 });
                 if (!r.ok) {
@@ -2135,6 +1808,25 @@ createApp({
             this.jobLogText = '';
             this.jobLogTotal = 0;
             await this.refreshSelectedJobLog();
+        },
+        // Only rank lag buckets that still hold a representative sample. A negative
+        // exit offset only exists for trades held that long, so its sample collapses
+        // (e.g. Δ=-4 kept 961 of 4690 trades) — picking a "best" from those thin
+        // buckets reports a survivorship artifact, not a real edge.
+        toggleJobLogSize() {
+            const el = this.$refs.jobLogPre;
+            // Logs stream in and auto-scroll to the bottom; if the user is already
+            // pinned there, stay pinned after the resize instead of jumping.
+            const atBottom = el ? (el.scrollHeight - el.scrollTop - el.clientHeight) < 4 : true;
+            this.jobLogExpanded = !this.jobLogExpanded;
+            if (!atBottom) return;
+            const pin = () => {
+                const e2 = this.$refs.jobLogPre;
+                if (e2) e2.scrollTop = e2.scrollHeight;
+            };
+            this.$nextTick(pin);
+            // Re-pin once the max-height transition has settled.
+            setTimeout(pin, 220);
         },
         async refreshSelectedJobLog() {
             if (!this.selectedJobId) return;
@@ -2316,8 +2008,6 @@ createApp({
                 this.startingCapital = startCap;
                 this.trades = trades;
                 this.tradesLimit = 20;
-                this.timing = null;
-                this.timingError = null;
                 // Reset pair chart
                 this.chartPair = '';
                 this.chartError = null;
@@ -2327,112 +2017,6 @@ createApp({
             } finally {
                 this.loading = false;
             }
-        },
-        async loadTiming() {
-            if (!this.selectedBacktest) return;
-            this.timingLoading = true; this.timingError = null;
-            try {
-                const p = this.timingParams;
-                const url = '/api/backtests/' + encodeURIComponent(this.selectedBacktest)
-                    + '/timing?entry_window=' + p.entry_window
-                    + '&exit_window=' + p.exit_window
-                    + '&sl_horizon=' + p.sl_horizon;
-                this.timing = await this.authedFetch(url);
-            } catch (e) {
-                this.timingError = e.message; this.timing = null;
-            } finally {
-                this.timingLoading = false;
-            }
-        },
-        pfFmt(v) {
-            if (v == null) return '∞';
-            if (!isFinite(v)) return '∞';
-            return (+v).toFixed(2);
-        },
-        slPct(n) {
-            const tot = this.timing && this.timing.summary ? this.timing.summary.sl_count : 0;
-            if (!tot) return '0';
-            return Math.round((n / tot) * 100).toString();
-        },
-        _csvCell(v) {
-            if (v === null || v === undefined) return '';
-            if (typeof v === 'number') {
-                if (!isFinite(v)) return '';
-                return String(v);
-            }
-            const s = String(v);
-            if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-            return s;
-        },
-        _downloadBlob(content, filename, mime) {
-            const blob = new Blob([content], { type: mime });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = filename;
-            document.body.appendChild(a); a.click();
-            setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
-        },
-        _timingFilenameBase() {
-            const stem = this.selectedBacktest || 'timing';
-            const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-            return `timing_${stem}_${ts}`;
-        },
-        saveTimingJSON() {
-            if (!this.timing) return;
-            const payload = JSON.stringify(this.timing, null, 2);
-            this._downloadBlob(payload, this._timingFilenameBase() + '.json', 'application/json');
-        },
-        saveTimingCSV() {
-            if (!this.timing) return;
-            const t = this.timing;
-            const lines = [];
-            // --- Params block ---
-            lines.push('# Trade Timing Analysis');
-            lines.push('# backtest,' + this._csvCell(this.selectedBacktest));
-            lines.push('# generated,' + this._csvCell(new Date().toISOString()));
-            if (t.params) {
-                Object.entries(t.params).forEach(([k, v]) => {
-                    lines.push('# param.' + k + ',' + this._csvCell(v));
-                });
-            }
-            // --- Summary block ---
-            lines.push('');
-            lines.push('section,metric,value');
-            if (t.summary) {
-                Object.entries(t.summary).forEach(([k, v]) => {
-                    lines.push(['summary', this._csvCell(k), this._csvCell(v)].join(','));
-                });
-            }
-            // --- Trades table ---
-            lines.push('');
-            const rows = t.trades || [];
-            if (rows.length) {
-                // Build column union; flatten sl_bypass.* sub-fields.
-                const baseCols = new Set();
-                const slCols = new Set();
-                rows.forEach(r => {
-                    Object.keys(r).forEach(k => {
-                        if (k === 'sl_bypass') return;
-                        baseCols.add(k);
-                    });
-                    if (r.sl_bypass && typeof r.sl_bypass === 'object') {
-                        Object.keys(r.sl_bypass).forEach(k => slCols.add(k));
-                    }
-                });
-                const cols = [...baseCols, ...[...slCols].map(k => 'sl_bypass.' + k)];
-                lines.push(cols.join(','));
-                rows.forEach(r => {
-                    const out = cols.map(c => {
-                        if (c.startsWith('sl_bypass.')) {
-                            const sub = c.slice('sl_bypass.'.length);
-                            return this._csvCell(r.sl_bypass ? r.sl_bypass[sub] : '');
-                        }
-                        return this._csvCell(r[c]);
-                    });
-                    lines.push(out.join(','));
-                });
-            }
-            this._downloadBlob(lines.join('\n'), this._timingFilenameBase() + '.csv', 'text/csv');
         },
         // ----- pair chart -----
         async loadPairChart(pair) {
@@ -2872,26 +2456,28 @@ createApp({
                     },
                 ];
 
-                // Cluster centroids (global clusters: only meaningful in the overall view)
-                if (isAll && d.clusters && d.clusters.length) {
+                // Cluster centroids — global clusters in the overall view, or the
+                // selected regime's own clusters (so stars match the filtered points).
+                const viewClusters = this.maeMfeViewClusters;
+                if (viewClusters && viewClusters.length) {
                     traces.push({
-                        x: d.clusters.map(c => c.mae),
-                        y: d.clusters.map(c => c.mfe),
+                        x: viewClusters.map(c => c.mae),
+                        y: viewClusters.map(c => c.mfe),
                         mode: 'markers+text',
                         type: 'scatter',
                         name: 'Cluster',
-                        text: d.clusters.map(c => `C${c.id}`),
+                        text: viewClusters.map(c => `C${c.id}`),
                         textposition: 'top center',
-                        hovertext: d.clusters.map(c =>
+                        hovertext: viewClusters.map(c =>
                             `Cluster ${c.id}${c.is_dominant ? ' ★' : ''}<br>`
                             + `MAE ${c.mae.toFixed(2)}%  MFE ${c.mfe.toFixed(2)}%<br>`
                             + `n=${c.size}  WR=${c.win_rate.toFixed(1)}%<br>`
                             + `E=${c.expectancy_r != null ? (c.expectancy_r >= 0 ? '+' : '') + c.expectancy_r.toFixed(2) + 'R' : '—'}`),
                         hoverinfo: 'text',
                         marker: {
-                            size: d.clusters.map(c => c.is_dominant ? 18 : 13),
+                            size: viewClusters.map(c => c.is_dominant ? 18 : 13),
                             symbol: 'star',
-                            color: d.clusters.map(c => c.is_dominant ? '#f59e0b' : '#a78bfa'),
+                            color: viewClusters.map(c => c.is_dominant ? '#f59e0b' : '#a78bfa'),
                             line: { width: 2, color: '#fff' },
                         },
                     });
@@ -2933,52 +2519,6 @@ createApp({
                 }), cfg);
             }
 
-            // ── Per-regime MFE/MAE grouped bar ───────────────────────────────
-            const rgEl = document.getElementById('maeMfeRegimeChart');
-            if (rgEl && d.per_regime && Object.keys(d.per_regime).length) {
-                const regOrder = ['EXTREME_BULL', 'BULL', 'RANGING', 'BEAR', 'EXTREME_BEAR'];
-                const regKeys = regOrder.filter(r => d.per_regime[r])
-                    .concat(Object.keys(d.per_regime).filter(r => !regOrder.includes(r)));
-                const rc = this.regimeColors;
-                const getColor = r => (rc[r] || {}).solid || '#a0aec0';
-
-                Plotly.react('maeMfeRegimeChart', [
-                    {
-                        name: 'Median MFE %',
-                        x: regKeys.map(r => r.replace('_', ' ')),
-                        y: regKeys.map(r => d.per_regime[r].mfe_median),
-                        type: 'bar',
-                        marker: { color: regKeys.map(r => getColor(r)), opacity: 0.85 },
-                        error_y: {
-                            type: 'data', symmetric: false,
-                            array:       regKeys.map(r => d.per_regime[r].mfe_p75 - d.per_regime[r].mfe_median),
-                            arrayminus:  regKeys.map(r => d.per_regime[r].mfe_median - d.per_regime[r].mfe_p25),
-                            color: 'rgba(255,255,255,0.4)', thickness: 1.5, width: 5,
-                        },
-                        text: regKeys.map(r => `${d.per_regime[r].mfe_median.toFixed(1)}%`),
-                        textposition: 'outside',
-                        textfont: { size: 10 },
-                    },
-                    {
-                        name: 'Median MAE %',
-                        x: regKeys.map(r => r.replace('_', ' ')),
-                        y: regKeys.map(r => -d.per_regime[r].mae_median),
-                        type: 'bar',
-                        marker: { color: regKeys.map(r => getColor(r)), opacity: 0.45 },
-                        text: regKeys.map(r => `-${d.per_regime[r].mae_median.toFixed(1)}%`),
-                        textposition: 'outside',
-                        textfont: { size: 10 },
-                    },
-                ], this._layout({
-                    barmode: 'overlay',
-                    xaxis: { fixedrange: true, gridcolor: 'rgba(255,255,255,0.05)' },
-                    yaxis: { title: 'MFE % / -MAE %', gridcolor: 'rgba(255,255,255,0.05)',
-                             zeroline: true, zerolinecolor: 'rgba(255,255,255,0.2)' },
-                    showlegend: true,
-                    legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0.5)', font: { size: 10 } },
-                    margin: { t: 20, r: 20, b: 60, l: 60 },
-                }), { ...cfg, scrollZoom: false });
-            }
         },
 
         // ----- charts -----
@@ -2993,6 +2533,12 @@ createApp({
                 showlegend: false,
                 dragmode: 'pan',
             }, extra || {});
+        },
+        setHourlyTz(tz) {
+            if (this.hourlyTz === tz) return;
+            this.hourlyTz = tz;
+            try { localStorage.setItem('VulcanTrader_hourlyTz', tz); } catch (e) { /* ignore */ }
+            this.$nextTick(() => this.renderCharts());
         },
         renderCharts() {
             if (this.trades.length === 0) return;
@@ -3019,12 +2565,13 @@ createApp({
                 fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Drawdown %' } }), cfg);
 
-            // Hourly P&L
+            // Hourly P&L — bucketed by UTC or local hour-of-day (see hourlyTz toggle)
+            const useLocalHours = this.hourlyTz === 'local';
             const hourly = Array(24).fill(null).map(() => ({ pnl: 0, gw: 0, gl: 0, dd: 0, peak: 0, eq: 0 }));
             ts.forEach(t => {
                 const d = new Date(t.close_date || t.open_date);
                 if (isNaN(d)) return;
-                const h = d.getUTCHours();
+                const h = useLocalHours ? d.getHours() : d.getUTCHours();
                 hourly[h].pnl += t.__pnl;
                 if (t.__pnl > 0) hourly[h].gw += t.__pnl;
                 else if (t.__pnl < 0) hourly[h].gl += Math.abs(t.__pnl);
@@ -3300,6 +2847,42 @@ function render3DChart(trades, meta) {
     _render3DPlot();
 }
 
+// Diverging ColorBrewer palettes. Plotly.js only ships a handful of named
+// scales (Viridis/Plasma/Jet/Hot ...) — Spectral, RdYlBu, PuOr and BrBG are not
+// among them, so they're defined here as explicit [pos, color] stops.
+const _3D_COLORSCALES = {
+    // Red → yellow → green → blue
+    Spectral: [
+        [0.0, '#9e0142'], [0.1, '#d53e4f'], [0.2, '#f46d43'], [0.3, '#fdae61'],
+        [0.4, '#fee08b'], [0.5, '#ffffbf'], [0.6, '#e6f598'], [0.7, '#abdda4'],
+        [0.8, '#66c2a5'], [0.9, '#3288bd'], [1.0, '#5e4fa2'],
+    ],
+    // Red → yellow → blue (RdYlBu)
+    Sunset: [
+        [0.0, '#a50026'], [0.1, '#d73027'], [0.2, '#f46d43'], [0.3, '#fdae61'],
+        [0.4, '#fee090'], [0.5, '#ffffbf'], [0.6, '#e0f3f8'], [0.7, '#abd9e9'],
+        [0.8, '#74add1'], [0.9, '#4575b4'], [1.0, '#313695'],
+    ],
+    // Purple → orange (PuOr) with green extended onto the end
+    Aurora: [
+        [0.00, '#2d004b'], [0.08, '#542788'], [0.17, '#8073ac'], [0.25, '#b2abd2'],
+        [0.33, '#d8daeb'], [0.42, '#f7f7f7'], [0.50, '#fee0b6'], [0.58, '#fdb863'],
+        [0.67, '#e08214'], [0.75, '#b35806'], [0.83, '#7f3b08'],
+        [0.92, '#7fbc41'], [1.00, '#276419'],
+    ],
+    // Brown → teal/green (BrBG)
+    Terrain: [
+        [0.0, '#543005'], [0.1, '#8c510a'], [0.2, '#bf812d'], [0.3, '#dfc27d'],
+        [0.4, '#f6e8c3'], [0.5, '#f5f5f5'], [0.6, '#c7eae5'], [0.7, '#80cdc1'],
+        [0.8, '#35978f'], [0.9, '#01665e'], [1.0, '#003c30'],
+    ],
+};
+
+/** Map a select value to a Plotly colorscale (array for ours, name for built-ins). */
+function _resolve3DColorscale(v) {
+    return _3D_COLORSCALES[v] || v;
+}
+
 function _render3DPlot() {
     if (!_3dLastData) return;
     const g = id => document.getElementById(id);
@@ -3310,7 +2893,7 @@ function _render3DPlot() {
     const colorAxis  = g('3d-color-by').value || 'z';   // 'x' | 'y' | 'z'
     const colorKey   = colorAxis === 'x' ? xKey : colorAxis === 'y' ? yKey : zKey;
     const plotType   = g('3d-plot-type').value;
-    const colorscale = g('3d-colorscale').value;
+    const colorscale = _resolve3DColorscale(g('3d-colorscale').value);
     const windowSize = +(g('3d-window') ? g('3d-window').value : 30) || 30;
 
     const xDef     = _3D_AXIS_DEFS[xKey];
@@ -3528,7 +3111,6 @@ function _render3DPlot() {
         const el = document.getElementById('chart-3d');
         _attach3DMiddleClickPan(el);
         _attach3DZoomDampen(el);
-        _sync3DControlBar();
     });
 }
 
@@ -3542,41 +3124,6 @@ function set3DPreset(x, y, z, type, colorBy) {
     const cb = g('3d-color-by');
     if (cb) cb.value = colorBy || 'z';
     _render3DPlot();
-}
-
-// Track active dragmode so the control bar stays in sync across renders.
-window._3dDragMode = 'turntable';
-
-function _set3DDragMode(mode, btn) {
-    const el = document.getElementById('chart-3d');
-    if (!el || !el.data) return;
-    // Toggle off: clicking the already-active mode returns to rotate.
-    if (window._3dDragMode === mode && mode !== 'turntable') {
-        mode = 'turntable';
-    }
-    window._3dDragMode = mode;
-    Plotly.relayout(el, { 'scene.dragmode': mode });
-    _sync3DControlBar();
-}
-
-function _reset3DCamera() {
-    window._3dDragMode = 'turntable';
-    const el = document.getElementById('chart-3d');
-    if (!el || !el.data) return;
-    Plotly.relayout(el, {
-        'scene.camera': { eye: { x: 1.5, y: 1.5, z: 0.9 } },
-        'scene.dragmode': 'turntable',
-    });
-    _sync3DControlBar();
-}
-
-function _sync3DControlBar() {
-    const mode = window._3dDragMode || 'turntable';
-    const map = { turntable: 'ctrl3d-rotate', pan: 'ctrl3d-pan', zoom: 'ctrl3d-zoom' };
-    ['ctrl3d-rotate', 'ctrl3d-pan', 'ctrl3d-zoom'].forEach(id => {
-        const b = document.getElementById(id);
-        if (b) b.classList.toggle('active', map[mode] === id);
-    });
 }
 
 // Dampen scroll-wheel zoom to 35% of default Plotly sensitivity.

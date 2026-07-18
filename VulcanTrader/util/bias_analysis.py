@@ -743,7 +743,7 @@ class LookaheadAnalysisSubFunctions:
         config = LookaheadAnalysisSubFunctions.calculate_config_overrides(config)
 
         strategy_objs = StrategyResolver.search_all_objects(
-            config, enum_failed=False, recursive=config.get("recursive_strategy_search", False)
+            config, enum_failed=False, recursive=config.get("recursive_strategy_search", True)
         )
 
         lookaheadAnalysis_instances = []
@@ -854,7 +854,7 @@ class RecursiveAnalysisSubFunctions:
         config = RecursiveAnalysisSubFunctions.calculate_config_overrides(config)
 
         strategy_objs = StrategyResolver.search_all_objects(
-            config, enum_failed=False, recursive=config.get("recursive_strategy_search", False)
+            config, enum_failed=False, recursive=config.get("recursive_strategy_search", True)
         )
 
         RecursiveAnalysis_instances = []

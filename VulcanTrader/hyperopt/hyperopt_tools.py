@@ -51,7 +51,7 @@ class HyperoptTools:
         from VulcanTrader.resolvers.strategy_resolver import StrategyResolver
 
         strategy_objs = StrategyResolver.search_all_objects(
-            config, False, config.get("recursive_strategy_search", False)
+            config, False, config.get("recursive_strategy_search", True)
         )
         strategies = [s for s in strategy_objs if s["name"] == strategy_name]
         if strategies:

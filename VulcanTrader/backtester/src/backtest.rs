@@ -153,7 +153,7 @@ impl BacktestResult {
 }
 
 /// Trade type enumeration - spot or futures
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TradeType {
     Spot,
     Futures,
@@ -252,7 +252,7 @@ pub enum EntryEdgeFilter {
 }
 
 /// Leverage calculation mode
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LeverageMode {
     Fixed,
     SignalQuality,
@@ -598,7 +598,8 @@ impl TrailingStopConfig {
 // =============================================================================
 
 /// Unified backtest configuration combining all settings
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default)]
 pub struct UnifiedBacktestConfig {
     // === Core Settings ===
     pub timeframe: String,
@@ -642,6 +643,8 @@ pub struct UnifiedBacktestConfig {
     pub atr_stop_multiplier: f32,
 
     // === Optional per-strategy entry throttle — see EntryEdgeFilter ===
+    // Not deserialized from Python (defaults to None); set in Rust if needed.
+    #[serde(skip)]
     pub entry_edge_filter: EntryEdgeFilter,
 
     /// Bar index before which no trade may open, distinct from

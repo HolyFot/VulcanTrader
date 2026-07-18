@@ -1741,6 +1741,9 @@ class Backtesting:
         :param end_date: backtesting timerange end datetime
         :return: DataFrame with trades (results of backtesting)
         """
+        if str(self.config.get("engine", "python")).lower() == "rust":
+            return self._backtest_rust(processed)
+
         self.reset_backtest(self.enable_protections)
         # Ensure wallets are up-to-date (important for --strategy-list)
         self.wallets.update()
@@ -1785,6 +1788,20 @@ class Backtesting:
             "replaced_entry_orders": self.replaced_entry_orders,
             "final_balance": self.wallets.get_total(self.strategy.config["stake_currency"]),
         }
+
+    def _backtest_rust(self, processed: dict) -> dict:
+        """Rust-engine path (config ``engine: rust``). Computes signals the
+        normal way, then hands them to the fast Rust simulator instead of the
+        Python ``backtest_loop``. See VulcanTrader/rust_backtest.py for the
+        fidelity caveats."""
+        from VulcanTrader.rust_backtest import run_rust_backtest
+
+        prepared: dict = {}
+        for pair, pair_data in processed.items():
+            df = self.strategy.trader_advise_signals(pair_data.copy(), {"pair": pair})
+            df = trim_dataframe(df, self.timerange, startup_candles=self.required_startup)
+            prepared[pair] = df
+        return run_rust_backtest(prepared, self.strategy, self.config)
 
     def backtest_one_strategy(
         self, strat: IStrategy, data: dict[str, DataFrame], timerange: TimeRange

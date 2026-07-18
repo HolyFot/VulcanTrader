@@ -147,18 +147,6 @@ def _ts_to_iso(ts: Any) -> str | None:
         return None
 
 
-def _empty_timing_summary() -> dict:
-    return {
-        "trades_analyzed": 0, "trades_skipped": 0,
-        "improvable_entries": 0, "improvable_exits": 0,
-        "earlier_exits": 0, "later_exits": 0,
-        "total_entry_improvement_abs": 0.0, "total_exit_improvement_abs": 0.0,
-        "avg_entry_improvement_abs": 0.0, "avg_exit_improvement_abs": 0.0,
-        "sl_count": 0, "sl_recovered_count": 0, "sl_profitable_count": 0,
-        "sl_actual_total_pnl_abs": 0.0, "sl_hypothetical_total_pnl_abs": 0.0,
-        "sl_pnl_delta_abs": 0.0,
-        "sl_profit_factor_actual": None, "sl_profit_factor_hypothetical": None,
-    }
 
 
 def _trade_to_dict(trade: Any) -> dict:
@@ -200,6 +188,7 @@ class BacktestRunRequest(BaseModel):
     config: str
     strategy: str | None = None
     timerange: str | None = None
+    engine: str | None = "python"
 
 
 class PairsFinderRequest(BaseModel):
@@ -758,21 +747,6 @@ class WebPortal:
         def api_pair_trades(pair: str) -> dict:
             return {"trades": self._pair_trades(pair)}
 
-        # --------------- timing / counterfactual analysis ---------------
-        @app.get("/api/analysis/timing", dependencies=[Depends(auth)])
-        def api_analysis_timing(
-            limit: int = 200,
-            entry_window: int = 10,
-            exit_window: int = 10,
-            sl_horizon: int = 50,
-        ) -> dict:
-            return self._analyse_timing(
-                limit=limit,
-                entry_window=entry_window,
-                exit_window=exit_window,
-                sl_horizon=sl_horizon,
-            )
-
         # --------------- backtest results ---------------
         @app.get("/api/backtests", dependencies=[Depends(auth)])
         def api_backtests() -> dict:
@@ -796,6 +770,7 @@ class WebPortal:
                 config=req.config,
                 strategy=req.strategy,
                 timerange=req.timerange,
+                engine=req.engine,
             )
 
         @app.get("/api/backtests/jobs", dependencies=[Depends(auth)])
@@ -830,19 +805,6 @@ class WebPortal:
         def api_backtest(name: str) -> dict:
             return self._load_backtest(name)
 
-        @app.get("/api/backtests/{name}/timing", dependencies=[Depends(auth)])
-        def api_backtest_timing(
-            name: str,
-            entry_window: int = 10,
-            exit_window: int = 10,
-            sl_horizon: int = 50,
-        ) -> dict:
-            return self._analyse_backtest_timing(
-                name=name,
-                entry_window=entry_window,
-                exit_window=exit_window,
-                sl_horizon=sl_horizon,
-            )
 
         @app.get("/api/backtests/{name}/regime_analysis", dependencies=[Depends(auth)])
         def api_bt_regime_analysis(name: str, regime_pair: str = "") -> dict:
@@ -1080,358 +1042,6 @@ class WebPortal:
             return []
 
     # ------------------------------------------------------------------
-    # Trade-timing counterfactual analysis
-    # ------------------------------------------------------------------
-    def _analyse_timing(
-        self,
-        *,
-        limit: int,
-        entry_window: int,
-        exit_window: int,
-        sl_horizon: int,
-    ) -> dict:
-        """
-        For each closed trade, look at the analyzed candles around the trade
-        window and compute:
-
-          * **best entry**: most favourable entry price within
-            ``[open - entry_window, open + entry_window]`` candles.
-          * **best exit**: most favourable exit price within
-            ``[open, close + exit_window]`` candles.
-          * **MFE / MAE** during the actual hold period.
-          * **SL bypass**: when ``exit_reason`` is a stoploss variant,
-            simulate the trade continuing for ``sl_horizon`` more candles
-            (until the next strategy exit signal or horizon end). Reports
-            whether the trade would have recovered to breakeven and/or
-            ended profitable, plus the deepest excursion against you.
-
-        Trades whose pair is no longer in the analyzed dataframe cache are
-        skipped (counted under ``skipped``).
-        """
-        from datetime import datetime
-
-        if self.bot is None:
-            raise HTTPException(status_code=503, detail="Bot not running")
-
-        strat = self._strategy()
-        dp = getattr(self.bot, "dataprovider", None) or getattr(strat, "dp", None)
-        if strat is None or dp is None:
-            raise HTTPException(status_code=503, detail="DataProvider unavailable")
-        tf = getattr(strat, "timeframe", None)
-        if not tf:
-            raise HTTPException(status_code=400, detail="strategy timeframe missing")
-
-        closed = self._get_closed_trades(limit)
-        if not closed:
-            return {
-                "trades": [],
-                "summary": _empty_timing_summary(),
-                "params": {
-                    "entry_window": entry_window,
-                    "exit_window": exit_window,
-                    "sl_horizon": sl_horizon,
-                    "timeframe": tf,
-                },
-            }
-
-        # Cache analyzed dataframes per pair (one fetch each).
-        df_cache: dict[str, Any] = {}
-
-        def _df_for(pair: str):
-            if pair in df_cache:
-                return df_cache[pair]
-            try:
-                df, _ = dp.get_analyzed_dataframe(pair, tf)
-            except Exception:
-                df = None
-            df_cache[pair] = df
-            return df
-
-        rows: list[dict] = []
-        skipped = 0
-        sl_actual_pnl_total = 0.0
-        sl_hyp_pnl_total = 0.0
-        sl_count = 0
-        sl_recovered = 0
-        sl_profitable = 0
-        entry_improvement_total = 0.0
-        exit_improvement_total = 0.0
-        improvable_entry = 0
-        improvable_exit = 0
-        earlier_exits = 0
-        later_exits = 0
-
-        sl_gw = sl_gl = 0.0
-        sl_hyp_gw = sl_hyp_gl = 0.0
-
-        for t in closed:
-            pair = getattr(t, "pair", None)
-            open_date = getattr(t, "open_date", None)
-            close_date = getattr(t, "close_date", None)
-            open_rate = float(getattr(t, "open_rate", 0) or 0)
-            close_rate = float(getattr(t, "close_rate", 0) or 0)
-            amount = float(getattr(t, "amount", 0) or 0)
-            is_short = bool(getattr(t, "is_short", False))
-            leverage = float(getattr(t, "leverage", 1) or 1)
-            fee_open = float(getattr(t, "fee_open", 0) or 0)
-            fee_close = float(getattr(t, "fee_close", 0) or 0)
-            actual_pnl = float(
-                getattr(t, "close_profit_abs", None)
-                or getattr(t, "profit_abs", None)
-                or 0
-            )
-            exit_reason = (getattr(t, "exit_reason", "") or "").lower()
-
-            if not pair or open_date is None or close_date is None or open_rate <= 0:
-                skipped += 1
-                continue
-
-            df = _df_for(pair)
-            if df is None or len(df) == 0 or "date" not in df.columns:
-                skipped += 1
-                continue
-
-            try:
-                open_ts = open_date.timestamp() if hasattr(open_date, "timestamp") else \
-                    datetime.fromisoformat(str(open_date)).timestamp()
-                close_ts = close_date.timestamp() if hasattr(close_date, "timestamp") else \
-                    datetime.fromisoformat(str(close_date)).timestamp()
-            except Exception:
-                skipped += 1
-                continue
-
-            try:
-                _dc = df["date"]
-                if hasattr(_dc.dtype, "tz") and _dc.dtype.tz is not None:
-                    _dc = _dc.dt.tz_convert("UTC").dt.tz_localize(None)
-                date_ts = _dc.astype("datetime64[s]").astype("int64").to_numpy()
-            except Exception:
-                skipped += 1
-                continue
-
-            n = len(date_ts)
-            # Locate the candle containing the open / close.
-            import bisect
-            i_open = max(0, bisect.bisect_right(date_ts, open_ts) - 1)
-            i_close = max(0, bisect.bisect_right(date_ts, close_ts) - 1)
-            if i_close < i_open:
-                i_close = i_open
-
-            highs = df["high"].to_numpy() if "high" in df.columns else None
-            lows = df["low"].to_numpy() if "low" in df.columns else None
-            closes = df["close"].to_numpy() if "close" in df.columns else None
-            if highs is None or lows is None or closes is None:
-                skipped += 1
-                continue
-
-            # ---- best entry ----
-            ent_lo = max(0, i_open - entry_window)
-            ent_hi = min(n, i_open + entry_window + 1)
-            ent_segment_lo = lows[ent_lo:ent_hi]
-            ent_segment_hi = highs[ent_lo:ent_hi]
-            if is_short:
-                # Better entry = sell higher
-                local = ent_segment_hi.argmax() if ent_segment_hi.size else 0
-                best_entry_rate = float(ent_segment_hi[local]) if ent_segment_hi.size else open_rate
-                entry_diff = best_entry_rate - open_rate
-            else:
-                local = ent_segment_lo.argmin() if ent_segment_lo.size else 0
-                best_entry_rate = float(ent_segment_lo[local]) if ent_segment_lo.size else open_rate
-                entry_diff = open_rate - best_entry_rate
-            best_entry_idx = ent_lo + int(local)
-            best_entry_date = _ts_to_iso(date_ts[best_entry_idx]) if best_entry_idx < n else None
-            entry_improvement_abs = entry_diff * amount * leverage
-            if entry_improvement_abs > 1e-9:
-                improvable_entry += 1
-                entry_improvement_total += entry_improvement_abs
-
-            # ---- MFE / MAE during the actual hold period ----
-            hold_lo = i_open
-            hold_hi = min(n, i_close + 1)
-            hold_high = float(highs[hold_lo:hold_hi].max()) if hold_hi > hold_lo else open_rate
-            hold_low = float(lows[hold_lo:hold_hi].min()) if hold_hi > hold_lo else open_rate
-            if is_short:
-                mfe_pct = (open_rate - hold_low) / open_rate * leverage
-                mae_pct = (hold_high - open_rate) / open_rate * leverage
-            else:
-                mfe_pct = (hold_high - open_rate) / open_rate * leverage
-                mae_pct = (open_rate - hold_low) / open_rate * leverage
-
-            # ---- best exit (symmetric around actual close) ----
-            xw = max(0, int(exit_window))
-            exit_lo = max(i_open, i_close - xw)
-            exit_hi = min(n, i_close + xw + 1)
-            seg_hi = highs[exit_lo:exit_hi]
-            seg_lo = lows[exit_lo:exit_hi]
-            if is_short:
-                local_e = seg_lo.argmin() if seg_lo.size else 0
-                best_exit_rate = float(seg_lo[local_e]) if seg_lo.size else close_rate
-                exit_diff = close_rate - best_exit_rate
-            else:
-                local_e = seg_hi.argmax() if seg_hi.size else 0
-                best_exit_rate = float(seg_hi[local_e]) if seg_hi.size else close_rate
-                exit_diff = best_exit_rate - close_rate
-            best_exit_idx = exit_lo + int(local_e)
-            best_exit_date = _ts_to_iso(date_ts[best_exit_idx]) if best_exit_idx < n else None
-            exit_improvement_abs = exit_diff * amount * leverage
-            exit_bars_offset = int(best_exit_idx - i_close)
-            if exit_improvement_abs > 1e-9:
-                improvable_exit += 1
-                exit_improvement_total += exit_improvement_abs
-                if exit_bars_offset < 0:
-                    earlier_exits += 1
-                elif exit_bars_offset > 0:
-                    later_exits += 1
-
-            # ---- SL bypass ----
-            sl_info = None
-            is_sl = "stop" in exit_reason  # stop_loss, stoploss_on_exchange, trailing_stop_loss
-            if is_sl:
-                sl_count += 1
-                sl_actual_pnl_total += actual_pnl
-                if actual_pnl > 0:
-                    sl_gw += actual_pnl
-                else:
-                    sl_gl += abs(actual_pnl)
-
-                horizon_lo = max(0, i_close + 1)
-                horizon_hi = min(n, i_close + 1 + sl_horizon)
-                hyp_exit_idx = None
-                hyp_exit_reason = "horizon"
-
-                # Look for a strategy-driven exit signal in the horizon.
-                exit_col = "exit_short" if is_short else "exit_long"
-                if exit_col in df.columns:
-                    seg = df[exit_col].to_numpy()[horizon_lo:horizon_hi]
-                    for k, v in enumerate(seg):
-                        if v:
-                            hyp_exit_idx = horizon_lo + k
-                            hyp_exit_reason = "exit_signal"
-                            break
-
-                if hyp_exit_idx is None and horizon_hi > horizon_lo:
-                    hyp_exit_idx = horizon_hi - 1
-
-                if hyp_exit_idx is not None:
-                    hyp_exit_rate = float(closes[hyp_exit_idx])
-                    # Best favourable price reached in horizon
-                    h_hi = highs[horizon_lo:horizon_hi]
-                    h_lo = lows[horizon_lo:horizon_hi]
-                    if is_short:
-                        best_after = float(h_lo.min()) if h_lo.size else hyp_exit_rate
-                        worst_after = float(h_hi.max()) if h_hi.size else hyp_exit_rate
-                        hyp_pnl_per_unit = (open_rate - hyp_exit_rate)
-                        max_dd_after_pct = (worst_after - open_rate) / open_rate * leverage
-                    else:
-                        best_after = float(h_hi.max()) if h_hi.size else hyp_exit_rate
-                        worst_after = float(h_lo.min()) if h_lo.size else hyp_exit_rate
-                        hyp_pnl_per_unit = (hyp_exit_rate - open_rate)
-                        max_dd_after_pct = (open_rate - worst_after) / open_rate * leverage
-
-                    fee_factor = 1.0 - (fee_open + fee_close)
-                    hyp_pnl_abs = hyp_pnl_per_unit * amount * leverage * fee_factor
-                    hyp_pnl_pct = (hyp_pnl_per_unit / open_rate) * leverage if open_rate else 0.0
-
-                    # Did it ever recover to >= entry-rate (breakeven) before horizon end?
-                    if is_short:
-                        recovered = bool((h_lo <= open_rate).any()) if h_lo.size else False
-                    else:
-                        recovered = bool((h_hi >= open_rate).any()) if h_hi.size else False
-                    profitable = hyp_pnl_abs > 0
-
-                    if profitable:
-                        sl_profitable += 1
-                    if recovered:
-                        sl_recovered += 1
-                    sl_hyp_pnl_total += hyp_pnl_abs
-                    if hyp_pnl_abs > 0:
-                        sl_hyp_gw += hyp_pnl_abs
-                    else:
-                        sl_hyp_gl += abs(hyp_pnl_abs)
-
-                    sl_info = {
-                        "horizon_bars": int(horizon_hi - horizon_lo),
-                        "hyp_exit_idx_offset": int(hyp_exit_idx - i_close),
-                        "hyp_exit_reason": hyp_exit_reason,
-                        "hyp_exit_rate": hyp_exit_rate,
-                        "hyp_exit_date": _ts_to_iso(date_ts[hyp_exit_idx]),
-                        "best_rate_after_sl": best_after,
-                        "max_drawdown_after_sl_pct": float(max_dd_after_pct),
-                        "hypothetical_pnl_abs": float(hyp_pnl_abs),
-                        "hypothetical_pnl_pct": float(hyp_pnl_pct),
-                        "would_have_recovered": recovered,
-                        "would_have_been_profitable": profitable,
-                        "pnl_delta_vs_actual": float(hyp_pnl_abs - actual_pnl),
-                    }
-
-            rows.append({
-                "trade_id": getattr(t, "id", None),
-                "pair": pair,
-                "is_short": is_short,
-                "open_date": _iso(open_date),
-                "close_date": _iso(close_date),
-                "open_rate": open_rate,
-                "close_rate": close_rate,
-                "actual_pnl_abs": actual_pnl,
-                "exit_reason": getattr(t, "exit_reason", None),
-                "best_entry_rate": best_entry_rate,
-                "best_entry_date": best_entry_date,
-                "entry_improvement_abs": float(entry_improvement_abs),
-                "best_exit_rate": best_exit_rate,
-                "best_exit_date": best_exit_date,
-                "exit_improvement_abs": float(exit_improvement_abs),
-                "exit_bars_offset": exit_bars_offset,
-                "mfe_pct": float(mfe_pct),
-                "mae_pct": float(mae_pct),
-                "sl_bypass": sl_info,
-            })
-
-        sl_pf_actual = (sl_gw / sl_gl) if sl_gl > 0 else (float("inf") if sl_gw > 0 else 0.0)
-        sl_pf_hyp = (sl_hyp_gw / sl_hyp_gl) if sl_hyp_gl > 0 else (
-            float("inf") if sl_hyp_gw > 0 else 0.0
-        )
-
-        analyzed = len(rows)
-        summary = {
-            "trades_analyzed": analyzed,
-            "trades_skipped": skipped,
-            "improvable_entries": improvable_entry,
-            "improvable_exits": improvable_exit,
-            "total_entry_improvement_abs": float(entry_improvement_total),
-            "total_exit_improvement_abs": float(exit_improvement_total),
-            "avg_entry_improvement_abs": (
-                entry_improvement_total / analyzed if analyzed else 0.0
-            ),
-            "avg_exit_improvement_abs": (
-                exit_improvement_total / analyzed if analyzed else 0.0
-            ),
-            "earlier_exits": earlier_exits,
-            "later_exits": later_exits,
-            "sl_count": sl_count,
-            "sl_recovered_count": sl_recovered,
-            "sl_profitable_count": sl_profitable,
-            "sl_actual_total_pnl_abs": float(sl_actual_pnl_total),
-            "sl_hypothetical_total_pnl_abs": float(sl_hyp_pnl_total),
-            "sl_pnl_delta_abs": float(sl_hyp_pnl_total - sl_actual_pnl_total),
-            "sl_profit_factor_actual": (
-                None if sl_pf_actual == float("inf") else float(sl_pf_actual)
-            ),
-            "sl_profit_factor_hypothetical": (
-                None if sl_pf_hyp == float("inf") else float(sl_pf_hyp)
-            ),
-        }
-        return {
-            "trades": rows,
-            "summary": summary,
-            "params": {
-                "entry_window": entry_window,
-                "exit_window": exit_window,
-                "sl_horizon": sl_horizon,
-                "timeframe": tf,
-            },
-        }
-
-    # ------------------------------------------------------------------
     # Backtest result discovery
     # ------------------------------------------------------------------
     def _backtest_dir(self) -> Path:
@@ -1513,15 +1123,17 @@ class WebPortal:
             return []
         out: list[dict] = []
         cls_re = re.compile(r"^class\s+(\w+)\s*\([^)]*IStrategy[^)]*\)\s*:", re.MULTILINE)
-        for p in sorted(d.glob("*.py")):
-            if p.name.startswith("_"):
+        # Recursive so strategies in sub-folders (e.g. strategies/examples/) show up.
+        for p in sorted(d.rglob("*.py")):
+            rel = p.relative_to(d)
+            if p.name.startswith("_") or any(part.startswith((".", "__")) for part in rel.parts[:-1]):
                 continue
             try:
                 text = p.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
             for m in cls_re.finditer(text):
-                out.append({"name": m.group(1), "file": p.name})
+                out.append({"name": m.group(1), "file": rel.as_posix()})
         # de-dup preserving order
         seen: set[str] = set()
         unique = []
@@ -1564,6 +1176,7 @@ class WebPortal:
             "config": job["config"],
             "strategy": job.get("strategy"),
             "timerange": job.get("timerange"),
+            "engine": job.get("engine", "python"),
             "status": job["status"],
             "exit_code": job.get("exit_code"),
             "created_at": job.get("created_at"),
@@ -1635,10 +1248,12 @@ class WebPortal:
         config: str,
         strategy: str | None,
         timerange: str | None,
+        engine: str | None = "python",
     ) -> dict:
         cfg_name = self._validate_name(config, "config")
         strat_name = self._validate_name(strategy, "strategy") if strategy else None
         timerange = self._validate_timerange(timerange)
+        engine = "rust" if str(engine).lower() == "rust" else "python"
 
         cfg_path = self._configs_dir() / f"{cfg_name}.json"
         if not cfg_path.is_file():
@@ -1656,6 +1271,7 @@ class WebPortal:
             "config": cfg_name,
             "strategy": strat_name,
             "timerange": timerange,
+            "engine": engine,
             "status": "queued",
             "exit_code": None,
             "created_at": datetime.now(UTC).isoformat(),
@@ -1714,6 +1330,8 @@ class WebPortal:
             cmd += ["-s", job["strategy"]]
         if job.get("timerange"):
             cmd += ["--timerange", job["timerange"]]
+        if job.get("engine") == "rust":
+            cmd += ["--engine", "rust"]
 
         job["log"].append(f"$ {' '.join(cmd)}")
         try:
@@ -2340,9 +1958,6 @@ class WebPortal:
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Backtest timing counterfactual analysis
-    # ------------------------------------------------------------------
     def _datadir(self) -> Path:
         if self.config.get("datadir"):
             return Path(self.config["datadir"])
@@ -2428,182 +2043,6 @@ class WebPortal:
         records = _json.loads(df[cols].to_json(orient="records"))
 
         return {"pair": pair, "timeframe": tf, "candles": records}
-
-    # ------------------------------------------------------------------
-    # Backtest timing — refactored prepare/compute/sweep pipeline
-    # ------------------------------------------------------------------
-    def _bt_prepare_timing(self, name: str):
-        """
-        Load a backtest result + per-pair OHLCV once, resolve every trade to
-        candle indices and numpy OHLC slices, and return the prepared list
-        ready for cheap repeated window evaluation.
-        """
-        from datetime import datetime
-        import bisect
-
-        bt = self._load_backtest(name)
-        trades, tf, trading_mode = self._bt_extract_trades_and_meta(bt)
-        if not tf:
-            raise HTTPException(status_code=400, detail="Backtest result missing timeframe")
-
-        try:
-            from VulcanTrader.data.history import load_pair_history
-            from VulcanTrader.enums import CandleType, TradingMode
-        except Exception as exc:  # pragma: no cover
-            raise HTTPException(status_code=500, detail=f"history loader unavailable: {exc}")
-
-        datadir = self._datadir()
-        if not datadir.is_dir():
-            raise HTTPException(status_code=400, detail=f"datadir not found: {datadir}")
-        data_format = self.config.get("dataformat_ohlcv", "feather")
-        try:
-            tm_enum = TradingMode(trading_mode) if trading_mode else TradingMode.SPOT
-        except Exception:
-            tm_enum = TradingMode.SPOT
-        candle_type = CandleType.get_default(tm_enum.value)
-
-        df_cache: dict[str, Any] = {}
-        arr_cache: dict[str, dict] = {}
-
-        def _df_for(pair: str):
-            if pair in df_cache:
-                return df_cache[pair]
-            try:
-                df = load_pair_history(
-                    pair=pair,
-                    timeframe=tf,
-                    datadir=datadir,
-                    data_format=data_format,
-                    candle_type=candle_type,
-                )
-            except Exception:
-                df = None
-            df_cache[pair] = df
-            return df
-
-        def _arrays_for(pair: str):
-            if pair in arr_cache:
-                return arr_cache[pair]
-            df = _df_for(pair)
-            entry: dict | None = None
-            if df is not None and len(df) and "date" in df.columns:
-                try:
-                    # Normalise to integer seconds regardless of pandas datetime resolution
-                    # (pandas 2.0+ stores feather as datetime64[ms,UTC] so .astype("int64")
-                    #  gives milliseconds, not nanoseconds — dividing by 10**9 would be wrong).
-                    _dc = df["date"]
-                    if hasattr(_dc.dtype, "tz") and _dc.dtype.tz is not None:
-                        _dc = _dc.dt.tz_convert("UTC").dt.tz_localize(None)
-                    date_ts = _dc.astype("datetime64[s]").astype("int64").to_numpy()
-                    entry = {
-                        "date_ts": date_ts,
-                        "highs": df["high"].to_numpy(),
-                        "lows": df["low"].to_numpy(),
-                        "closes": df["close"].to_numpy(),
-                        "n": int(len(date_ts)),
-                    }
-                except Exception:
-                    entry = None
-            arr_cache[pair] = entry  # type: ignore[assignment]
-            return entry
-
-        def _to_ts(v: Any) -> float | None:
-            if v is None:
-                return None
-            try:
-                if isinstance(v, (int, float)):
-                    return float(v) / 1000.0 if v > 1e12 else float(v)
-                if isinstance(v, datetime):
-                    return v.timestamp()
-                s = str(v).replace("Z", "+00:00")
-                return datetime.fromisoformat(s).timestamp()
-            except Exception:
-                return None
-
-        prepared: list[dict] = []
-        skipped = 0
-
-        for idx, t in enumerate(trades):
-            pair = t.get("pair")
-            open_ts = _to_ts(t.get("open_date") or t.get("open_timestamp"))
-            close_ts = _to_ts(t.get("close_date") or t.get("close_timestamp"))
-            open_rate = float(t.get("open_rate") or 0)
-            close_rate = float(t.get("close_rate") or 0)
-            amount = float(t.get("amount") or 0)
-            is_short = bool(t.get("is_short", False))
-            leverage = float(t.get("leverage") or 1) or 1.0
-            fee_open = float(t.get("fee_open") or 0)
-            fee_close = float(t.get("fee_close") or 0)
-            actual_pnl = float(
-                t.get("profit_abs")
-                if t.get("profit_abs") is not None
-                else t.get("close_profit_abs") or 0
-            )
-            profit_ratio = float(
-                t.get("profit_ratio")
-                if t.get("profit_ratio") is not None
-                else t.get("close_profit") or 0
-            )
-            exit_reason = (t.get("exit_reason") or "").lower()
-
-            if not pair or open_ts is None or close_ts is None or open_rate <= 0:
-                skipped += 1
-                continue
-
-            arrs = _arrays_for(pair)
-            if arrs is None:
-                skipped += 1
-                continue
-
-            date_ts = arrs["date_ts"]
-            n = arrs["n"]
-            i_open = max(0, bisect.bisect_right(date_ts, open_ts) - 1)
-            i_close = max(0, bisect.bisect_right(date_ts, close_ts) - 1)
-            if i_close < i_open:
-                i_close = i_open
-
-            # Reject trades whose timestamps fall completely outside the candle file.
-            # bisect maps out-of-range timestamps to index 0 or n-1, producing nonsense results.
-            candle_period = float(date_ts[1] - date_ts[0]) if n >= 2 else 0.0
-            if open_ts < date_ts[0] - candle_period or open_ts > date_ts[-1] + candle_period:
-                skipped += 1
-                continue
-
-            prepared.append({
-                "trade_id": t.get("trade_id", idx),
-                "pair": pair,
-                "is_short": is_short,
-                "leverage": leverage,
-                "amount": amount,
-                "fee_open": fee_open,
-                "fee_close": fee_close,
-                "actual_pnl": actual_pnl,
-                "profit_ratio": profit_ratio,
-                "exit_reason": exit_reason,
-                "raw_exit_reason": t.get("exit_reason"),
-                "open_rate": open_rate,
-                "close_rate": close_rate,
-                "open_date_iso": _iso(t.get("open_date")),
-                "close_date_iso": _iso(t.get("close_date")),
-                "i_open": int(i_open),
-                "i_close": int(i_close),
-                "n": int(n),
-                "highs": arrs["highs"],
-                "lows": arrs["lows"],
-                "closes": arrs["closes"],
-                "date_ts": date_ts,
-            })
-
-        # Extract starting capital (same pattern as regime analysis)
-        starting_capital = 1000.0
-        if isinstance(bt.get("strategy"), dict):
-            for _sd in bt["strategy"].values():
-                starting_capital = float(
-                    _sd.get("starting_balance") or _sd.get("dry_run_wallet") or 1000.0
-                )
-                break
-
-        return prepared, skipped, tf, starting_capital
 
     @staticmethod
     def _sim_metrics(
@@ -2710,378 +2149,7 @@ class WebPortal:
             "expectancy_r": round(expectancy_r, 4),
         }
 
-    def _compute_bt_timing_for(
-        self,
-        prepared: list[dict],
-        skipped: int,
-        tf: str,
-        *,
-        entry_window: int,
-        exit_window: int,
-        sl_horizon: int,
-        starting_capital: float = 1000.0,
-        with_rows: bool = True,
-    ) -> dict:
-        """Run window analysis over already-prepared trades for one combo."""
-        rows: list[dict] = []
-        sl_actual_pnl_total = 0.0
-        sl_hyp_pnl_total = 0.0
-        sl_count = 0
-        sl_recovered = 0
-        sl_profitable = 0
-        entry_improvement_total = 0.0
-        exit_improvement_total = 0.0
-        improvable_entry = 0
-        improvable_exit = 0
-        earlier_exits = 0
-        later_exits = 0
-        sl_gw = sl_gl = 0.0
-        sl_hyp_gw = sl_hyp_gl = 0.0
-        # Scenario accumulators for simulated metrics
-        _sc_pnl_actual: list[float] = []
-        _sc_pnl_entry: list[float] = []
-        _sc_pnl_exit: list[float] = []
-        _sc_pnl_both: list[float] = []
-        _sc_ratio_actual: list[float] = []
-        _sc_ratio_entry: list[float] = []
-        _sc_ratio_exit: list[float] = []
-        _sc_ratio_both: list[float] = []
-        _sc_open_dates: list[str] = []
-        _sc_close_dates: list[str] = []
-        # Lag curves: for each fixed delta, track [count, sum_improvement, count_positive]
-        # Entry: "if I always enter delta bars after signal, avg improvement vs actual"
-        # Exit:  "if I always exit delta bars vs actual close, avg improvement vs actual"
-        _entry_lag: dict[int, list] = {}
-        _exit_lag: dict[int, list] = {}
 
-        for p in prepared:
-            is_short = p["is_short"]
-            leverage = p["leverage"]
-            amount = p["amount"]
-            fee_open = p["fee_open"]
-            fee_close = p["fee_close"]
-            actual_pnl = p["actual_pnl"]
-            exit_reason = p["exit_reason"]
-            open_rate = p["open_rate"]
-            close_rate = p["close_rate"]
-            i_open = p["i_open"]
-            i_close = p["i_close"]
-            n = p["n"]
-            highs = p["highs"]
-            lows = p["lows"]
-            closes = p["closes"]
-            date_ts = p["date_ts"]
-
-            # ---- best entry (symmetric) ----
-            ent_lo = max(0, i_open - entry_window)
-            ent_hi = min(n, i_open + entry_window + 1)
-            seg_lo = lows[ent_lo:ent_hi]
-            seg_hi = highs[ent_lo:ent_hi]
-            if is_short:
-                local = seg_hi.argmax() if seg_hi.size else 0
-                best_entry_rate = float(seg_hi[local]) if seg_hi.size else open_rate
-                entry_diff = best_entry_rate - open_rate
-            else:
-                local = seg_lo.argmin() if seg_lo.size else 0
-                best_entry_rate = float(seg_lo[local]) if seg_lo.size else open_rate
-                entry_diff = open_rate - best_entry_rate
-            best_entry_idx = ent_lo + int(local)
-            entry_improvement_abs = entry_diff * amount * leverage
-            if entry_improvement_abs > 1e-9:
-                improvable_entry += 1
-                entry_improvement_total += entry_improvement_abs
-
-            # Lag curve: for each fixed FORWARD delta from 0 to +window,
-            # compute the P&L improvement vs actual if we always entered at that offset.
-            # Negative deltas are excluded — looking back before the signal is not actionable
-            # and trivially shows higher prices for shorts / lower prices for longs because
-            # the strategy enters during trends (the market was at better levels before entry).
-            # Uses the candle low (longs) / high (shorts) — limit-order fill assumption.
-            for _d in range(0, entry_window + 1):
-                _idx = i_open + _d
-                if 0 <= _idx < n:
-                    _rate = float(lows[_idx]) if not is_short else float(highs[_idx])
-                    _imp = (open_rate - _rate if not is_short else _rate - open_rate) * amount * leverage
-                    _r = _entry_lag.setdefault(_d, [0, 0.0, 0])
-                    _r[0] += 1
-                    _r[1] += _imp
-                    _r[2] += 1 if _imp > 0 else 0
-
-            # ---- MFE / MAE during actual hold ----
-            hold_lo = i_open
-            hold_hi = min(n, i_close + 1)
-            hold_high = float(highs[hold_lo:hold_hi].max()) if hold_hi > hold_lo else open_rate
-            hold_low = float(lows[hold_lo:hold_hi].min()) if hold_hi > hold_lo else open_rate
-            if is_short:
-                mfe_pct = (open_rate - hold_low) / open_rate * leverage
-                mae_pct = (hold_high - open_rate) / open_rate * leverage
-            else:
-                mfe_pct = (hold_high - open_rate) / open_rate * leverage
-                mae_pct = (open_rate - hold_low) / open_rate * leverage
-
-            # ---- best exit (symmetric around actual close) ----
-            xw = max(0, int(exit_window))
-            exit_lo = max(i_open, i_close - xw)
-            exit_hi = min(n, i_close + xw + 1)
-            xseg_hi = highs[exit_lo:exit_hi]
-            xseg_lo = lows[exit_lo:exit_hi]
-            if is_short:
-                local_e = xseg_lo.argmin() if xseg_lo.size else 0
-                best_exit_rate = float(xseg_lo[local_e]) if xseg_lo.size else close_rate
-                exit_diff = close_rate - best_exit_rate
-            else:
-                local_e = xseg_hi.argmax() if xseg_hi.size else 0
-                best_exit_rate = float(xseg_hi[local_e]) if xseg_hi.size else close_rate
-                exit_diff = best_exit_rate - close_rate
-            best_exit_idx = exit_lo + int(local_e)
-            exit_improvement_abs = exit_diff * amount * leverage
-            exit_bars_offset = int(best_exit_idx - i_close)
-            if exit_improvement_abs > 1e-9:
-                improvable_exit += 1
-                exit_improvement_total += exit_improvement_abs
-                if exit_bars_offset < 0:
-                    earlier_exits += 1
-                elif exit_bars_offset > 0:
-                    later_exits += 1
-
-            # Lag curve: for each fixed delta from -window to +window,
-            # compute improvement vs actual if we always exited at that offset.
-            # Uses close price — market order at that candle's close.
-            for _d in range(-exit_window, exit_window + 1):
-                _idx = i_close + _d
-                if i_open <= _idx < n:
-                    _rate = float(closes[_idx])
-                    _imp = (_rate - close_rate if not is_short else close_rate - _rate) * amount * leverage
-                    _r = _exit_lag.setdefault(_d, [0, 0.0, 0])
-                    _r[0] += 1
-                    _r[1] += _imp
-                    _r[2] += 1 if _imp > 0 else 0
-
-            # ---- SL bypass ----
-            sl_info = None
-            is_sl = "stop" in exit_reason
-            if is_sl:
-                sl_count += 1
-                sl_actual_pnl_total += actual_pnl
-                if actual_pnl > 0:
-                    sl_gw += actual_pnl
-                else:
-                    sl_gl += abs(actual_pnl)
-
-                horizon_lo = max(0, i_close + 1)
-                horizon_hi = min(n, i_close + 1 + sl_horizon)
-                hyp_exit_idx = horizon_hi - 1 if horizon_hi > horizon_lo else None
-
-                if hyp_exit_idx is not None:
-                    hyp_exit_rate = float(closes[hyp_exit_idx])
-                    h_hi = highs[horizon_lo:horizon_hi]
-                    h_lo = lows[horizon_lo:horizon_hi]
-                    if is_short:
-                        best_after = float(h_lo.min()) if h_lo.size else hyp_exit_rate
-                        worst_after = float(h_hi.max()) if h_hi.size else hyp_exit_rate
-                        hyp_pnl_per_unit = open_rate - hyp_exit_rate
-                        max_dd_after_pct = (worst_after - open_rate) / open_rate * leverage
-                    else:
-                        best_after = float(h_hi.max()) if h_hi.size else hyp_exit_rate
-                        worst_after = float(h_lo.min()) if h_lo.size else hyp_exit_rate
-                        hyp_pnl_per_unit = hyp_exit_rate - open_rate
-                        max_dd_after_pct = (open_rate - worst_after) / open_rate * leverage
-
-                    fee_factor = 1.0 - (fee_open + fee_close)
-                    hyp_pnl_abs = hyp_pnl_per_unit * amount * leverage * fee_factor
-                    hyp_pnl_pct = (
-                        (hyp_pnl_per_unit / open_rate) * leverage if open_rate else 0.0
-                    )
-
-                    if is_short:
-                        recovered = bool((h_lo <= open_rate).any()) if h_lo.size else False
-                    else:
-                        recovered = bool((h_hi >= open_rate).any()) if h_hi.size else False
-                    profitable = hyp_pnl_abs > 0
-
-                    if profitable:
-                        sl_profitable += 1
-                    if recovered:
-                        sl_recovered += 1
-                    sl_hyp_pnl_total += hyp_pnl_abs
-                    if hyp_pnl_abs > 0:
-                        sl_hyp_gw += hyp_pnl_abs
-                    else:
-                        sl_hyp_gl += abs(hyp_pnl_abs)
-
-                    if with_rows:
-                        sl_info = {
-                            "horizon_bars": int(horizon_hi - horizon_lo),
-                            "hyp_exit_idx_offset": int(hyp_exit_idx - i_close),
-                            "hyp_exit_reason": "horizon",
-                            "hyp_exit_rate": hyp_exit_rate,
-                            "hyp_exit_date": _ts_to_iso(date_ts[hyp_exit_idx]),
-                            "best_rate_after_sl": best_after,
-                            "max_drawdown_after_sl_pct": float(max_dd_after_pct),
-                            "hypothetical_pnl_abs": float(hyp_pnl_abs),
-                            "hypothetical_pnl_pct": float(hyp_pnl_pct),
-                            "would_have_recovered": recovered,
-                            "would_have_been_profitable": profitable,
-                            "pnl_delta_vs_actual": float(hyp_pnl_abs - actual_pnl),
-                        }
-
-            # Accumulate scenario data for portfolio-level simulated metrics.
-            # stake = notional position size (amount * open_rate / leverage already
-            # includes leverage in the dollar P&L, so we divide it back out here to
-            # get the actual capital at risk = cost of the position before leverage).
-            _stake = (p["amount"] * p["open_rate"] / p["leverage"]) if p["leverage"] else 0.0
-            _pnl_e = actual_pnl + entry_improvement_abs
-            _pnl_x = actual_pnl + exit_improvement_abs
-            _pnl_b = actual_pnl + entry_improvement_abs + exit_improvement_abs
-            _sc_pnl_actual.append(actual_pnl)
-            _sc_pnl_entry.append(_pnl_e)
-            _sc_pnl_exit.append(_pnl_x)
-            _sc_pnl_both.append(_pnl_b)
-            if _stake > 0:
-                _sc_ratio_actual.append(actual_pnl / _stake)
-                _sc_ratio_entry.append(_pnl_e / _stake)
-                _sc_ratio_exit.append(_pnl_x / _stake)
-                _sc_ratio_both.append(_pnl_b / _stake)
-            _sc_open_dates.append(p["open_date_iso"] or "")
-            _sc_close_dates.append(p["close_date_iso"] or "")
-
-            if with_rows:
-                rows.append({
-                    "trade_id": p["trade_id"],
-                    "pair": p["pair"],
-                    "is_short": is_short,
-                    "open_date": p["open_date_iso"],
-                    "close_date": p["close_date_iso"],
-                    "open_rate": open_rate,
-                    "close_rate": close_rate,
-                    "actual_pnl_abs": actual_pnl,
-                    "exit_reason": p["raw_exit_reason"],
-                    "best_entry_rate": best_entry_rate,
-                    "best_entry_date": _ts_to_iso(date_ts[best_entry_idx])
-                        if best_entry_idx < n else None,
-                    "entry_improvement_abs": float(entry_improvement_abs),
-                    "best_exit_rate": best_exit_rate,
-                    "best_exit_date": _ts_to_iso(date_ts[best_exit_idx])
-                        if best_exit_idx < n else None,
-                    "exit_improvement_abs": float(exit_improvement_abs),
-                    "exit_bars_offset": exit_bars_offset,
-                    "mfe_pct": float(mfe_pct),
-                    "mae_pct": float(mae_pct),
-                    "sl_bypass": sl_info,
-                })
-
-        sl_pf_actual = (
-            (sl_gw / sl_gl) if sl_gl > 0 else (float("inf") if sl_gw > 0 else 0.0)
-        )
-        sl_pf_hyp = (
-            (sl_hyp_gw / sl_hyp_gl)
-            if sl_hyp_gl > 0
-            else (float("inf") if sl_hyp_gw > 0 else 0.0)
-        )
-
-        analyzed = len(prepared)
-        summary = {
-            "trades_analyzed": analyzed,
-            "trades_skipped": skipped,
-            "improvable_entries": improvable_entry,
-            "improvable_exits": improvable_exit,
-            "earlier_exits": earlier_exits,
-            "later_exits": later_exits,
-            "total_entry_improvement_abs": float(entry_improvement_total),
-            "total_exit_improvement_abs": float(exit_improvement_total),
-            "avg_entry_improvement_abs": (
-                entry_improvement_total / analyzed if analyzed else 0.0
-            ),
-            "avg_exit_improvement_abs": (
-                exit_improvement_total / analyzed if analyzed else 0.0
-            ),
-            "sl_count": sl_count,
-            "sl_recovered_count": sl_recovered,
-            "sl_profitable_count": sl_profitable,
-            "sl_actual_total_pnl_abs": float(sl_actual_pnl_total),
-            "sl_hypothetical_total_pnl_abs": float(sl_hyp_pnl_total),
-            "sl_pnl_delta_abs": float(sl_hyp_pnl_total - sl_actual_pnl_total),
-            "sl_profit_factor_actual": (
-                None if sl_pf_actual == float("inf") else float(sl_pf_actual)
-            ),
-            "sl_profit_factor_hypothetical": (
-                None if sl_pf_hyp == float("inf") else float(sl_pf_hyp)
-            ),
-        }
-        # Serialise lag curves: avg improvement at each fixed bar offset
-        def _lag_to_list(d: dict) -> list[dict]:
-            out = []
-            for delta in sorted(d):
-                cnt, total, pos = d[delta]
-                out.append({
-                    "delta": delta,
-                    "count": cnt,
-                    "avg_improvement": round(total / cnt, 2) if cnt else 0.0,
-                    "pct_better": round(pos / cnt * 100, 1) if cnt else 0.0,
-                })
-            return out
-
-        entry_lag_curve = _lag_to_list(_entry_lag)
-        exit_lag_curve = _lag_to_list(_exit_lag)
-
-        # Compute simulated portfolio metrics for all four timing scenarios
-        _common = dict(
-            open_dates_iso=_sc_open_dates,
-            close_dates_iso=_sc_close_dates,
-            starting_capital=starting_capital,
-        )
-        simulated_metrics = {
-            "actual":     self._sim_metrics(_sc_pnl_actual, _sc_ratio_actual, **_common),
-            "best_entry": self._sim_metrics(_sc_pnl_entry,  _sc_ratio_entry,  **_common),
-            "best_exit":  self._sim_metrics(_sc_pnl_exit,   _sc_ratio_exit,   **_common),
-            "best_both":  self._sim_metrics(_sc_pnl_both,   _sc_ratio_both,   **_common),
-        }
-
-        return {
-            "trades": rows,
-            "summary": summary,
-            "simulated_metrics": simulated_metrics,
-            "entry_lag_curve": entry_lag_curve,
-            "exit_lag_curve": exit_lag_curve,
-            "params": {
-                "entry_window": int(entry_window),
-                "exit_window": int(exit_window),
-                "sl_horizon": int(sl_horizon),
-                "timeframe": tf,
-                "starting_capital": starting_capital,
-            },
-        }
-
-    def _analyse_backtest_timing(
-        self,
-        *,
-        name: str,
-        entry_window: int,
-        exit_window: int,
-        sl_horizon: int,
-    ) -> dict:
-        """One-shot timing analysis for a backtest result."""
-        prepared, skipped, tf, starting_capital = self._bt_prepare_timing(name)
-        if not prepared:
-            return {
-                "trades": [],
-                "summary": _empty_timing_summary(),
-                "simulated_metrics": None,
-                "params": {
-                    "entry_window": int(entry_window),
-                    "exit_window": int(exit_window),
-                    "sl_horizon": int(sl_horizon),
-                    "timeframe": tf,
-                    "starting_capital": starting_capital,
-                },
-            }
-        return self._compute_bt_timing_for(
-            prepared, skipped, tf,
-            entry_window=entry_window,
-            exit_window=exit_window,
-            sl_horizon=sl_horizon,
-            starting_capital=starting_capital,
-        )
 
     # ------------------------------------------------------------------
     # Regime analysis
@@ -3345,27 +2413,37 @@ class WebPortal:
         mae_arr = np.array([r["mae"] for r in trade_rows])
         mfe_arr = np.array([r["mfe"] for r in trade_rows])
         pnl_arr = np.array([r["pnl_pct"] for r in trade_rows])
-        cluster_results: list[dict] = []
-        recommended_tp: float | None = None
-        recommended_sl: float | None = None
-        km_labels_arr = np.full(len(trade_rows), -1, dtype=int)
+        def _cluster_rows(rows: list[dict], assign_labels: bool = False) -> tuple[list[dict], float | None, float | None]:
+            """K-Means the (MAE, MFE) shape of `rows` into setup 'types'.
 
-        if len(trade_rows) >= max(3, n_clusters):
+            Returns (clusters, recommended_tp, recommended_sl). Used for the
+            global view AND per-regime, so a regime shows its OWN centroids
+            rather than the global ones. `assign_labels` writes each row's
+            cluster id back (only the global pass does this, so the scatter's
+            cluster field stays globally consistent).
+            """
+            out: list[dict] = []
+            if len(rows) < max(3, n_clusters):
+                return out, None, None
             try:
                 from sklearn.cluster import KMeans
                 from sklearn.preprocessing import StandardScaler
 
-                n_k = max(2, min(n_clusters, len(trade_rows) // 10))
-                X = np.column_stack([mae_arr, mfe_arr])
+                r_mae = np.array([r["mae"] for r in rows])
+                r_mfe = np.array([r["mfe"] for r in rows])
+                n_k = max(2, min(n_clusters, len(rows) // 10))
+                if n_k > len(rows):
+                    return out, None, None
+                X = np.column_stack([r_mae, r_mfe])
                 scaler = StandardScaler()
                 X_sc = scaler.fit_transform(X)
                 km = KMeans(n_clusters=n_k, n_init=10, random_state=42)
-                km_labels_arr = km.fit_predict(X_sc).astype(int)
+                labels = km.fit_predict(X_sc).astype(int)
                 centers = scaler.inverse_transform(km.cluster_centers_)
 
                 for ci in range(n_k):
-                    mask = km_labels_arr == ci
-                    ct = [r for r, m in zip(trade_rows, mask) if m]
+                    mask = labels == ci
+                    ct = [r for r, m in zip(rows, mask) if m]
                     if not ct:
                         continue
                     wins_c  = [r for r in ct if r["win"]]
@@ -3377,7 +2455,7 @@ class WebPortal:
                     c_mae   = float(max(0.0, centers[ci][0]))
                     # 1R = the cluster's adverse-excursion centroid (its MAE % stop)
                     expect_r = round(expect / c_mae, 3) if c_mae > 0.01 else None
-                    cluster_results.append({
+                    out.append({
                         "id":           int(ci),
                         "mae":          round(c_mae, 3),
                         "mfe":          round(float(max(0.0, centers[ci][1])), 3),
@@ -3391,19 +2469,23 @@ class WebPortal:
                         "is_dominant":  False,
                     })
 
-                for idx, row in enumerate(trade_rows):
-                    row["cluster"] = int(km_labels_arr[idx])
+                if assign_labels:
+                    for idx, row in enumerate(rows):
+                        row["cluster"] = int(labels[idx])
 
-                if cluster_results:
-                    # Dominant = highest expectancy × size (balances quality and frequency)
-                    best_c = max(cluster_results, key=lambda c: c["expectancy"] * c["size"])
-                    for c in cluster_results:
-                        c["is_dominant"] = c["id"] == best_c["id"]
-                    recommended_tp = best_c["mfe"]
-                    recommended_sl = best_c["mae"]
+                if not out:
+                    return out, None, None
+                # Dominant = highest expectancy × size (balances quality and frequency)
+                best_c = max(out, key=lambda c: c["expectancy"] * c["size"])
+                for c in out:
+                    c["is_dominant"] = c["id"] == best_c["id"]
+                return out, best_c["mfe"], best_c["mae"]
 
             except Exception as _ke:
                 logger.warning(f"MAE/MFE K-means failed: {_ke}")
+                return out, None, None
+
+        cluster_results, recommended_tp, recommended_sl = _cluster_rows(trade_rows, assign_labels=True)
 
         # --- Expectancy model (shared by global + per-regime) ------------
         # Two implementations:
@@ -3554,7 +2636,15 @@ class WebPortal:
         for regime in sorted(set(r["regime"] for r in trade_rows)):
             rr = [row for row in trade_rows if row["regime"] == regime]
             if rr:
-                per_regime[regime] = _bucket_stats(rr)
+                stats = _bucket_stats(rr)
+                # This regime's OWN cluster centroids, so selecting a regime in
+                # the View dropdown shows stars for that regime rather than the
+                # global ones (which sit outside the filtered scatter).
+                r_clusters, r_tp, r_sl = _cluster_rows(rr)
+                stats["clusters"] = r_clusters
+                stats["cluster_tp"] = r_tp
+                stats["cluster_sl"] = r_sl
+                per_regime[regime] = stats
 
         # --- Global stats ------------------------------------------------
         global_stats = {

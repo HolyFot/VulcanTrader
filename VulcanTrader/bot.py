@@ -172,6 +172,7 @@ def _build_args_dict(args: argparse.Namespace, configs: list[str]) -> dict[str, 
         "db_url",
         "dry_run",
         "exportfilename",
+        "engine",
     ):
         v = getattr(args, key, None)
         if v not in (None, [], ""):
@@ -230,6 +231,8 @@ async def _run_one_backtest(args_dict: dict[str, Any]) -> dict[str, Any]:
 
     def _go() -> dict[str, Any]:
         config = _load_configuration(args_dict, RunMode.BACKTEST)
+        if args_dict.get("engine"):
+            config["engine"] = args_dict["engine"]
         bt = Backtesting(config)
         bt.start()
         return {
@@ -594,6 +597,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("-s", "--strategy", help="Strategy class name (single run).")
     p_bt.add_argument("--strategies", nargs="+", help="Multiple strategy names — run in parallel.")
     p_bt.add_argument("--strategy-path", dest="strategy_path", help="Override strategy search path.")
+    p_bt.add_argument("--engine", choices=["python", "rust"], default="python",
+                      help="Backtest engine: 'python' (full-fidelity) or 'rust' (fast, simplified).")
     p_bt.add_argument("--timeframe", "-i", help="Override strategy timeframe (e.g. 5m, 1h).")
     p_bt.add_argument("--timerange", help="Backtest timerange, e.g. 20240101-20240601.")
     p_bt.add_argument("--pairs", "-p", nargs="+", help="Restrict to these pairs.")

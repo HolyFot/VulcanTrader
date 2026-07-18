@@ -261,9 +261,17 @@ must equal its cdylib name; the `[package]` is still `backtester`).
 
 There is **no** `src/strategies/` — strategy ports were removed; strategies live
 in Python. The `Strategy` trait and `&dyn Strategy` engine interface remain but
-are exercised only by the crate's own Rust tests. The engine is not yet invoked
-by the `backtest` CLI command (that still uses Python `backtesting.py`); today
-its only Python-facing use is the indicator bridge.
+are exercised only by the crate's own Rust tests.
+
+**The engine is reachable from Python** via `backtest -c … --engine rust` (and
+the portal's Engine dropdown). Flow: `backtesting.py::backtest()` branches to
+`_backtest_rust()` when `config["engine"]=="rust"` → `VulcanTrader/rust_backtest.py`
+computes the strategy's signals the normal way, calls the bridge's
+`run_backtest` (`src/python.rs` → `cpu_engine::unified_backtest`) per pair/
+direction, and formats trades into the standard `BT_DATA_COLUMNS` DataFrame so
+`generate_backtest_stats` + the portal work unchanged. It's a fast, **simplified**
+simulator (single position per pair, fixed sizing, no `leverage()`/`custom_*`
+callbacks / DCA / protections) — see `rust_backtest.py` for the caveats.
 
 ### Feature gating (important)
 
@@ -289,6 +297,11 @@ Index → series map is documented in `AllIndicatorsDemoStrategy` (indices 0–2
 rsi, sma10/20/50, ema9/21/55, macd/signal/hist, bb_pos/upper/mid/lower, atr,
 roc, mfi, cci, adx, fvg, vwap, chop, trend_eff). Periods are **fixed** (RSI 14,
 ATR 14, …) — a strategy needing a tunable period must compute that one itself.
+
+`src/python.rs` also exposes `run_backtest(open, high, low, close, volume, rsi,
+macd_hist, bb_pos, atr, cci, entry_signals, exit_signals, direction,
+config_json)` — the `--engine rust` path (see above). `config_json` maps to
+`UnifiedBacktestConfig` fields (which now derive `serde::Deserialize`, `#[serde(default)]`).
 
 ### Strategy authoring pattern
 

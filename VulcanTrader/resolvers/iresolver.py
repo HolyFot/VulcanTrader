@@ -139,9 +139,15 @@ class IResolver:
         :return: object class
         """
         logger.debug(f"Searching for {cls.object_type.__name__} {object_name} in '{directory}'")
-        for entry in directory.iterdir():
-            # Only consider python files
-            if entry.suffix != ".py":
+        if not directory.is_dir():
+            return (None, None)
+        # Recursive so objects can be organised into sub-folders (e.g.
+        # user_data/strategies/examples/). Sorted for deterministic resolution
+        # when the same class name exists in more than one file.
+        for entry in sorted(directory.rglob("*.py")):
+            rel_parts = entry.relative_to(directory).parts
+            # Skip caches, hidden and dunder dirs (e.g. __pycache__).
+            if any(p.startswith((".", "__")) for p in rel_parts[:-1]):
                 logger.debug("Ignoring %s", entry)
                 continue
             if entry.is_symlink() and not entry.is_file():

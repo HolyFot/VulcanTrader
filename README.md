@@ -1,7 +1,7 @@
 # VulcanTrader
 
 A backtesting, live-trading and web-dashboard stack for
-crypto strategies. Based off the latest FreqTrade, we added a better UI built into the project, pair finding,  regime analysis, timing analysis, monthly/daily performance boxes, uncorruptable json DBs, backtesting/hyperopt/pairfinding all in the UI, and a more compact project structure. Also support for Drift & Bitunix exchanges.
+crypto strategies. Based off the latest FreqTrade, we added a better UI built into the project, pair finding,  regime analysis, MAE/MFE analysis, monthly/daily performance boxes, uncorruptable json DBs, backtesting/hyperopt/pairfinding all in the UI, and a more compact project structure. Also support for Drift & Bitunix exchanges.
 
 Drop a Freqtrade-style `IStrategy` subclass into
 [user_data/strategies/](user_data/strategies) and it should run (just rename imports to VulcanTrader).
@@ -115,16 +115,12 @@ The dashboard exposes everything you need day-to-day so you rarely have
 to touch the CLI:
 
 - **Trading** (`/`) — live open/closed trades, wallet balances,
-  per-pair candle charts with strategy plot overlays, pair locks, and
-  the **Trade Timing Analysis** card that scans each closed trade for
-  better entry/exit prices and simulates whether ignoring stoploss
-  exits would have recovered or turned profitable.
+  per-pair candle charts with strategy plot overlays, and pair locks.
 - **Backtester** (`/backtester`) — pick any JSON file from
   `user_data/backtest_results/` and inspect performance metrics,
   monthly/daily breakdowns, equity & drawdown curves, hourly P&L /
-  profit-factor / drawdown, best/worst pairs, and the full per-trade
-  table. The same **Trade Timing Analysis** card is available here and
-  replays each backtest trade against the cached OHLCV.
+  profit-factor / drawdown, best/worst pairs, regime and MAE/MFE
+  analysis, and the full per-trade table.
 - **Backtest results browser** — drop new result files into
   `user_data/backtest_results/`; they show up in the dropdown
   automatically.
@@ -280,8 +276,22 @@ cd VulcanTrader/backtester
 maturin develop --release --features extension-module
 ```
 
-> The `backtest` CLI command runs the Python `backtesting.py` engine; the Rust
-> crate currently feeds Python only through this indicator bridge.
+### Choosing the backtest engine
+
+Backtests run on the Python `backtesting.py` engine by default. Pass
+`--engine rust` to run the fast Rust engine instead — the strategy's Python
+`populate_*` still produces the signals; only the per-candle simulation is done
+in Rust (via `vulcan_rust_indicators.run_backtest`):
+
+```
+python -m VulcanTrader.bot backtest -c configHyper -s DonchianBreakout --engine rust
+```
+
+The web portal's Backtester page has a matching **Engine** dropdown
+(Python / Rust). The Rust engine is a fast, **simplified** simulator — one
+position per pair, fixed sizing, and no `leverage()`/`custom_*` callbacks, DCA,
+or protections — so use it for quick screening and the Python engine for final
+numbers. See `VulcanTrader/rust_backtest.py` for the exact fidelity caveats.
 
 ---
 
