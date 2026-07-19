@@ -535,10 +535,15 @@ def calculate_calmar(
     min_date: datetime | None,
     max_date: datetime | None,
     starting_balance: float,
+    drawdown: "DrawDownResult | None" = None,
 ) -> float:
     """
     Calculate calmar from trades data.
     :param trades: DataFrame containing trades (requires columns close_date and profit_abs)
+    :param drawdown: Optional pre-computed drawdown for `trades`. Callers that
+        already computed it (e.g. `_generate_result_line`) should pass it in —
+        the drawdown series is the most expensive part of this function and
+        recomputing it here doubled the cost for identical inputs.
     :return: calmar
     """
     if (len(trades) == 0) or (min_date is None) or (max_date is None) or (min_date == max_date):
@@ -552,13 +557,14 @@ def calculate_calmar(
     expected_returns_mean = total_profit / days_period * 100
 
     # calculate max drawdown
-    try:
-        drawdown = calculate_max_drawdown(
-            trades, value_col="profit_abs", starting_balance=starting_balance
-        )
-        max_drawdown = drawdown.relative_account_drawdown
-    except ValueError:
-        return 0.0
+    if drawdown is None:
+        try:
+            drawdown = calculate_max_drawdown(
+                trades, value_col="profit_abs", starting_balance=starting_balance
+            )
+        except ValueError:
+            return 0.0
+    max_drawdown = drawdown.relative_account_drawdown
 
     return _calculate_annualized_ratio(expected_returns_mean, max_drawdown)
 

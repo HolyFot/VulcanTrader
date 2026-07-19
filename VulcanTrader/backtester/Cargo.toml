@@ -19,10 +19,13 @@ parking_lot = "0.12"
 rayon = "1"
 # Optional — only compiled for the Python extension build (see [features]).
 pyo3 = { version = "0.22", features = ["abi3-py39"], optional = true }
+# Zero-copy borrowing of numpy buffers. Without this PyO3 extracts arrays
+# element-by-element into Vec<f64>, which dominated bridge time (see python.rs).
+numpy = { version = "0.22", optional = true }
 
 [features]
 # Compile the PyO3 bridge module (src/python.rs).
-python = ["dep:pyo3"]
+python = ["dep:pyo3", "dep:numpy"]
 # What maturin builds with: the bridge plus PyO3's extension-module mode (don't
 # link libpython). Kept OFF for `cargo test`, which links a real interpreter.
 extension-module = ["python", "pyo3/extension-module"]

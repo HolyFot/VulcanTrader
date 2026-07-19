@@ -889,7 +889,7 @@ fn unified_backtest_pythonstyle(
                 (time_in_position >= config.roi_period_30 && leveraged_bound_return >= config.roi_15) ||
                 (time_in_position >= config.roi_period_720 && leveraged_bound_return >= config.roi_720)
             );
-            let signal_exit_triggered = exit_signals[i] > 0;
+            let signal_exit_triggered = exit_signals[i] > 0 && entry_signals[i] == 0; // freqtrade should_exit: `if exit_ and not enter` — a same-direction entry signal on this bar suppresses the exit-signal reading, falling through to whatever else triggers (e.g. trailing stop).
             let cci_exit_triggered = config.cci_exit_enabled && i < cci.len() && {
                 let cci_v = cci[i];
                 (is_long && cci_v > config.cci_overbought) || (!is_long && cci_v < config.cci_oversold)
@@ -925,6 +925,27 @@ fn unified_backtest_pythonstyle(
             if !should_exit && macd_exit_triggered { should_exit = true; exit_reason = ExitReason::MacdExit; }
             if !should_exit && max_hold_triggered { should_exit = true; exit_reason = ExitReason::MaxHoldPeriod; }
 
+            // freqtrade parity: a trailing stop that arms-and-triggers within the
+            // ENTRY candle is placed as an ORDER at the pessimistic price
+            // (open*(1+offset-trail)); if that price is outside this candle's
+            // range the order can't fill, so freqtrade DEFERS the exit to a later
+            // bar (backtesting._exit_trade + _get_order_filled). The stop is
+            // already trailed to `stop_loss_price`, so the normal stop check
+            // catches it on a subsequent bar at that level. Without this the
+            // engine filled the pessimistic price immediately and diverged.
+            if should_exit && exit_reason == ExitReason::TrailingStop && time_in_position == 0 {
+                let trail_dist = config.trailing_offset / trade_leverage;
+                let pess = if is_long {
+                    open_prices[i] * (1.0 + config.trailing_trigger.abs() - trail_dist.abs())
+                } else {
+                    open_prices[i] * (1.0 - config.trailing_trigger.abs() + trail_dist.abs())
+                };
+                let fills_this_candle = if is_long { pess <= high_prices[i] } else { pess >= low_prices[i] };
+                if !fills_this_candle {
+                    should_exit = false;
+                }
+            }
+
             if should_exit {
                 let base_exit_price = match exit_reason {
                     ExitReason::TrailingStop if time_in_position == 0 => {
@@ -939,15 +960,49 @@ fn unified_backtest_pythonstyle(
                             (open_prices[i] * (1.0 - config.trailing_trigger.abs() + trail_dist.abs())).min(high_prices[i])
                         }
                     }
-                    ExitReason::TrailingStop | ExitReason::Stoploss => stop_loss_price,
+                    ExitReason::TrailingStop | ExitReason::Stoploss => {
+                        // freqtrade's `_get_close_rate_for_stoploss`: "our
+                        // stoploss was already lower [for a short: below this
+                        // candle's low] than [the] candle['s own range],
+                        // possibly due to a cancelled trade exit. exit at
+                        // open price." When the ratcheted stop level sits
+                        // entirely outside this candle's [low, high] on the
+                        // side away from the breach, the stop price itself
+                        // was never actually touchable this candle -- use the
+                        // candle's open as the fill instead of the untouched
+                        // stop level. This is what happens the bar AFTER a
+                        // same-candle trailing whipsaw defers past its own
+                        // entry candle: the ratchet stays frozen at a level
+                        // set from the entry candle's own extreme, and by the
+                        // next candle that level can be far outside its range.
+                        if is_long {
+                            if stop_loss_price > high_prices[i] { open_prices[i] } else { stop_loss_price }
+                        } else {
+                            if stop_loss_price < low_prices[i] { open_prices[i] } else { stop_loss_price }
+                        }
+                    }
                     ExitReason::RoiTarget => {
                         let roi_pct = if time_in_position >= config.roi_period_720 && leveraged_bound_return >= config.roi_720 { config.roi_720 / trade_leverage }
                         else if time_in_position >= config.roi_period_30 && leveraged_bound_return >= config.roi_15 { config.roi_15 / trade_leverage }
                         else if time_in_position >= config.roi_period_10 && leveraged_bound_return >= config.roi_3 { config.roi_3 / trade_leverage }
                         else { config.roi_6 / trade_leverage };
-                        let target = if is_long { base_price * (1.0 + roi_pct) } else { base_price * (1.0 - roi_pct) };
+                        // Mirror freqtrade's `_get_close_rate_for_roi` exactly
+                        // rather than the naive `base_price * (1 ± roi_pct)`:
+                        // freqtrade solves for the close_rate that makes
+                        // `calc_profit_ratio` — which bakes fee_open/fee_close
+                        // into open/close trade VALUES, not a flat price offset
+                        // — land exactly on the configured ROI. The naive
+                        // version ignored the entry fee already baked into
+                        // `entry_price`, overshooting every ROI fill by a
+                        // fee-sized amount (~a few bps, but systematic across
+                        // every ROI-tagged trade, and the dominant source of
+                        // ROI-trade profit mismatches against the Python engine).
+                        let side_1: f32 = if is_long { 1.0 } else { -1.0 };
+                        let roi_rate = base_price * roi_pct;
+                        let open_fee_rate = side_1 * base_price * (1.0 + side_1 * fee_rate);
+                        let raw_close = -(roi_rate + open_fee_rate) / (fee_rate - side_1);
                         // Can't fill outside the candle's own actual range.
-                        target.clamp(low_prices[i].min(high_prices[i]), low_prices[i].max(high_prices[i]))
+                        raw_close.clamp(low_prices[i].min(high_prices[i]), low_prices[i].max(high_prices[i]))
                     }
                     // Every other exit type fills at this candle's OPEN in
                     // freqtrade's real backtesting.py (_get_close_rate falls
@@ -1151,7 +1206,7 @@ fn unified_backtest_pythonstyle_joint(
                 (time_in_position >= config.roi_period_30 && leveraged_bound_return >= config.roi_15) ||
                 (time_in_position >= config.roi_period_720 && leveraged_bound_return >= config.roi_720)
             );
-            let signal_exit_triggered = exit_signals[i] > 0;
+            let signal_exit_triggered = exit_signals[i] > 0 && (if is_long { long_entry_signals[i] } else { short_entry_signals[i] }) == 0; // freqtrade should_exit: `if exit_ and not enter`
             let cci_exit_triggered = config.cci_exit_enabled && i < cci.len() && {
                 let cci_v = cci[i];
                 (is_long && cci_v > config.cci_overbought) || (!is_long && cci_v < config.cci_oversold)
@@ -1495,7 +1550,7 @@ fn sweep_dir(
                 (time_in_position >= config.roi_period_30 && leveraged_bound_return >= config.roi_15) ||
                 (time_in_position >= config.roi_period_720 && leveraged_bound_return >= config.roi_720)
             );
-            let signal_exit_triggered = exit_signals[i] > 0;
+            let signal_exit_triggered = exit_signals[i] > 0 && entry_signals[i] == 0; // freqtrade should_exit: `if exit_ and not enter`
             let cci_exit_triggered = config.cci_exit_enabled && i < cci.len() && {
                 let cci_v = cci[i];
                 (is_long && cci_v > config.cci_overbought) || (!is_long && cci_v < config.cci_oversold)

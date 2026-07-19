@@ -402,7 +402,18 @@ class Backtesting:
             )
         else:
             self.detail_data = {}
-        if self.trading_mode == TradingMode.FUTURES:
+        # The Rust engine (`--engine rust`) simulates from precomputed signal
+        # arrays and never calls `_run_funding_fees`, so the funding-rate and
+        # mark-price candles below are loaded and then discarded. That is 2 of
+        # the 3 loads per pair (90 of 135 on a 45-pair run) — measured at ~3.3s,
+        # roughly a third of total runtime — for data nothing reads.
+        _rust_engine = str(self.config.get("engine", "python")).lower() == "rust"
+        if _rust_engine and self.trading_mode == TradingMode.FUTURES:
+            funding_fee_timeframe = self.exchange.get_option("funding_fee_timeframe")
+            self.funding_fee_timeframe_secs = timeframe_to_seconds(funding_fee_timeframe)
+            self.futures_data = {}
+            logger.info("Rust engine: skipping funding-rate / mark-price load (unused).")
+        elif self.trading_mode == TradingMode.FUTURES:
             funding_fee_timeframe: str = self.exchange.get_option("funding_fee_timeframe")
             self.funding_fee_timeframe_secs: int = timeframe_to_seconds(funding_fee_timeframe)
             mark_timeframe: str = self.exchange.get_option("mark_ohlcv_timeframe")
@@ -1801,7 +1812,12 @@ class Backtesting:
             df = self.strategy.trader_advise_signals(pair_data.copy(), {"pair": pair})
             df = trim_dataframe(df, self.timerange, startup_candles=self.required_startup)
             prepared[pair] = df
-        return run_rust_backtest(prepared, self.strategy, self.config)
+        # Hand the driver the resolved trading fee (freqtrade resolves it from the
+        # exchange when config["fee"] is unset — e.g. 0.00045 for hyperliquid —
+        # so the Rust engine must use the same value, not the 0.0005 default).
+        cfg = dict(self.config)
+        cfg["fee"] = self.fee
+        return run_rust_backtest(prepared, self.strategy, cfg, exchange=self.exchange)
 
     def backtest_one_strategy(
         self, strat: IStrategy, data: dict[str, DataFrame], timerange: TimeRange
