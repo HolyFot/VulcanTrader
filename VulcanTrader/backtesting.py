@@ -1804,20 +1804,34 @@ class Backtesting:
         """Rust-engine path (config ``engine: rust``). Computes signals the
         normal way, then hands them to the fast Rust simulator instead of the
         Python ``backtest_loop``. See VulcanTrader/rust_backtest.py for the
-        fidelity caveats."""
+        fidelity caveats.
+
+        Passes BOTH the full (untrimmed) analyzed dataframe and the
+        startup-trimmed one, plus `required_startup`, so the Rust driver can
+        wire the strategy's own `self.dp.get_analyzed_dataframe` (used by
+        `leverage`/`custom_stake_amount`/`confirm_trade_entry` — e.g. the
+        portfolio-risk vetoes in new_risk_management.py that read OTHER open
+        pairs' dataframes) to see exactly the same causally-trimmed data the
+        Python engine's `backtest_loop` would show it at that point, no more.
+        """
         from VulcanTrader.rust_backtest import run_rust_backtest
 
         prepared: dict = {}
+        full_signals: dict = {}
         for pair, pair_data in processed.items():
             df = self.strategy.trader_advise_signals(pair_data.copy(), {"pair": pair})
-            df = trim_dataframe(df, self.timerange, startup_candles=self.required_startup)
-            prepared[pair] = df
+            full_signals[pair] = df
+            prepared[pair] = trim_dataframe(df, self.timerange, startup_candles=self.required_startup)
         # Hand the driver the resolved trading fee (freqtrade resolves it from the
         # exchange when config["fee"] is unset — e.g. 0.00045 for hyperliquid —
         # so the Rust engine must use the same value, not the 0.0005 default).
         cfg = dict(self.config)
         cfg["fee"] = self.fee
-        return run_rust_backtest(prepared, self.strategy, cfg, exchange=self.exchange)
+        return run_rust_backtest(
+            prepared, self.strategy, cfg, exchange=self.exchange,
+            full_signals=full_signals, required_startup=self.required_startup,
+            dataprovider=self.dataprovider,
+        )
 
     def backtest_one_strategy(
         self, strat: IStrategy, data: dict[str, DataFrame], timerange: TimeRange
