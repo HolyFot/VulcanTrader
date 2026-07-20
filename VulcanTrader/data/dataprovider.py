@@ -48,6 +48,12 @@ class DataProvider:
         self._exchange = exchange
         self._pairlists = pairlists
         self.__rpc = rpc
+        # Set by trader_bot.py (VulcanTraderBot._setup_data_server_client()) when
+        # data_server integration is enabled. refresh()/ohlcv()/funding_rate()/
+        # trades() prefer this cache over a direct exchange call when it's set and
+        # actually has the data; None (the default) means "not in use" and every
+        # call behaves exactly as it did before this feature existed.
+        self._data_server_client = None
         self.__cached_pairs: dict[PairWithTimeframe, tuple[DataFrame, datetime]] = {}
         self.__slice_index: dict[str, int] = {}
         self.__slice_date: datetime | None = None
@@ -452,6 +458,36 @@ class DataProvider:
 
     # Exchange functions
 
+    def set_data_server_client(self, client) -> None:
+        """Wire in a VulcanTrader.data_server.DataServerClient - see the
+        `_data_server_client` docstring in __init__ for what this changes."""
+        self._data_server_client = client
+
+    def _refresh_ohlcv_from_data_server(
+        self, pairlist: ListPairsWithTimeframes
+    ) -> ListPairsWithTimeframes:
+        """Try to serve each (pair, timeframe, candle_type) from the data_server
+        cache first, writing hits straight into exchange._klines (the same slot
+        Exchange.refresh_latest_ohlcv() itself populates, so ohlcv()/get_pair_dataframe()
+        downstream are unaffected either way). Returns whichever pairs it *couldn't*
+        currently serve, for the caller to fetch directly from the exchange - so a
+        cold cache, a disconnected client, or any client error degrades to exactly
+        the pre-data_server behavior for those pairs, never blocks, never raises.
+        """
+        remaining: ListPairsWithTimeframes = []
+        for pair_key in pairlist:
+            pair, timeframe, candle_type = pair_key
+            df = None
+            try:
+                df = self._data_server_client.get_ohlcv(pair, timeframe, candle_type.value)
+            except Exception:
+                logger.debug("data_server get_ohlcv failed for %s - falling back", pair_key, exc_info=True)
+            if df is not None and not df.empty:
+                self._exchange._klines[pair_key] = df
+            else:
+                remaining.append(pair_key)
+        return remaining
+
     def refresh(
         self,
         pairlist: ListPairsWithTimeframes,
@@ -463,8 +499,13 @@ class DataProvider:
         if self._exchange is None:
             raise OperationalException(NO_EXCHANGE_EXCEPTION)
         final_pairs = (pairlist + helping_pairs) if helping_pairs else pairlist
-        # refresh latest ohlcv data
-        self._exchange.refresh_latest_ohlcv(final_pairs)
+        # refresh latest ohlcv data - prefer the data_server cache (shared/deduped
+        # across every trader_bot watching this exchange) over a direct exchange
+        # call; whatever it can't currently serve falls back to the exchange.
+        if self._data_server_client is not None:
+            final_pairs = self._refresh_ohlcv_from_data_server(final_pairs)
+        if final_pairs:
+            self._exchange.refresh_latest_ohlcv(final_pairs)
         # refresh latest trades data
         self.refresh_latest_trades(pairlist)
 
@@ -535,6 +576,13 @@ class DataProvider:
         if self.runmode in (RunMode.DRY_RUN, RunMode.LIVE):
             if self._exchange is None:
                 raise OperationalException(NO_EXCHANGE_EXCEPTION)
+            if self._data_server_client is not None:
+                try:
+                    cached = self._data_server_client.get_trades(pair)
+                except Exception:
+                    cached = None
+                if cached is not None and not cached.empty:
+                    return cached.copy() if copy else cached
             _candle_type = (
                 CandleType.from_string(candle_type)
                 if candle_type != ""
@@ -600,6 +648,13 @@ class DataProvider:
         """
         if self._exchange is None:
             raise OperationalException(NO_EXCHANGE_EXCEPTION)
+        if self._data_server_client is not None:
+            try:
+                cached = self._data_server_client.get_funding_rate(pair)
+            except Exception:
+                cached = None
+            if cached:
+                return cached
         try:
             return self._exchange.fetch_funding_rate(pair)
         except ExchangeError:

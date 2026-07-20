@@ -190,6 +190,18 @@ class VulcanTraderBot(LoggingMixin):
         self.pairlists = PairListManager(self.exchange, self.config, self.dataprovider)
         _phase("DataProvider + PairListManager")
 
+        # Shares OHLCV/funding-rate/trades collection with any other trader_bot
+        # process watching the same exchange, instead of each bot independently
+        # hammering the exchange with the same requests. Must be set up before the
+        # initial _refresh_active_whitelist() below so the first registration goes
+        # out immediately at startup, not just on the first process() tick.
+        self._data_server_client = self._setup_data_server_client()
+        self.dataprovider.set_data_server_client(self._data_server_client)
+        # Sentinel (not []) so the very first _refresh_active_whitelist() call
+        # always registers, even for a pairlist that ends up empty.
+        self._data_server_registered_pairs: list[str] | None = None
+        _phase("data_server client setup")
+
         self.dataprovider.add_pairlisthandler(self.pairlists)
 
         # Attach Dataprovider to strategy instance
@@ -257,6 +269,82 @@ class VulcanTraderBot(LoggingMixin):
         self._pending_force_exits: set[int] = set()  # trade IDs
 
         self._last_heartbeat: datetime | None = None  # throttle heartbeat to 1 min
+
+    # ------------------------------------------------------------------
+    # data_server integration (VulcanTrader/data_server.py)
+    # ------------------------------------------------------------------
+    def _setup_data_server_client(self):
+        """Wire this bot in as a client of a data_server master: launches a master
+        if none is running yet (auto-detected via a quick TCP probe), then
+        registers this bot's pair whitelist so its OHLCV/funding-rate/trades
+        collection is shared - deduped - with every other trader_bot process
+        currently watching the same exchange, rather than each bot independently
+        hammering the exchange with the same requests. Multiple bots trading
+        different pairs (or the same ones) on the same exchange all register
+        against the same master; it unions their interest automatically.
+
+        Disable via config ``"data_server": {"enabled": false}``. Any failure
+        here (master unreachable, launch failed, ...) is logged and swallowed -
+        the bot falls back to its own direct exchange polling exactly as it did
+        before this feature existed; it never blocks startup or trading on this.
+        """
+        ds_config = self.config.get("data_server", {})
+        if not ds_config.get("enabled", True):
+            logger.info(
+                "data_server integration disabled via config - using direct exchange polling."
+            )
+            return None
+
+        try:
+            import os
+
+            from VulcanTrader.data_server import DataServerClient, ensure_master_running
+
+            host = ds_config.get("host", "127.0.0.1")
+            port = int(ds_config.get("port", 8720))
+            subserver_port = int(ds_config.get("subserver_port", 8721))
+
+            config_path = self._write_data_server_config()
+            ensure_master_running(host, port, config_path, subserver_port=subserver_port)
+
+            client_id = f"{self.config.get('bot_name', 'trader_bot')}-{os.getpid()}"
+            client = DataServerClient(host, port, self.config["exchange"]["name"], client_id)
+            client.start()
+            logger.info(
+                "data_server client started (client_id=%s, master=%s:%d)",
+                client_id, host, port,
+            )
+            return client
+        except Exception:
+            logger.exception(
+                "Failed to set up the data_server client - continuing with direct "
+                "exchange polling only."
+            )
+            return None
+
+    def _write_data_server_config(self) -> str:
+        """Dump this bot's already-validated, credential-stripped config to a
+        durable file a freshly launched data_server master can load (public
+        market-data access only - no API keys needed). Written under
+        ``<user_data_dir>/data_server_configs/<exchange>.json``, not a throwaway
+        tempfile: the master process reads it independently at its own startup
+        moments later, so it must still exist by then, and keeping one durable
+        file per exchange (rather than per-run) means a bot that dies and gets
+        restarted, or a second bot on the same exchange, reuses the same path.
+        """
+        import json
+        from pathlib import Path
+
+        out_dir = Path(self.config.get("user_data_dir", "user_data")) / "data_server_configs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        exchange_name = self.config["exchange"]["name"]
+        out_path = out_dir / f"{exchange_name}.json"
+        # default=str covers the enum/Path objects Exchange.__init__ injects into
+        # config (trading_mode, margin_mode, candle_type_def, datadir, ...) - these
+        # are all (str, Enum) types whose str() matches the exact value string
+        # Configuration expects back (verified for TradingMode/MarginMode/CandleType).
+        out_path.write_text(json.dumps(self.config, indent=2, default=str))
+        return str(out_path)
 
     # ------------------------------------------------------------------
     # Discord force-exit scheduling (thread-safe)
@@ -699,6 +787,11 @@ class VulcanTraderBot(LoggingMixin):
         # TODO web_portal: was ``self.rpc.cleanup()``.
         # ExternalMessageConsumer shutdown removed (self.emc is always None in this port).
         self.exchange.close()
+        if self._data_server_client is not None:
+            # Disconnecting drops this bot's registration on the master's side
+            # (ClientInterestRegistry.unregister() on socket close), so its pairs
+            # fall out of the collected union unless another bot still wants them.
+            self._data_server_client.stop()
         try:
             Trade.commit()
         except Exception:
@@ -861,6 +954,22 @@ class VulcanTraderBot(LoggingMixin):
         # Called last to include the included pairs
         if _prev_whitelist != _whitelist:
             self._emit({"type": RPCMessageType.WHITELIST, "data": _whitelist})
+
+        # Deliberately NOT gated on the same "_prev_whitelist != _whitelist" check
+        # above: PairListManager.__init__ pre-populates self._whitelist directly
+        # from a static config whitelist, so for StaticPairList that comparison is
+        # already False on this method's very first call ever - registration would
+        # never fire. Track what we last told the data_server independently instead,
+        # so the first call always registers, and later calls only re-send when the
+        # whitelist genuinely changed.
+        if self._data_server_client is not None and _whitelist != self._data_server_registered_pairs:
+            use_public_trades = self.config.get("exchange", {}).get("use_public_trades", False)
+            self._data_server_client.register(
+                _whitelist,
+                want_funding_rate=(self.trading_mode == TradingMode.FUTURES),
+                want_trades=use_public_trades,
+            )
+            self._data_server_registered_pairs = list(_whitelist)
 
         return _whitelist
 
