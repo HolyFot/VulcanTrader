@@ -64,6 +64,7 @@ SUPPORTED_EXCHANGES = [
     "bitget",
     "bitunix",
     "bybit",
+    "coinbase",
     "gate",
     "htx",
     "hyperliquid",

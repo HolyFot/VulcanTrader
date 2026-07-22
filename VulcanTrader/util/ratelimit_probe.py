@@ -61,7 +61,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 if sys.platform == "win32":
@@ -70,8 +69,8 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from VulcanTrader.data_server import _build_config  # reuses the same Configuration-loading path
-from VulcanTrader.enums import CandleType
+from VulcanTrader.config.configuration import Configuration
+from VulcanTrader.enums import CandleType, RunMode
 from VulcanTrader.resolvers import ExchangeResolver
 
 
@@ -211,20 +210,18 @@ def probe_exchange(
     result: dict[str, Any] = {"exchange": exchange_name, "steps": [], "status": "ok"}
 
     config_path = _build_probe_config_file(template, exchange_name, profile, scratch_dir)
-    args = SimpleNamespace(
-        config=[str(config_path)],
-        user_data_dir=str(scratch_dir / "user_data"),
-        pairs=None,
-        timeframes=None,
-        datadir=str(scratch_dir / "data" / exchange_name),
-        exchange=None,
-        verbose=0,
-    )
 
     _ensure_non_ccxt_exchange_registered(exchange_name)
 
     try:
-        config = _build_config(args)
+        config = Configuration(
+            {
+                "config": [str(config_path)],
+                "user_data_dir": str(scratch_dir / "user_data"),
+                "verbosity": 0,
+            },
+            RunMode.UTIL_EXCHANGE,
+        ).get_config()
     except Exception as e:
         logger.exception("Failed to build config for %s", exchange_name)
         result["status"] = f"config_error: {e}"
@@ -411,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             if name not in exchanges:
                 exchanges.append(name)
 
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent
     template_path = Path(args.template) if args.template else repo_root / "user_data/configs/configBinance.json"
     template = json.loads(template_path.read_text())
 

@@ -10,6 +10,7 @@ from VulcanTrader.exchange.bitmart import Bitmart
 from VulcanTrader.exchange.bitpanda import Bitpanda
 from VulcanTrader.exchange.bitunix import Bitunix
 from VulcanTrader.exchange.bybit import Bybit
+from VulcanTrader.exchange.coinbase import Coinbase
 from VulcanTrader.exchange.coinex import Coinex
 from VulcanTrader.exchange.cryptocom import Cryptocom
 from VulcanTrader.exchange.drift import Drift
