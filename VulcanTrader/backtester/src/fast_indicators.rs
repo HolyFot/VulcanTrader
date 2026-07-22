@@ -1808,7 +1808,7 @@ pub fn calculate_cci_rust(high: &[f32], low: &[f32], close: &[f32], period: usiz
     for i in period - 1..n {
         let mut mean_dev_sum = 0.0;
         let ma = sma_tp[i];
-        for j in i - period + 1..=i {
+        for j in (i + 1 - period)..=i {
             mean_dev_sum += (tp[j] - ma).abs();
         }
         let mean_dev = mean_dev_sum / period as f32;

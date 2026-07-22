@@ -97,7 +97,7 @@ from VulcanTrader.exchange.exchange_utils_timeframe import (
 from VulcanTrader.exchange.exchange_types import CcxtOrder
 from VulcanTrader.util.liquidation_price import update_liquidation_prices
 from VulcanTrader.persistence import Order, PairLocks, Trade, init_db
-from VulcanTrader.persistence.key_value_store import set_startup_time
+from VulcanTrader.persistence.key_value_store import KeyValueStore, set_startup_time
 from VulcanTrader.resolvers import ExchangeResolver, StrategyResolver
 from VulcanTrader.strategy.interface import IStrategy
 from VulcanTrader.strategy.strategy_wrapper import strategy_safe_wrapper
@@ -305,7 +305,18 @@ class VulcanTraderBot(LoggingMixin):
             subserver_port = int(ds_config.get("subserver_port", 8721))
 
             config_path = self._write_data_server_config()
-            ensure_master_running(host, port, config_path, subserver_port=subserver_port)
+            # exchange/timeframe are deliberately NOT in the config file (see
+            # its schema comment in data_server.py) - supplied here instead,
+            # dynamically, from THIS bot's own config, exactly the "auto set
+            # by trader_bot.py connecting" behavior requested. A master that's
+            # already running (the common case - one shared master per
+            # exchange) ignores these; they only matter for the launch that
+            # actually creates it.
+            timeframe = self.config.get("timeframe") or getattr(self.strategy, "timeframe", "15m")
+            ensure_master_running(
+                host, port, config_path, subserver_port=subserver_port,
+                extra_args=["--exchange", self.config["exchange"]["name"], "--timeframes", timeframe],
+            )
 
             client_id = f"{self.config.get('bot_name', 'trader_bot')}-{os.getpid()}"
             client = DataServerClient(host, port, self.config["exchange"]["name"], client_id)
@@ -323,27 +334,83 @@ class VulcanTraderBot(LoggingMixin):
             return None
 
     def _write_data_server_config(self) -> str:
-        """Dump this bot's already-validated, credential-stripped config to a
+        """Write data_server's own small, dedicated config format (see the
+        schema comment above `_load_minimal_config` in data_server.py) to a
         durable file a freshly launched data_server master can load (public
-        market-data access only - no API keys needed). Written under
-        ``<user_data_dir>/data_server_configs/<exchange>.json``, not a throwaway
-        tempfile: the master process reads it independently at its own startup
-        moments later, so it must still exist by then, and keeping one durable
-        file per exchange (rather than per-run) means a bot that dies and gets
-        restarted, or a second bot on the same exchange, reuses the same path.
+        market-data access only - no API keys needed, and none are written
+        here). Written to ONE fixed, general path -
+        ``<user_data_dir>/data_server_configs/config.json`` - not one file per
+        exchange: this machine collects for whichever single exchange this bot
+        is configured for, so there's exactly one config to write, matching
+        data_server's own "one general config per machine" convention. Not a
+        throwaway tempfile either: the master process reads it independently
+        at its own startup moments later, so it must still exist by then, and
+        one durable path (rather than per-run) means a bot that dies and gets
+        restarted, or a second bot on the same exchange, reuses the same one.
+
+        Deliberately NOT a dump of this bot's own (freqtrade-shaped) config -
+        data_server has its own minimal, purpose-built schema, independent of
+        whatever trading-specific settings (stake_amount, minimal_roi,
+        stoploss, api_server, ...) this bot happens to have. Only the handful
+        of fields data_server actually reads are extracted here - notably NOT
+        this bot's pair whitelist (data_server's pairlist is always dynamic,
+        the union of every registered client's interest, never config-driven)
+        and NOT exchange/timeframe either (those go to `ensure_master_running`
+        as `--exchange`/`--timeframes` CLI args instead, see the call site
+        above - dynamic per-launch, not baked into this durable file).
+
+        Every bot trading on the same exchange writes to this SAME shared path,
+        typically all within the same second or two of each other at startup
+        (see `ensure_master_running`'s own TOCTOU race, fixed separately in
+        data_server.py). `Path.write_text` is NOT atomic on Windows or POSIX -
+        two processes calling it concurrently can interleave their writes,
+        corrupting the file (confirmed directly: a 5-bot simultaneous launch
+        produced a config with a second config dump's bytes appended after the
+        first's closing brace, a "document root must not be followed by other
+        values" JSON parse error that then took the master itself down at
+        startup). Writing to a per-process tempfile in the same directory and
+        `os.replace`-ing it into place is atomic on both platforms - the file
+        readers ever see is always either the prior complete write or this
+        one's, never a mix of both.
         """
         import json
+        import os
+        import uuid
         from pathlib import Path
+
+        ds_config = self.config.get("data_server", {}) or {}
+        exchange_conf = self.config.get("exchange", {}) or {}
+        # No "exchange"/"timeframe" here - those are supplied dynamically as
+        # --exchange/--timeframes CLI args by _setup_data_server_client's own
+        # ensure_master_running() call, not written into this file (see the
+        # config schema comment in data_server.py's _load_minimal_config).
+        minimal_config = {
+            "format": self.config.get("dataformat_ohlcv", "feather"),
+            "funding_rate": self.trading_mode == TradingMode.FUTURES,
+            "persist_to_disk": bool(ds_config.get("persist_to_disk", True)),
+            "orderflow": bool(exchange_conf.get("use_public_trades", False)),
+            "is_subserver": False,
+            # This bot is writing a config for a MASTER (is_subserver always
+            # False here - a trading bot never runs as a subserver), so
+            # "master_host" means "what to bind", hence the "0.0.0.0" (every
+            # interface) default - deliberately different from the "127.0.0.1"
+            # default `_setup_data_server_client` uses for this SAME
+            # `data_server.host` config key when it dials its own client
+            # connection to that just-launched master a few lines below.
+            # Both read the same key; the fallback differs because bind and
+            # dial are different questions with different safe defaults.
+            "master_host": ds_config.get("host", "0.0.0.0"),
+            "master_port": int(ds_config.get("port", 8720)),
+            "subserver_port": int(ds_config.get("subserver_port", 8721)),
+        }
 
         out_dir = Path(self.config.get("user_data_dir", "user_data")) / "data_server_configs"
         out_dir.mkdir(parents=True, exist_ok=True)
-        exchange_name = self.config["exchange"]["name"]
-        out_path = out_dir / f"{exchange_name}.json"
-        # default=str covers the enum/Path objects Exchange.__init__ injects into
-        # config (trading_mode, margin_mode, candle_type_def, datadir, ...) - these
-        # are all (str, Enum) types whose str() matches the exact value string
-        # Configuration expects back (verified for TradingMode/MarginMode/CandleType).
-        out_path.write_text(json.dumps(self.config, indent=2, default=str))
+        out_path = out_dir / "config.json"
+        payload = json.dumps(minimal_config, indent=2)
+        tmp_path = out_dir / f".config.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        tmp_path.write_text(payload)
+        os.replace(tmp_path, out_path)
         return str(out_path)
 
     # ------------------------------------------------------------------
@@ -748,7 +815,10 @@ class VulcanTraderBot(LoggingMixin):
         self._emit({"type": msg_type, "status": msg})
 
     def _write_heartbeat(self) -> None:
-        """Print a heartbeat line to stdout once per minute.
+        """Print a heartbeat line to stdout once per minute, and refresh the
+        ``last_heartbeat``/``is_running`` liveness markers in the persistence
+        DB (see KeyStoreKeys) so external readers of the account JSON can tell
+        a live bot from a dead one without access to this process.
 
         Format: ``HEARTBEAT <iso_timestamp> state=<state> open_trades=<count>``
         """
@@ -762,6 +832,9 @@ class VulcanTraderBot(LoggingMixin):
             open_trades = Trade.get_open_trade_count()
             pairs = len(self.active_pair_whitelist)
             logger.info("HEARTBEAT %s state=%s open_trades=%d pairs=%d", ts, state, open_trades, pairs)
+            # store_value commits, persisting the marker to the JSON file.
+            KeyValueStore.store_value("is_running", 1)
+            KeyValueStore.store_value("last_heartbeat", now)
         except Exception as e:
             logger.warning("heartbeat failed: %s", e)
 
@@ -782,17 +855,35 @@ class VulcanTraderBot(LoggingMixin):
             logger.warning(f"Exception during cleanup: {e.__class__.__name__} {e}")
 
         finally:
-            self.strategy.trader_bot_cleanup()
+            # A failing strategy cleanup hook must not prevent the exchange/
+            # data_server shutdown below from ever running - this is the LAST
+            # place trader_bot.py runs before process exit, so nothing past
+            # this point gets a second chance to release its resources.
+            try:
+                self.strategy.trader_bot_cleanup()
+            except Exception:
+                logger.exception("strategy.trader_bot_cleanup() failed")
 
         # TODO web_portal: was ``self.rpc.cleanup()``.
         # ExternalMessageConsumer shutdown removed (self.emc is always None in this port).
-        self.exchange.close()
+        try:
+            self.exchange.close()
+        except Exception:
+            logger.exception("Failed to close the exchange connection during cleanup")
         if self._data_server_client is not None:
             # Disconnecting drops this bot's registration on the master's side
             # (ClientInterestRegistry.unregister() on socket close), so its pairs
             # fall out of the collected union unless another bot still wants them.
-            self._data_server_client.stop()
+            try:
+                self._data_server_client.stop()
+            except Exception:
+                logger.exception("Failed to stop the data_server client during cleanup")
         try:
+            # Clean shutdown: flip the liveness marker OFF (store_value commits).
+            # A crash/kill never reaches this, leaving is_running=1 with a stale
+            # last_heartbeat - exactly the signature external readers use to
+            # tell "died" from "stopped cleanly".
+            KeyValueStore.store_value("is_running", 0)
             Trade.commit()
         except Exception:
             # Exceptions here will be happening if the db disappeared.
@@ -808,24 +899,50 @@ class VulcanTraderBot(LoggingMixin):
         # for SQL schema migrations. JSON persistence does not require this; left as TODO if
         # JSON-side migrations are ever added.
         set_startup_time()
+        # Mark this bot alive in the persistence DB immediately (not just from
+        # the first heartbeat ~one process-cycle later).
+        KeyValueStore.store_value("is_running", 1)
+        KeyValueStore.store_value("last_heartbeat", datetime.now(UTC))
 
         # TODO web_portal: was ``self.rpc.startup_messages(self.config, self.pairlists,
         # self.protections)``.
-        # Update older trades with precision and precision mode
-        logger.info("startup: backpopulating precision ...")
-        self.startup_backpopulate_precision()
-        # Adjust stoploss if it was changed
-        logger.info("startup: reinitialising stoploss ...")
-        Trade.stoploss_reinitialization(self.strategy.stoploss)
-
-        # Only update open orders on startup
-        # This will update the database after the initial migration
-        logger.info("startup: syncing open orders ...")
-        self.startup_update_open_orders()
-        logger.info("startup: updating liquidation prices ...")
-        self.update_all_liquidation_prices()
-        logger.info("startup: updating funding fees ...")
-        self.update_funding_fees()
+        # Each step is independently isolated: cmd_trade() calls bot.startup()
+        # BEFORE entering its own resilient trade loop (which already survives
+        # any bot.process() exception - see bot.py), so a bug in any ONE startup
+        # step here previously prevented the bot from EVER reaching that loop at
+        # all - the worst possible "crash", since even manual intervention on a
+        # subsequent restart would hit the exact same failure. Skipping past a
+        # failed step and still reaching the main loop is safer than not
+        # starting: an out-of-date precision/liquidation/funding-fee value gets
+        # corrected on a later cycle, but a bot that never started manages
+        # nothing at all.
+        try:
+            logger.info("startup: backpopulating precision ...")
+            self.startup_backpopulate_precision()
+        except Exception:
+            logger.exception("startup: backpopulating precision failed - continuing")
+        try:
+            logger.info("startup: reinitialising stoploss ...")
+            Trade.stoploss_reinitialization(self.strategy.stoploss)
+        except Exception:
+            logger.exception("startup: stoploss reinitialisation failed - continuing")
+        try:
+            # Only update open orders on startup
+            # This will update the database after the initial migration
+            logger.info("startup: syncing open orders ...")
+            self.startup_update_open_orders()
+        except Exception:
+            logger.exception("startup: syncing open orders failed - continuing")
+        try:
+            logger.info("startup: updating liquidation prices ...")
+            self.update_all_liquidation_prices()
+        except Exception:
+            logger.exception("startup: updating liquidation prices failed - continuing")
+        try:
+            logger.info("startup: updating funding fees ...")
+            self.update_funding_fees()
+        except Exception:
+            logger.exception("startup: updating funding fees failed - continuing")
         logger.info("startup: complete.")
 
     def process(self) -> None:
@@ -995,25 +1112,31 @@ class VulcanTraderBot(LoggingMixin):
         if self.trading_mode == TradingMode.FUTURES:
             trades: list[Trade] = Trade.get_open_trades()
             for trade in trades:
-                trade.set_funding_fees(
-                    self.exchange.get_funding_fees(
-                        pair=trade.pair,
-                        amount=trade.amount,
-                        is_short=trade.is_short,
-                        open_date=trade.date_last_filled_utc,
+                try:
+                    trade.set_funding_fees(
+                        self.exchange.get_funding_fees(
+                            pair=trade.pair,
+                            amount=trade.amount,
+                            is_short=trade.is_short,
+                            open_date=trade.date_last_filled_utc,
+                        )
                     )
-                )
+                except Exception:
+                    logger.exception("Failed to update funding fees for %s - skipping", trade)
 
     def startup_backpopulate_precision(self) -> None:
         trades = Trade.get_trades(lambda t: t.contract_size is None)
         for trade in trades:
             if trade.exchange != self.exchange.id:
                 continue
-            trade.precision_mode = self.exchange.precisionMode
-            trade.precision_mode_price = self.exchange.precision_mode_price
-            trade.amount_precision = self.exchange.get_precision_amount(trade.pair)
-            trade.price_precision = self.exchange.get_precision_price(trade.pair)
-            trade.contract_size = self.exchange.get_contract_size(trade.pair)
+            try:
+                trade.precision_mode = self.exchange.precisionMode
+                trade.precision_mode_price = self.exchange.precision_mode_price
+                trade.amount_precision = self.exchange.get_precision_amount(trade.pair)
+                trade.price_precision = self.exchange.get_precision_price(trade.pair)
+                trade.contract_size = self.exchange.get_contract_size(trade.pair)
+            except Exception:
+                logger.exception("Failed to backpopulate precision for %s - skipping", trade)
         Trade.commit()
 
     def startup_update_open_orders(self):
@@ -1062,6 +1185,10 @@ class VulcanTraderBot(LoggingMixin):
 
             except ExchangeError as e:
                 logger.warning(f"Error updating Order {order.order_id} due to {e}")
+            except Exception:
+                # One unexpected bug syncing ONE order must not abort startup
+                # sync for every OTHER open order.
+                logger.exception("Unexpected error updating Order %s - skipping", order.order_id)
 
     def update_trades_without_assigned_fees(self) -> None:
         """
@@ -1074,35 +1201,44 @@ class VulcanTraderBot(LoggingMixin):
 
         trades: list[Trade] = Trade.get_closed_trades_without_assigned_fees()
         for trade in trades:
-            if not trade.is_open and not trade.fee_updated(trade.exit_side):
-                # Get sell fee
-                order = trade.select_order(trade.exit_side, False, only_filled=True)
-                if not order:
-                    order = trade.select_order("stoploss", False)
-                if order:
-                    logger.info(
-                        f"Updating {trade.exit_side}-fee on trade {trade} "
-                        f"for order {order.order_id}."
-                    )
-                    self.update_trade_state(
-                        trade,
-                        order.order_id,
-                        stoploss_order=order.ft_order_side == "stoploss",
-                        send_msg=False,
-                    )
+            try:
+                if not trade.is_open and not trade.fee_updated(trade.exit_side):
+                    # Get sell fee
+                    order = trade.select_order(trade.exit_side, False, only_filled=True)
+                    if not order:
+                        order = trade.select_order("stoploss", False)
+                    if order:
+                        logger.info(
+                            f"Updating {trade.exit_side}-fee on trade {trade} "
+                            f"for order {order.order_id}."
+                        )
+                        self.update_trade_state(
+                            trade,
+                            order.order_id,
+                            stoploss_order=order.ft_order_side == "stoploss",
+                            send_msg=False,
+                        )
+            except Exception:
+                # Called at the very top of process(), before refresh/analyze/
+                # exit/enter even run - one trade's exit-fee update failing must
+                # never abort the whole cycle over it.
+                logger.exception("Failed to update exit fee for trade %s - skipping", trade)
 
         trades = Trade.get_open_trades_without_assigned_fees()
         for trade in trades:
-            with self._exit_lock:
-                if trade.is_open and not trade.fee_updated(trade.entry_side):
-                    order = trade.select_order(trade.entry_side, False, only_filled=True)
-                    open_order = trade.select_order(trade.entry_side, True)
-                    if order and open_order is None:
-                        logger.info(
-                            f"Updating {trade.entry_side}-fee on trade {trade} "
-                            f"for order {order.order_id}."
-                        )
-                        self.update_trade_state(trade, order.order_id, send_msg=False)
+            try:
+                with self._exit_lock:
+                    if trade.is_open and not trade.fee_updated(trade.entry_side):
+                        order = trade.select_order(trade.entry_side, False, only_filled=True)
+                        open_order = trade.select_order(trade.entry_side, True)
+                        if order and open_order is None:
+                            logger.info(
+                                f"Updating {trade.entry_side}-fee on trade {trade} "
+                                f"for order {order.order_id}."
+                            )
+                            self.update_trade_state(trade, order.order_id, send_msg=False)
+            except Exception:
+                logger.exception("Failed to update entry fee for trade %s - skipping", trade)
 
     def handle_insufficient_funds(self, trade: Trade):
         """
@@ -1270,6 +1406,13 @@ class VulcanTraderBot(LoggingMixin):
                     trades_created += self.create_trade(pair)
             except DependencyException as exception:
                 logger.warning("Unable to create trade for %s: %s", pair, exception)
+            except Exception:
+                # A bug tripped on THIS pair (bad indicator data, a strategy
+                # exception, ...) must not abort the loop and silently skip
+                # entry checks for every OTHER whitelisted pair this cycle.
+                logger.exception(
+                    "Unexpected error creating trade for %s - skipping this pair this cycle", pair
+                )
 
         if not trades_created:
             logger.debug("Found no enter signals for whitelisted currencies. Trying again...")
@@ -1358,6 +1501,13 @@ class VulcanTraderBot(LoggingMixin):
                 except DependencyException as exception:
                     logger.warning(
                         f"Unable to adjust position of trade for {trade.pair}: {exception}"
+                    )
+                except Exception:
+                    # One trade's position-adjustment bug must not stop DCA
+                    # checks for every OTHER open trade this cycle.
+                    logger.exception(
+                        "Unexpected error adjusting position for %s (id=%s) - skipping",
+                        trade.pair, trade.id,
                     )
 
     def check_and_call_adjust_trade_position(self, trade: Trade):
@@ -1951,6 +2101,14 @@ class VulcanTraderBot(LoggingMixin):
 
             except DependencyException as exception:
                 logger.warning(f"Unable to exit trade {trade.pair}: {exception}")
+            except Exception:
+                # An exit-side bug on ONE trade must never block exit/stoploss
+                # checks for every OTHER open trade this cycle - that's real
+                # risk exposure left unmanaged, not just a missed opportunity.
+                logger.exception(
+                    "Unexpected error managing exit for %s (id=%s) - skipping this trade this cycle",
+                    trade.pair, trade.id,
+                )
 
         # Updating wallets if any trade occurred
         if trades_closed:
@@ -2049,6 +2207,11 @@ class VulcanTraderBot(LoggingMixin):
                 stoploss_order, trade.pair, "stoploss", trade.amount, stop_price
             )
             trade.orders.append(order_obj)
+            # Persist the freshly-placed stoploss immediately - without this it
+            # only hit disk at the END of the process cycle, leaving a window
+            # where a crash right after placement lost the record of a live
+            # on-exchange order.
+            Trade.commit()
             return True
         except InsufficientFundsError as e:
             logger.warning(f"Unable to place stoploss order {e}.")
@@ -2218,19 +2381,27 @@ class VulcanTraderBot(LoggingMixin):
                     )
                     continue
 
-                fully_cancelled = self.update_trade_state(trade, open_order.order_id, order)
-                not_closed = order["status"] == "open" or fully_cancelled
+                try:
+                    fully_cancelled = self.update_trade_state(trade, open_order.order_id, order)
+                    not_closed = order["status"] == "open" or fully_cancelled
 
-                if not_closed:
-                    if fully_cancelled or (
-                        open_order
-                        and self.strategy.trader_check_timed_out(trade, open_order, datetime.now(UTC))
-                    ):
-                        self.handle_cancel_order(
-                            order, open_order, trade, constants.CANCEL_REASON["TIMEOUT"]
-                        )
-                    else:
-                        self.replace_order(order, open_order, trade)
+                    if not_closed:
+                        if fully_cancelled or (
+                            open_order
+                            and self.strategy.trader_check_timed_out(trade, open_order, datetime.now(UTC))
+                        ):
+                            self.handle_cancel_order(
+                                order, open_order, trade, constants.CANCEL_REASON["TIMEOUT"]
+                            )
+                        else:
+                            self.replace_order(order, open_order, trade)
+                except Exception:
+                    # One trade/order's management failing must not stop this
+                    # loop from reaching every OTHER open trade's orders.
+                    logger.exception(
+                        "Unexpected error managing open order %s for %s - skipping",
+                        open_order.order_id, trade.pair,
+                    )
 
     def handle_cancel_order(
         self, order: CcxtOrder, order_obj: Order, trade: Trade, reason: str, replacing: bool = False
@@ -2433,9 +2604,14 @@ class VulcanTraderBot(LoggingMixin):
         """
 
         for trade in Trade.get_open_trades():
-            self.cancel_open_orders_of_trade(
-                trade, [trade.entry_side, trade.exit_side], constants.CANCEL_REASON["ALL_CANCELLED"]
-            )
+            try:
+                self.cancel_open_orders_of_trade(
+                    trade, [trade.entry_side, trade.exit_side], constants.CANCEL_REASON["ALL_CANCELLED"]
+                )
+            except Exception:
+                # Runs during shutdown (cleanup()) - one trade's cancellation
+                # failing must not leave every OTHER trade's orders uncancelled.
+                logger.exception("Failed to cancel open orders for %s - continuing", trade)
 
         Trade.commit()
 

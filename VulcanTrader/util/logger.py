@@ -98,9 +98,15 @@ def setup(
     *,
     log_to_discord: bool = False,
     quiet_libs: bool = True,
+    subdir: Optional[str] = None,
 ) -> Path:
     """Configure root logging. Safe to call more than once (subsequent calls are no-ops).
 
+    :param subdir: write the rotating file under ``logs/<subdir>/`` instead of
+        directly under ``logs/``. Use this for a long-running auxiliary process
+        (e.g. data_server) whose logs would otherwise be interleaved anonymously
+        among every trading bot's own timestamped file in the shared top-level
+        `logs/` directory, indistinguishable without opening each one.
     Returns the path of the active log file.
     """
     global _configured, _log_file
@@ -123,8 +129,10 @@ def setup(
     root.addHandler(console)
 
     # Rotating file handler
+    log_dir = (_LOG_DIR / subdir) if subdir else _LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    _log_file = _LOG_DIR / f"{_LOG_PREFIX}_{timestamp}.txt"
+    _log_file = log_dir / f"{_LOG_PREFIX}_{timestamp}.txt"
     file_handler = _FlushingRotatingFileHandler(
         _log_file,
         maxBytes=_MAX_BYTES,

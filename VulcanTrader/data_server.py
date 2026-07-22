@@ -25,83 +25,13 @@
 #                  all - clients cannot connect to it. Instead it dials out
 #                  to a master's subserver port and forwards every batch of
 #                  freshly-fetched data as it arrives.
-#
-#  Data path
-#  ---------
-#      * OHLCV: exchange.exchange.Exchange.refresh_latest_ohlcv() pulls fresh
-#        candles into the exchange's in-memory `_klines` cache, transparently
-#        over the websocket (exchange.exchange_ws.ExchangeWS) when the
-#        exchange config has `enable_ws: true` (default) and the exchange
-#        supports it, falling back to REST polling otherwise. Neither the
-#        feather nor json datahandler implements `ohlcv_append`, so new
-#        candles are merged in memory (concat + clean_ohlcv_dataframe,
-#        mirroring data/history/history_utils.py::_download_pair_history)
-#        and the merged frame is written back with `ohlcv_store`.
-#      * Funding rate: Exchange.fetch_funding_rate(), polled on a slower
-#        interval (futures markets only). Opt-in: only polled when something
-#        is registered to consume it (on_funding_rate hook, i.e. master or
-#        subserver mode).
-#      * Trades / orderflow: Exchange.refresh_latest_trades() pulls raw
-#        public trades (the tape orderflow is computed from - see
-#        data/converter/orderflow.py::populate_dataframe_with_trades).
-#        Gated by the standard `exchange.use_public_trades` config flag,
-#        matching how the live bot's DataProvider.refresh() decides whether
-#        to collect trades at all. Exchange already maintains its own rolling
-#        "<pair>-cached" trades file independently of anything here; the
-#        DataCache below merges/mirrors pushed batches into a canonical
-#        per-pair cache using the same dedup rule (trades_df_remove_duplicates
-#        on timestamp+id) the exchange uses internally.
-#
-#  Wire protocol
-#  -------------
-#  Plain TCP, length-prefixed JSON: a 4-byte big-endian uint32 giving the
-#  UTF-8 payload length, followed by that many bytes of `json.dumps(...)`.
-#  No extra dependencies (no websockets/asyncio) - see the threading-model
-#  note below for why.
-#
-#  Threading model
-#  ----------------
-#  Exchange.refresh_latest_ohlcv()/refresh_latest_trades() are *synchronous*
-#  methods that internally drive their own asyncio event loop via
-#  `self.loop.run_until_complete(...)`. A thread can only ever have one event
-#  loop "running" at a time, so that call cannot happen from inside a
-#  coroutine of an asyncio-based TCP server sharing the same thread. To
-#  sidestep that entirely, the network layer here is built on plain blocking
-#  sockets + threads (socketserver.ThreadingTCPServer), and the collection
-#  loop keeps running exactly as it does standalone: one dedicated background
-#  thread repeatedly calling DataCollector.collect_once().
-#
-#  Delivery guarantees (subserver -> master)
-#  ------------------------------------------
-#  SubserverForwarder never drops a push because of a network blip. Every
-#  forward_*() call enqueues onto an in-memory FIFO; a dedicated sender thread
-#  drains it strictly in order over whatever connection is currently live,
-#  and simply waits (re-trying the same message) whenever the connection is
-#  down, so a blip delays delivery but never loses data. The queue is bounded
-#  (default 100k messages) purely as a safety valve against unbounded memory
-#  growth during an extended outage - past that bound the oldest pending
-#  message is dropped and loudly logged, which is the only way data can be
-#  lost.
-#
-#  Usage
-#  -----
-#      python -m VulcanTrader.data_server --mode standalone -c live \
-#             --pairs BTC/USDT ETH/USDT --timeframes 1m 5m
-#
-#      python -m VulcanTrader.data_server --mode master -c live \
-#             --port 8720 --subserver-port 8721
-#
-#      python -m VulcanTrader.data_server --mode subserver -c live \
-#             --master-host 10.0.0.5 --master-port 8721 --name eu-collector
-# =============================================================================
-
-"""OHLCV/funding-rate/orderflow collector, usable standalone or as a networked TCP master/subserver."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import os
 import queue
 import signal
 import socket
@@ -109,6 +39,7 @@ import socketserver
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -145,6 +76,7 @@ from VulcanTrader.exchange.exchange import Exchange
 from VulcanTrader.exchange.exchange_utils_timeframe import timeframe_to_seconds
 from VulcanTrader.pairlist.pairlist_helpers import dynamic_expand_pairlist
 from VulcanTrader.resolvers import ExchangeResolver
+from VulcanTrader.util.exceptions import OperationalException
 
 
 logger = logging.getLogger(__name__)
@@ -245,6 +177,7 @@ class DataCollector:
         on_trades: Callable[[str, DataFrame], None] | None = None,
         collect_funding_rate: bool | None = None,
         funding_rate_interval: float = 300.0,
+        collect_funding_rate_history: bool | None = None,
         persist_to_disk: bool = True,
         max_consecutive_failures: int = 5,
         reload_cooldown: float = 30.0,
@@ -262,6 +195,20 @@ class DataCollector:
             Defaults to True when `trading_mode` is "futures" and `on_funding_rate`
             is set (no point polling with nobody to consume it).
         :param funding_rate_interval: minimum seconds between funding-rate polls.
+        :param collect_funding_rate_history: also fetch/persist FULL funding-rate
+            HISTORY via the exchange's `fetchFundingRateHistory` - added to
+            `self.pairlist` as `(pair, funding_fee_timeframe, CandleType.FUNDING_RATE)`
+            entries, so it flows through the exact same `collect_once`/`_persist`/
+            `on_ohlcv` path as regular OHLCV (including the same feather layout:
+            `datadir/futures/<PAIR>-<tf>-funding_rate.feather`). Distinct from
+            `collect_funding_rate` above, which only polls the single CURRENT rate
+            for live funding-fee math and never touches disk. Refetch cadence is
+            throttled by the exchange's own `_now_is_time_to_refresh` per pair/
+            timeframe (same mechanism regular OHLCV uses), so this is safe to poll
+            every `collect_once()` tick without hammering the API. Defaults to
+            `persist_to_disk and trading_mode == "futures"` (no point historizing
+            something nothing will ever persist, and spot markets have no funding
+            rate to fetch in the first place).
         :param persist_to_disk: write merged candles back via the datahandler. Set to
             False when a caller (e.g. DataCache) already persists via `on_ohlcv`, to
             avoid two independent writers touching the same datadir.
@@ -321,9 +268,23 @@ class DataCollector:
             pairs = dynamic_expand_pairlist(config, available)
         self.pairs: list[str] = pairs
 
-        self.pairlist: ListPairsWithTimeframes = [
-            (pair, tf, self.candle_type) for pair in self.pairs for tf in self.timeframes
-        ]
+        self.collect_funding_rate_history = (
+            collect_funding_rate_history
+            if collect_funding_rate_history is not None
+            else (persist_to_disk and config.get("trading_mode") == "futures")
+        )
+        self.funding_rate_history_timeframe: str | None = None
+        if self.collect_funding_rate_history:
+            try:
+                self.funding_rate_history_timeframe = self.exchange.get_option("funding_fee_timeframe")
+            except Exception:
+                logger.exception(
+                    "Failed to resolve funding_fee_timeframe - disabling funding-rate "
+                    "history collection for this exchange"
+                )
+                self.collect_funding_rate_history = False
+
+        self.pairlist: ListPairsWithTimeframes = self._build_pairlist(self.pairs)
         # Guards self.pairs/self.pairlist/self._cache against concurrent access from
         # set_pairs(), which master/subserver mode call from a different thread than
         # the one running collect_once()/run_forever() (see WorkDistributor).
@@ -352,10 +313,16 @@ class DataCollector:
                 self._cache[pair_key] = DataFrame()
 
         self._stop = False
+        # Set by set_pairs() whenever the pair assignment actually changes, so
+        # run_forever()'s sleep can wake up and collect immediately instead of
+        # sitting out a stale sleep interval computed back when this collector
+        # had a different (e.g. empty) pairlist - see run_forever()'s sleep loop.
+        self._wake_event = threading.Event()
 
         logger.info(
             "DataCollector initialised: %d pairs x %d timeframes -> %d combinations "
-            "(ws_enabled=%s, datadir=%s, format=%s, funding_rate=%s, trades=%s)",
+            "(ws_enabled=%s, datadir=%s, format=%s, funding_rate=%s, funding_rate_history=%s, "
+            "persist_to_disk=%s, trades=%s)",
             len(self.pairs),
             len(self.timeframes),
             len(self.pairlist),
@@ -363,11 +330,27 @@ class DataCollector:
             self.datadir,
             self.data_format,
             self.collect_funding_rate,
+            self.collect_funding_rate_history,
+            self.persist_to_disk,
             self.collect_trades,
         )
 
     def stop(self) -> None:
         self._stop = True
+
+    def _build_pairlist(self, pairs: list[str]) -> ListPairsWithTimeframes:
+        """Standard `(pair, tf, candle_type)` combos for every configured timeframe,
+        plus one `(pair, funding_fee_timeframe, CandleType.FUNDING_RATE)` entry per
+        pair when funding-rate history collection is enabled (see `__init__`)."""
+        pairlist: ListPairsWithTimeframes = [
+            (pair, tf, self.candle_type) for pair in pairs for tf in self.timeframes
+        ]
+        if self.collect_funding_rate_history and self.funding_rate_history_timeframe:
+            pairlist += [
+                (pair, self.funding_rate_history_timeframe, CandleType.FUNDING_RATE)
+                for pair in pairs
+            ]
+        return pairlist
 
     def set_pairs(self, pairs: list[str]) -> None:
         """Replace the set of pairs this collector actively refreshes, seeding cache
@@ -378,9 +361,7 @@ class DataCollector:
         ClientInterestRegistry) - safe to call from any thread while
         collect_once()/run_forever() are running on another."""
         new_pairs = list(pairs)
-        new_pairlist: ListPairsWithTimeframes = [
-            (pair, tf, self.candle_type) for pair in new_pairs for tf in self.timeframes
-        ]
+        new_pairlist: ListPairsWithTimeframes = self._build_pairlist(new_pairs)
         with self._pairs_lock:
             if new_pairs == self.pairs:
                 return
@@ -411,6 +392,11 @@ class DataCollector:
             "DataCollector pair assignment updated: now tracking %d pair(s) (%d combination(s))",
             len(new_pairs), len(new_pairlist),
         )
+        # Wake run_forever()'s sleep immediately - newly-assigned pairs (e.g. a
+        # trading-bot client that just registered) shouldn't have to wait out
+        # up to a full timeframe interval of a sleep computed against the OLD
+        # pairlist before their first real collect_once() happens.
+        self._wake_event.set()
 
     def _persist(self, pair_key: PairWithTimeframe, new_data: DataFrame) -> bool:
         """Merge freshly-fetched candles into the in-memory cache. Returns True if
@@ -540,30 +526,54 @@ class DataCollector:
     def run_forever(
         self, poll_interval: float | None = None, stop_event: threading.Event | None = None
     ) -> None:
-        """Poll continuously, sleeping until shortly after the next candle closes.
-        Stops when either `self.stop()` is called or `stop_event` is set - the latter
-        lets an external supervisor request a stop across collector instances that
-        get recreated on restart."""
+        """Poll continuously. Stops when either `self.stop()` is called or
+        `stop_event` is set - the latter lets an external supervisor request a
+        stop across collector instances that get recreated on restart.
+
+        The default cadence (no explicit poll_interval) is min(60s, shortest
+        timeframe), NOT one full timeframe: a fixed timeframe-length sleep is
+        unaligned to candle close times, so the cache drifted up to ~2x the
+        timeframe stale right before each tick (observed live: 15m timeframe,
+        candles up to 36 minutes old just before the next poll - past the
+        `timeframe*2 + outdated_offset` staleness limit trading bots apply, so
+        every connected bot fell back to hammering the exchange directly, the
+        exact thing this collector exists to prevent). Frequent polling is
+        free between candle closes: Exchange.refresh_latest_ohlcv's own
+        per-pair `_now_is_time_to_refresh` gate skips the API call entirely
+        until a new candle is actually due, so a 60s cadence just means each
+        fresh candle is picked up (and pushed to clients) within ~a minute of
+        closing, at no extra API cost."""
         logger.info("Starting continuous data collection. Ctrl+C to stop.")
         shortest_tf_secs = min(timeframe_to_seconds(tf) for tf in self.timeframes)
+        if not poll_interval:
+            poll_interval = min(60.0, float(shortest_tf_secs))
 
         def _should_stop() -> bool:
             return self._stop or (stop_event is not None and stop_event.is_set())
 
         while not _should_stop():
+            # Cleared here (not after the sleep) so a set_pairs() call that lands
+            # while collect_once() is already running - after it snapshotted the
+            # pairlist for this cycle - still wakes the sleep below early instead
+            # of being silently absorbed by a clear() that happens afterward.
+            self._wake_event.clear()
             t0 = time.time()
             try:
                 self.collect_once()
             except Exception:
                 logger.exception("Error while refreshing data")
 
-            sleep_for = poll_interval if poll_interval else shortest_tf_secs
             # Account for however long collect_once() itself took.
-            sleep_for = max(1.0, sleep_for - (time.time() - t0))
+            sleep_for = max(1.0, poll_interval - (time.time() - t0))
             slept = 0.0
             while slept < sleep_for and not _should_stop():
                 step = min(1.0, sleep_for - slept)
-                time.sleep(step)
+                # A pair-assignment change (e.g. a trading-bot client just
+                # registered) wakes this immediately instead of leaving it to
+                # sleep out an interval computed against the OLD pairlist - see
+                # set_pairs()'s own _wake_event.set() call.
+                if self._wake_event.wait(step):
+                    break
                 slept += step
         logger.info("Data collector stopped.")
 
@@ -803,13 +813,49 @@ class _ThreadingTCPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+class _ClientConnection:
+    """Master-side handle to one connected trading-bot client: its live socket
+    plus a lock guarding writes. Needed so the collection thread (calling
+    `ClientInterestRegistry.publish_*` from inside `collect_once()`) can push
+    unsolicited data down this socket from a DIFFERENT thread than the one
+    blocked reading requests on it (`_ClientHandler.handle()`'s own loop) -
+    same shape/reasoning as `SubserverConnection`, kept as its own class since
+    conflating "client" and "subserver" under one name would be confusing."""
+
+    def __init__(self, sock: socket.socket, client_id: str) -> None:
+        self.sock = sock
+        self.client_id = client_id
+        self._write_lock = threading.Lock()
+
+    def send(self, msg: dict) -> bool:
+        with self._write_lock:
+            try:
+                send_msg(self.sock, msg)
+                return True
+            except OSError:
+                return False
+            except Exception:
+                # e.g. an unserializable payload - report "send failed" to the
+                # caller rather than propagate into whatever thread (collection
+                # thread, handler thread) happened to be sending.
+                logger.exception("Failed to serialize/send a message to client '%s'", self.client_id)
+                return False
+
+
 class ClientInterestRegistry:
     """Tracks each connected trading-bot client's requested pairs/data-kinds and
     recomputes the union whenever a client registers, updates, or disconnects.
     That union is what drives the master's own collection (see WorkDistributor,
     which further splits it across itself and any connected subservers) - so N
     trader_bot processes watching overlapping pairs on the same exchange collapse
-    into one collection job instead of N independent ones."""
+    into one collection job instead of N independent ones.
+
+    Also doubles as the push broadcaster: `publish_ohlcv`/`publish_funding_rate`/
+    `publish_trades` (called from the collection thread right after a fresh tick
+    lands - see `_run_master`'s `_on_ohlcv`/`_on_funding_rate`/`_on_trades` hooks)
+    forward it unprompted to every currently-registered client whose interest
+    covers that pair, "webhook" style, instead of making every client poll
+    `get_ohlcv`/etc. on its own cycle and wait up to one poll interval to see it."""
 
     def __init__(
         self, on_union_changed: Callable[[list[str], bool, bool], None]
@@ -818,12 +864,25 @@ class ClientInterestRegistry:
         self._lock = threading.Lock()
         # client_id -> (pairs, want_funding_rate, want_trades)
         self._clients: dict[str, tuple[list[str], bool, bool]] = {}
+        # client_id -> live connection, only present while a push target is
+        # reachable - a client that registered interest before this feature
+        # existed (impossible in practice, but defensively) simply never gets
+        # a push, same as if it were momentarily disconnected.
+        self._connections: dict[str, _ClientConnection] = {}
 
     def register(
-        self, client_id: str, pairs: list[str], want_funding_rate: bool, want_trades: bool
+        self,
+        client_id: str,
+        pairs: list[str],
+        want_funding_rate: bool,
+        want_trades: bool,
+        *,
+        connection: _ClientConnection | None = None,
     ) -> None:
         with self._lock:
             self._clients[client_id] = (list(pairs), want_funding_rate, want_trades)
+            if connection is not None:
+                self._connections[client_id] = connection
             union_pairs, union_ffr, union_trades = self._union()
             n_clients = len(self._clients)
         logger.info(
@@ -831,11 +890,18 @@ class ClientInterestRegistry:
             "across %d client(s); funding_rate=%s, trades=%s)",
             client_id, len(pairs), len(union_pairs), n_clients, union_ffr, union_trades,
         )
-        self._on_union_changed(union_pairs, union_ffr, union_trades)
+        # Isolated: the registration itself (the dicts above) already succeeded,
+        # and a bug in the downstream rebalancing callback must neither fail the
+        # client's registration nor propagate into the handler thread.
+        try:
+            self._on_union_changed(union_pairs, union_ffr, union_trades)
+        except Exception:
+            logger.exception("on_union_changed callback failed after register('%s')", client_id)
 
     def unregister(self, client_id: str) -> None:
         with self._lock:
             removed = self._clients.pop(client_id, None) is not None
+            self._connections.pop(client_id, None)
             union_pairs, union_ffr, union_trades = self._union()
             n_clients = len(self._clients)
         if removed:
@@ -843,7 +909,11 @@ class ClientInterestRegistry:
                 "Client '%s' disconnected (union now %d pair(s) across %d client(s))",
                 client_id, len(union_pairs), n_clients,
             )
-            self._on_union_changed(union_pairs, union_ffr, union_trades)
+            # Called from handler `finally:` blocks - must never raise.
+            try:
+                self._on_union_changed(union_pairs, union_ffr, union_trades)
+            except Exception:
+                logger.exception("on_union_changed callback failed after unregister('%s')", client_id)
 
     def _union(self) -> tuple[list[str], bool, bool]:
         pairs: set[str] = set()
@@ -855,6 +925,58 @@ class ClientInterestRegistry:
             want_trades = want_trades or wt
         return sorted(pairs), want_funding_rate, want_trades
 
+    def _targets_for_pair(self, pair: str, *, need_funding_rate: bool = False,
+                          need_trades: bool = False) -> list[_ClientConnection]:
+        """Every currently-connected client whose registered interest covers
+        `pair` (and, if asked, also wants funding-rate / trades data)."""
+        with self._lock:
+            client_ids = [
+                cid for cid, (pairs, wf, wt) in self._clients.items()
+                if pair in pairs
+                and (not need_funding_rate or wf)
+                and (not need_trades or wt)
+            ]
+            return [self._connections[cid] for cid in client_ids if cid in self._connections]
+
+    def _broadcast(self, targets: list[_ClientConnection], msg: dict) -> None:
+        # Best-effort, fire-and-forget: a send failure here just means that one
+        # client will fall back to its own next `get_*` poll (or reconnect) -
+        # never let a broken connection block or drop the push for anyone else.
+        for conn in targets:
+            try:
+                conn.send(msg)
+            except Exception:
+                logger.debug("Push to client '%s' failed", conn.client_id, exc_info=True)
+
+    def publish_ohlcv(
+        self, exchange: str, pair: str, timeframe: str, candle_type: str, new_df: DataFrame
+    ) -> None:
+        targets = self._targets_for_pair(pair)
+        if not targets or new_df is None or new_df.empty:
+            return
+        self._broadcast(targets, {
+            "type": "ohlcv_push", "exchange": exchange, "pair": pair,
+            "timeframe": timeframe, "candle_type": candle_type, **df_to_wire(new_df),
+        })
+
+    def publish_funding_rate(self, exchange: str, pair: str, payload: dict) -> None:
+        targets = self._targets_for_pair(pair, need_funding_rate=True)
+        if not targets:
+            return
+        self._broadcast(targets, {
+            "type": "funding_rate_push", "exchange": exchange, "pair": pair,
+            "funding_rate": payload,
+        })
+
+    def publish_trades(self, exchange: str, pair: str, new_df: DataFrame) -> None:
+        targets = self._targets_for_pair(pair, need_trades=True)
+        if not targets or new_df is None or new_df.empty:
+            return
+        self._broadcast(targets, {
+            "type": "trades_push", "exchange": exchange, "pair": pair,
+            **trades_to_wire(new_df),
+        })
+
 
 class _ClientHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
@@ -863,7 +985,30 @@ class _ClientHandler(socketserver.BaseRequestHandler):
         peer = self.client_address
         client_id = str(peer)
         registered = False
-        logger.info("Client connected: %s", peer)
+        # Created up front (not just at register_interest time) and used for
+        # EVERY outgoing write on this socket, including plain query
+        # responses below - not just pushes. The collection thread can call
+        # `registry.publish_*` -> `conn.send()` at any moment once this
+        # client is registered, completely independently of this handler's
+        # own request/response loop; without routing every write through the
+        # same `_ClientConnection` (and its lock), a push landing mid-write of
+        # a query response could interleave bytes from both writes on the
+        # wire and corrupt the frame stream for whichever read either one.
+        conn = _ClientConnection(self.request, client_id)
+        # Not logged at INFO here: ensure_master_running()'s `_probe()` (see below)
+        # opens a plain connect-then-close TCP socket, with no frame ever sent, to
+        # check whether a master is already listening - every trader_bot start-up
+        # does one of these in addition to its real persistent connection. Logging
+        # this unconditionally made every bot launch look like a client connecting
+        # and immediately disconnecting. Instead, the INFO-level "Client connected"
+        # is deferred to the first message actually received below - a probe never
+        # sends one, so it never gets an INFO connect log (only the DEBUG one right
+        # here); a real client sends register_interest within moments of connecting,
+        # so the INFO log still lands essentially at connect time for it. The
+        # `finally` block below uses the same `got_any_message` flag to log a real
+        # disconnect at INFO but a probe's close at DEBUG.
+        logger.debug("Client connected: %s", peer)
+        got_any_message = False
         try:
             while True:
                 try:
@@ -873,13 +1018,30 @@ class _ClientHandler(socketserver.BaseRequestHandler):
                     break
                 if msg is None:
                     break
+                if not got_any_message:
+                    logger.info("Client connected: %s", peer)
+                got_any_message = True
+                if not isinstance(msg, dict):
+                    # Valid JSON but not an object (e.g. a bare list/number) -
+                    # without this guard, msg.get() raised AttributeError and
+                    # killed the connection with a traceback.
+                    logger.warning("Client %s sent a non-object frame: %r", peer, type(msg).__name__)
+                    if not conn.send({"type": "error", "message": "expected a JSON object"}):
+                        break
+                    continue
                 if msg.get("type") == "register_interest" and registry is not None:
                     client_id = msg.get("client_id", client_id)
+                    conn.client_id = client_id
                     pairs = msg.get("pairs", [])
                     want_funding_rate = bool(msg.get("want_funding_rate", False))
                     want_trades = bool(msg.get("want_trades", False))
                     try:
-                        registry.register(client_id, pairs, want_funding_rate, want_trades)
+                        # Hand the registry this connection too (not just the
+                        # interest list) - it's the target `publish_*` sends
+                        # pushes down, from the collection thread, later.
+                        registry.register(
+                            client_id, pairs, want_funding_rate, want_trades, connection=conn,
+                        )
                         registered = True
                         response = {"type": "registered", "pairs": len(pairs)}
                     except Exception as e:
@@ -891,14 +1053,19 @@ class _ClientHandler(socketserver.BaseRequestHandler):
                     except Exception as e:
                         logger.exception("Error handling client request %r", msg)
                         response = {"type": "error", "message": str(e)}
-                try:
-                    send_msg(self.request, response)
-                except OSError:
+                if not conn.send(response):
                     break
         finally:
             if registry is not None and registered:
                 registry.unregister(client_id)
-            logger.info("Client disconnected: %s", peer)
+            if got_any_message:
+                logger.info("Client disconnected: %s", peer)
+            else:
+                logger.debug(
+                    "Probe connection from %s closed (no data sent - likely a "
+                    "master health-check from ensure_master_running(), not a real client)",
+                    peer,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +1079,11 @@ class _ClientHandler(socketserver.BaseRequestHandler):
 #  count that first failed (e.g. hyperliquid failed at 40, worked at 20, so the
 #  entry is 20). OKX's real threshold moved between ~90 and ~150 across separate
 #  probe runs (likely load-dependent on OKX's side), so its entry is a
-#  conservative floor rather than the observed ceiling.
+#  conservative floor rather than the observed ceiling. Coinbase is the
+#  exception: escalating 250/350/450/550/650/750/850/928 pairs never triggered
+#  a rate-limit signal even once, so its entry (928) is simply its entire
+#  available spot market at probe time, not an observed ceiling - re-probe if
+#  Coinbase's tradable-pair count grows meaningfully past that.
 # ---------------------------------------------------------------------------
 
 EXCHANGE_MAX_SAFE_PAIRS: dict[str, int] = {
@@ -927,6 +1098,9 @@ EXCHANGE_MAX_SAFE_PAIRS: dict[str, int] = {
     "cryptocom": 500,
     "kraken": 1200,
     "hitbtc": 1000,
+    # Never rate-limited at any escalation step (250/350/450/550/650/750/850/928) -
+    # 928 is coinbase's entire available spot market, pulled clean in one batch.
+    "coinbase": 928,
 }
 # Conservative default for any exchange not covered by a probe run above.
 DEFAULT_MAX_SAFE_PAIRS = 100
@@ -974,6 +1148,9 @@ class SubserverConnection:
                 send_msg(self.sock, msg)
                 return True
             except OSError:
+                return False
+            except Exception:
+                logger.exception("Failed to serialize/send a message to subserver '%s'", self.name)
                 return False
 
 
@@ -1043,12 +1220,23 @@ class WorkDistributor:
                 self.exchange_name, covered, len(self.all_pairs),
                 self.max_pairs_per_worker, workers, len(subserver_items),
             )
-        self._on_master_pairs(shares[0])
-        logger.info("%s: master keeps %d pair(s) locally", self.exchange_name, len(shares[0]))
+        # Runs on whatever thread triggered the rebalance (a client handler, a
+        # subserver handler, the collection thread) - a failure in either the
+        # local set_pairs callback or one subserver's send must never propagate
+        # into that thread, nor stop the remaining subservers' assignments.
+        try:
+            self._on_master_pairs(shares[0])
+            logger.info("%s: master keeps %d pair(s) locally", self.exchange_name, len(shares[0]))
+        except Exception:
+            logger.exception("%s: applying the master's own pair share failed", self.exchange_name)
         for (name, conn), share in zip(subserver_items, shares[1:]):
-            ok = conn.send(
-                {"type": "assign_pairs", "exchange": self.exchange_name, "pairs": share}
-            )
+            try:
+                ok = conn.send(
+                    {"type": "assign_pairs", "exchange": self.exchange_name, "pairs": share}
+                )
+            except Exception:
+                logger.exception("%s: assigning pairs to subserver '%s' failed", self.exchange_name, name)
+                continue
             logger.info(
                 "%s: assigned %d pair(s) to subserver '%s'%s",
                 self.exchange_name, len(share), name, "" if ok else " (send failed)",
@@ -1071,6 +1259,11 @@ class _SubserverHandler(socketserver.BaseRequestHandler):
                     break
                 if msg is None:
                     break
+                if not isinstance(msg, dict):
+                    logger.warning(
+                        "Subserver '%s' sent a non-object frame: %r", name, type(msg).__name__
+                    )
+                    continue
                 mtype = msg.get("type")
                 if mtype == "hello":
                     name = msg.get("name", name)
@@ -1262,21 +1455,27 @@ class SubserverForwarder:
     def _reconnect_loop(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
-            with self._lock:
-                connected = self._sock is not None
-            if not connected:
-                try:
-                    self._connect()
-                    backoff = 1.0
-                except OSError as e:
-                    logger.warning(
-                        "Could not connect to master %s: %s (retrying in %.0fs)",
-                        self.master_addr, e, backoff,
-                    )
-                    self._stop.wait(backoff)
-                    backoff = min(backoff * 2, 30.0)
-                    continue
-            self._stop.wait(1.0)
+            try:
+                with self._lock:
+                    connected = self._sock is not None
+                if not connected:
+                    try:
+                        self._connect()
+                        backoff = 1.0
+                    except OSError as e:
+                        logger.warning(
+                            "Could not connect to master %s: %s (retrying in %.0fs)",
+                            self.master_addr, e, backoff,
+                        )
+                        self._stop.wait(backoff)
+                        backoff = min(backoff * 2, 30.0)
+                        continue
+                self._stop.wait(1.0)
+            except Exception:
+                # This daemon thread is the ONLY thing that ever redials the
+                # master - an unexpected exception here must never end it.
+                logger.exception("Subserver reconnect loop hit an unexpected error - continuing")
+                self._stop.wait(backoff)
 
     def _sender_loop(self) -> None:
         """Drains the queue strictly in order. A message is only removed from the
@@ -1308,6 +1507,15 @@ class SubserverForwarder:
                             pass
                         self._sock = None
                 self._stop.wait(0.2)
+            except Exception:
+                # Non-I/O failure (e.g. an unserializable payload): retrying the
+                # SAME message forever would wedge the whole queue behind it -
+                # drop the poison message loudly and keep the pipeline moving.
+                logger.exception(
+                    "Dropping one unsendable forwarder message (type=%r) - see above",
+                    pending.get("type") if isinstance(pending, dict) else type(pending).__name__,
+                )
+                pending = None
 
     def _receiver_loop(self) -> None:
         """Listens for messages the master pushes down unprompted - currently just
@@ -1339,6 +1547,9 @@ class SubserverForwarder:
                             pass
                         self._sock = None
                 self._stop.wait(0.5)
+                continue
+            if not isinstance(msg, dict):
+                logger.warning("Master sent a non-object frame: %r", type(msg).__name__)
                 continue
             if msg.get("type") == "assign_pairs":
                 pairs = msg.get("pairs", [])
@@ -1411,6 +1622,48 @@ class SubserverForwarder:
 # ---------------------------------------------------------------------------
 
 
+def _acquire_launch_lock(lock_path: Path, *, timeout: float, stale_after: float = 30.0) -> int | None:
+    """Acquire an exclusive, cross-process file lock via atomic create
+    (`O_CREAT | O_EXCL` fails atomically if the file already exists, on both
+    Windows and POSIX - no extra dependency needed for a single-writer lock).
+    Polls until `timeout` elapses. A lock file older than `stale_after`
+    seconds is treated as abandoned (its holder crashed before releasing it)
+    and removed so it can't wedge every future launch attempt forever.
+    Returns the open file descriptor - pass it to `_release_launch_lock` - or
+    None if the lock could not be acquired in time."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+                if age > stale_after:
+                    logger.warning(
+                        "Removing stale data server launch lock %s (age %.0fs)", lock_path, age
+                    )
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.2)
+
+
+def _release_launch_lock(lock_path: Path, lock_fd: int | None) -> None:
+    if lock_fd is None:
+        return
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def ensure_master_running(
     host: str,
     port: int,
@@ -1419,7 +1672,7 @@ def ensure_master_running(
     subserver_port: int = 8721,
     python_executable: str | None = None,
     extra_args: list[str] | None = None,
-    startup_timeout: float = 15.0,
+    startup_timeout: float = 30.0,
 ) -> bool:
     """Check whether a data_server master is already listening on (host, port); if
     not, launch one as a fully detached background process, so it outlives
@@ -1427,64 +1680,156 @@ def ensure_master_running(
     processes connecting later depend on it staying up regardless of this one's
     lifetime. Returns True if a master is already running or was just launched
     and came up within `startup_timeout`; False if launching failed outright or
-    it never came up (callers should fall back to direct exchange polling)."""
+    it never came up (callers should fall back to direct exchange polling).
+
+    Several trader_bot processes on the same exchange typically start within
+    the same second or two of each other (e.g. a batch of paper-trading bots
+    launched together). The probe-then-launch below is a classic TOCTOU race:
+    without a lock, every one of them can probe the port BEFORE the first
+    launched master has finished binding it, see "nothing listening", and each
+    spawn its own master - N bots produced N master processes all fighting
+    over the same port, exactly the redundant-polling problem this feature
+    exists to prevent (confirmed directly: 5 simultaneous trader_bot launches
+    produced 5 `data_server --mode master` processes, only one of which
+    actually held the listening socket). The cross-process lock file below
+    serializes the whole check-and-launch section so only the first caller to
+    acquire it ever spawns a process; every other caller waits on the lock,
+    then re-probes (the master it was racing against is now up) instead of
+    launching its own."""
     connect_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
-    try:
-        socket.create_connection((connect_host, port), timeout=1.5).close()
-        logger.info("Data server master already running at %s:%d", connect_host, port)
-        return True
-    except OSError:
-        pass
 
-    cmd = [
-        python_executable or sys.executable,
-        "-m", "VulcanTrader.data_server",
-        "--mode", "master",
-        "-c", str(config_path),
-        "--host", connect_host,
-        "--port", str(port),
-        "--subserver-port", str(subserver_port),
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-
-    logger.warning(
-        "No data server master found at %s:%d - launching one: %s",
-        connect_host, port, " ".join(cmd),
-    )
-    try:
-        popen_kwargs: dict[str, Any] = {}
-        if sys.platform == "win32":
-            popen_kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-            )
-        else:
-            popen_kwargs["start_new_session"] = True
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **popen_kwargs,
-        )
-    except Exception:
-        logger.exception("Failed to launch data server master - continuing without it")
-        return False
-
-    deadline = time.time() + startup_timeout
-    while time.time() < deadline:
+    def _probe() -> bool:
         try:
-            socket.create_connection((connect_host, port), timeout=1.0).close()
-            logger.info("Data server master is up at %s:%d", connect_host, port)
+            socket.create_connection((connect_host, port), timeout=1.5).close()
             return True
         except OSError:
-            time.sleep(0.5)
-    logger.warning(
-        "Data server master at %s:%d did not come up within %.0fs of launching - "
-        "continuing without it (falling back to direct exchange polling)",
-        connect_host, port, startup_timeout,
+            return False
+
+    if _probe():
+        logger.info("Data server master already running at %s:%d", connect_host, port)
+        return True
+
+    lock_path = Path(tempfile.gettempdir()) / f"vulcantrader_dataserver_master_{port}.lock"
+    # Wait comfortably longer than one full launch-and-confirm cycle: the
+    # lock is now held for the holder's entire startup_timeout (see below),
+    # so a waiter timing out at the same threshold could give up moments
+    # before the holder's master actually comes up.
+    # stale_after must exceed the longest legitimate hold time (a full
+    # startup_timeout while confirming a successful launch), or a lock held
+    # by a still-working holder gets ripped away as "abandoned" mid-launch.
+    lock_fd = _acquire_launch_lock(
+        lock_path, timeout=startup_timeout + 15.0, stale_after=startup_timeout + 30.0
     )
-    return False
+    if lock_fd is None:
+        # Someone else is holding the lock (presumably mid-launch) and didn't
+        # release it within our own startup_timeout - fall through to a final
+        # probe rather than piling on with yet another spawn attempt.
+        logger.warning(
+            "Timed out waiting for the data server master launch lock at %s:%d "
+            "(another process is holding it) - probing once more before giving up",
+            connect_host, port,
+        )
+        return _probe()
+
+    try:
+        # Re-probe now that we hold the lock: whoever launched the master we
+        # were about to race against has very likely finished by now.
+        if _probe():
+            logger.info("Data server master already running at %s:%d", connect_host, port)
+            return True
+
+        cmd = [
+            python_executable or sys.executable,
+            "-m", "VulcanTrader.data_server",
+            "--mode", "master",
+            "-c", str(config_path),
+            "--host", connect_host,
+            "--port", str(port),
+            "--subserver-port", str(subserver_port),
+            # Without this the auto-launched master defaults to WARNING-only
+            # (main()'s own --verbose default is 0), so its dedicated
+            # logs/data_server/ log file would contain almost nothing useful -
+            # not even its own "DataCollector initialised" / "Master listening"
+            # startup confirmations, both logged at INFO.
+            "-v",
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
+
+        logger.warning(
+            "No data server master found at %s:%d - launching one: %s",
+            connect_host, port, " ".join(cmd),
+        )
+        try:
+            popen_kwargs: dict[str, Any] = {}
+            if sys.platform == "win32":
+                # CREATE_NEW_CONSOLE instead of DETACHED_PROCESS: the master
+                # gets its OWN real, visible console window with live stdio,
+                # instead of running fully headless - requested directly after
+                # a bot-triggered auto-launch kept coming up with no visible
+                # output anywhere (DETACHED_PROCESS has no console at all by
+                # definition; the file-only capture below was a workaround,
+                # not what was actually wanted). setup_logging(subdir=
+                # "data_server") in main() still independently writes the same
+                # records to logs/data_server/*.txt via its own FileHandler -
+                # that persistence is unaffected by this, it never depended on
+                # stdio redirection.
+                #
+                # CREATE_BREAKAWAY_FROM_JOB: if this interpreter is itself
+                # running inside a Windows Job Object (common under sandboxed/
+                # managed dev environments, CI runners, some IDE/terminal
+                # supervisors), a child normally inherits that job by default
+                # and gets killed the moment the job's own cleanup fires -
+                # observed directly here as an earlier DETACHED_PROCESS master
+                # dying silently, mid-`Exchange.__init__`, moments after the
+                # parent bot's own tool invocation completed. This flag is a
+                # no-op (silently ignored) unless the job explicitly permits
+                # breakaway, so it's safe to always set.
+                popen_kwargs["creationflags"] = (
+                    subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_BREAKAWAY_FROM_JOB
+                )
+                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, close_fds=True, **popen_kwargs)
+            else:
+                # No portable equivalent of "open a new visible terminal
+                # window" from a background process on POSIX (it depends on
+                # which terminal emulator, if any, is even installed) - stay
+                # headless there and rely on the structured log file, same as
+                # before.
+                popen_kwargs["start_new_session"] = True
+                subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    **popen_kwargs,
+                )
+        except Exception:
+            logger.exception("Failed to launch data server master - continuing without it")
+            return False
+
+        # Hold the lock through the ENTIRE startup-confirmation wait, not just
+        # the Popen call - releasing it right after spawning let a second
+        # bot's re-probe run before this master had actually bound the port,
+        # so it saw "nothing listening" too and launched its own (confirmed
+        # directly: releasing early still produced 5 masters from 5 near-
+        # simultaneous bots, just launched one-after-another instead of all
+        # at once). Every other waiter now only gets the lock once THIS
+        # launch has either succeeded or given up.
+        deadline = time.time() + startup_timeout
+        while time.time() < deadline:
+            if _probe():
+                logger.info("Data server master is up at %s:%d", connect_host, port)
+                return True
+            time.sleep(0.5)
+        logger.warning(
+            "Data server master at %s:%d did not come up within %.0fs of launching - "
+            "continuing without it (falling back to direct exchange polling)",
+            connect_host, port, startup_timeout,
+        )
+        return False
+    finally:
+        _release_launch_lock(lock_path, lock_fd)
 
 
 class DataServerClient:
@@ -1493,7 +1838,18 @@ class DataServerClient:
     queries the master's cache for OHLCV/funding-rate/trades data. Every query
     method returns None while disconnected or before the master has the
     requested data cached yet - callers must treat that exactly like a cache
-    miss and fall back to their own direct exchange call, never block on it."""
+    miss and fall back to their own direct exchange call, never block on it.
+
+    Also receives unsolicited "webhook" pushes: the master forwards every fresh
+    OHLCV/funding-rate/trades tick straight to whichever registered clients are
+    watching that pair, the moment it lands (see `ClientInterestRegistry.
+    publish_*`), rather than making every client wait for its own next poll.
+    Set `on_ohlcv_push` / `on_funding_rate_push` / `on_trades_push` (each
+    `Callable[[pair, DataFrame|dict], None]`, matching `get_ohlcv`/`get_funding_
+    rate`/`get_trades`'s own return shapes) before `start()` to receive them -
+    they're invoked from the connection's own background reader thread, so
+    keep them fast/non-blocking (e.g. just write into a local cache) rather
+    than doing real work inline."""
 
     def __init__(self, host: str, port: int, exchange_name: str, client_id: str) -> None:
         self.addr = (host, port)
@@ -1501,15 +1857,27 @@ class DataServerClient:
         self.client_id = client_id
         self._sock: socket.socket | None = None
         self._conn_lock = threading.Lock()
-        # Serializes the send-then-recv round trip of _request()/_send_registration()
-        # against each other - both share one connection, so two overlapping
-        # requests could otherwise read back each other's response.
+        # Serializes the send-then-await-response round trip of _request()/
+        # _send_registration() against each other - both share one connection,
+        # so two overlapping requests could otherwise consume each other's
+        # response off the queue below.
         self._request_lock = threading.Lock()
+        # The reader thread (one per live connection - see _connect()) routes
+        # every non-push frame here; _request()/_send_registration() block on
+        # it instead of calling recv_msg() themselves, so an unsolicited push
+        # arriving between a send and its response can never be misread as
+        # that response. maxsize=1 is enough given _request_lock guarantees at
+        # most one outstanding request at a time.
+        self._response_queue: queue.Queue[dict | None] = queue.Queue(maxsize=1)
+        self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._pairs: list[str] = []
         self._want_funding_rate = False
         self._want_trades = False
         self._has_registration = False
+        self.on_ohlcv_push: Callable[[str, str, str, DataFrame], None] | None = None
+        self.on_funding_rate_push: Callable[[str, dict], None] | None = None
+        self.on_trades_push: Callable[[str, DataFrame], None] | None = None
         self._reconnect_thread = threading.Thread(
             target=self._reconnect_loop, name="dataserver-client-reconnect", daemon=True
         )
@@ -1558,11 +1926,10 @@ class DataServerClient:
         with self._request_lock:
             try:
                 send_msg(sock, msg)
-                recv_msg(sock)  # ack - registration is otherwise fire-and-forget
-                return True
             except OSError:
                 self._drop(sock)
                 return False
+            return self._await_response(sock) is not None  # ack - otherwise fire-and-forget
 
     def _drop(self, sock: socket.socket) -> None:
         with self._conn_lock:
@@ -1573,10 +1940,98 @@ class DataServerClient:
                     pass
                 self._sock = None
 
+    def _is_push(self, msg: dict) -> bool:
+        return isinstance(msg.get("type"), str) and msg["type"].endswith("_push")
+
+    def _dispatch_push(self, msg: dict) -> None:
+        mtype = msg.get("type")
+        try:
+            if mtype == "ohlcv_push" and self.on_ohlcv_push is not None:
+                self.on_ohlcv_push(msg["pair"], msg["timeframe"], msg["candle_type"], wire_to_df(msg))
+            elif mtype == "funding_rate_push" and self.on_funding_rate_push is not None:
+                self.on_funding_rate_push(msg["pair"], msg["funding_rate"])
+            elif mtype == "trades_push" and self.on_trades_push is not None:
+                self.on_trades_push(msg["pair"], wire_to_trades(msg))
+        except Exception:
+            logger.exception("DataServerClient '%s' push handler failed for %r", self.client_id, mtype)
+
+    def _reader_loop(self, sock: socket.socket) -> None:
+        """One instance per connection (see _connect()); exits (and drops the
+        connection so _reconnect_loop picks it up) the moment this socket
+        stops producing valid frames."""
+        try:
+            while not self._stop.is_set():
+                try:
+                    msg = recv_msg(sock)
+                except (ConnectionError, ValueError, json.JSONDecodeError, OSError):
+                    break
+                if msg is None:
+                    break
+                if not isinstance(msg, dict):
+                    logger.warning(
+                        "DataServerClient '%s' received a non-object frame: %r",
+                        self.client_id, type(msg).__name__,
+                    )
+                    continue
+                if self._is_push(msg):
+                    self._dispatch_push(msg)
+                else:
+                    try:
+                        self._response_queue.put_nowait(msg)
+                    except queue.Full:
+                        # A response arrived with nobody waiting (the requester
+                        # already gave up / timed out) - drop it rather than
+                        # block the reader or let it desync a future request.
+                        try:
+                            self._response_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        self._response_queue.put_nowait(msg)
+        finally:
+            self._drop(sock)
+
+    def _await_response(self, sock: socket.socket, timeout: float = 10.0) -> dict | None:
+        try:
+            return self._response_queue.get(timeout=timeout)
+        except queue.Empty:
+            # No response within timeout - drop the connection outright rather
+            # than risk a stale response landing on some LATER request after
+            # reconnecting confuses things; simplest safe recovery.
+            self._drop(sock)
+            return None
+
     def _connect(self) -> None:
         sock = socket.create_connection(self.addr, timeout=5)
+        # create_connection's `timeout` only bounds the connect handshake, but
+        # it leaves the SOCKET's timeout set to that same 5s for every
+        # subsequent operation too - including the reader thread's recv_msg()
+        # below, which is meant to block indefinitely waiting for the next
+        # push or response. Any idle gap on the wire >= 5s (routine: cycles
+        # run every `process_throttle_secs`, commonly also 5s) made recv()
+        # raise a timeout (a plain OSError subclass), which the reader loop's
+        # error handling correctly-per-its-own-logic treated as a dead
+        # connection and dropped - a perfectly healthy, just momentarily
+        # quiet, connection torn down and reconnected every cycle. Confirmed
+        # directly: a bot's client disconnected/reconnected in lockstep with
+        # its own 5s process_throttle_secs. Request-level timeouts are
+        # already enforced separately by _await_response()'s queue.get(
+        # timeout=...), which is the correct layer for that - this socket
+        # itself should just block until the connection actually breaks.
+        sock.settimeout(None)
         with self._conn_lock:
             self._sock = sock
+        # Drain anything left over from a prior connection's response queue -
+        # only relevant if a previous _await_response() timed out without
+        # consuming what eventually arrived.
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, args=(sock,), name="dataserver-client-reader", daemon=True
+        )
+        self._reader_thread.start()
         logger.info("DataServerClient '%s' connected to %s", self.client_id, self.addr)
         if self._has_registration:
             self._send_registration()
@@ -1584,21 +2039,31 @@ class DataServerClient:
     def _reconnect_loop(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
-            with self._conn_lock:
-                connected = self._sock is not None
-            if not connected:
-                try:
-                    self._connect()
-                    backoff = 1.0
-                except OSError as e:
-                    logger.warning(
-                        "DataServerClient '%s' could not connect to %s: %s (retrying in %.0fs)",
-                        self.client_id, self.addr, e, backoff,
-                    )
-                    self._stop.wait(backoff)
-                    backoff = min(backoff * 2, 30.0)
-                    continue
-            self._stop.wait(1.0)
+            try:
+                with self._conn_lock:
+                    connected = self._sock is not None
+                if not connected:
+                    try:
+                        self._connect()
+                        backoff = 1.0
+                    except OSError as e:
+                        logger.warning(
+                            "DataServerClient '%s' could not connect to %s: %s (retrying in %.0fs)",
+                            self.client_id, self.addr, e, backoff,
+                        )
+                        self._stop.wait(backoff)
+                        backoff = min(backoff * 2, 30.0)
+                        continue
+                self._stop.wait(1.0)
+            except Exception:
+                # The only thread that ever redials the master; if it died on an
+                # unexpected exception (e.g. from _send_registration inside
+                # _connect), the bot would silently never reconnect.
+                logger.exception(
+                    "DataServerClient '%s' reconnect loop hit an unexpected error - continuing",
+                    self.client_id,
+                )
+                self._stop.wait(backoff)
 
     def _request(self, msg: dict) -> dict | None:
         """One-shot request/response over the persistent connection. Returns None
@@ -1611,10 +2076,10 @@ class DataServerClient:
         with self._request_lock:
             try:
                 send_msg(sock, msg)
-                return recv_msg(sock)
             except OSError:
                 self._drop(sock)
                 return None
+            return self._await_response(sock)
 
     def get_ohlcv(
         self, pair: str, timeframe: str, candle_type: str = "spot", limit: int | None = None
@@ -1651,25 +2116,148 @@ class DataServerClient:
 # ---------------------------------------------------------------------------
 
 
-def _build_config(args: Any) -> Config:
-    from VulcanTrader.config.configuration import Configuration
+#  Minimal data_server config format
+# ---------------------------------------------------------------------------
+#
+# data_server has its own tiny, dedicated JSON schema - NOT a VulcanTrader
+# trading-bot config (no key/secret, no stake_amount, no minimal_roi), and NOT
+# one file per exchange - ONE general config per machine, with no exchange or
+# timeframe baked into it at all:
+#
+#   {
+#     "format": "feather",               // "feather" | "parquet", default "feather"
+#     "funding_rate": false,             // collect funding-rate history (futures only)
+#     "persist_to_disk": true,           // write OHLCV/funding to datadir feather files
+#     "orderflow": false,                // collect raw public trades
+#     "is_subserver": false,             // false = master role, true = subserver role
+#     "master_host": "0.0.0.0",          // THE master server's address, one field
+#                                        // regardless of role: bind address when
+#                                        // is_subserver=false (this IS the master -
+#                                        // "0.0.0.0" listens on every interface),
+#                                        // or the real IP/hostname to dial when
+#                                        // is_subserver=true (this is a subserver
+#                                        // on a different machine, reaching out to
+#                                        // wherever the master actually runs).
+#     "master_port": 8720,               // master role only: client-facing bind port
+#     "subserver_port": 8721,            // BOTH roles: master's subserver-facing bind
+#                                        // port, or the port a subserver dials on
+#                                        // master_host
+#     "name": "kraken-subserver-1"       // subserver role only: self-identification
+#                                        // to the master, default "<exchange>-subserver"
+#   }
+#
+# No "pairs" field: which pairs get collected is always dynamic, never
+# config-driven - a master's pairlist is the union of every trading-bot
+# client's registered interest, and a subserver's is whatever the master
+# assigns it. Both start with zero pairs at boot and grow from there.
+#
+# No "exchange"/"timeframe" fields either, for the same reason: which
+# exchange/timeframe a master serves is dynamic, sourced from whichever
+# trader_bot happens to launch it - trader_bot.py's `_setup_data_server_
+# client` passes them as `--exchange`/`--timeframes` CLI args to `ensure_
+# master_running` (see its `extra_args`), not written into this file. A
+# manually-run master/subserver (no trader_bot involved, e.g. run-subserver.
+# bat/.sh) supplies them the same way, on the command line, or --exchange/
+# --timeframes can be omitted in favor of setting "exchange"/"timeframe"
+# directly in the config as a fallback for that manual case.
+#
+# Exchange/ExchangeResolver (exchange/exchange.py) are deeply coupled to the
+# FULL freqtrade-shaped config dict - dozens of direct `config["..."]`
+# accesses (dry_run, exchange, stake_currency, entry_pricing/exit_pricing,
+# runmode, datadir, dataformat_trades, orderflow{max_candles,...}, ...) that
+# aren't practical to audit/special-case one by one. Rather than expose that
+# complexity to whoever writes this file, `_expand_minimal_config` fills in a
+# complete, sanely-defaulted version of it internally and lets the user only
+# ever see/edit the handful of fields above. This expanded dict is never
+# written back to disk.
+
+_DEFAULT_TIMEFRAME = "15m"
+
+
+def _load_minimal_config(path: str) -> dict[str, Any]:
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        minimal = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise OperationalException(f'Config file "{path}" is not valid JSON: {e}') from e
+    if not isinstance(minimal, dict):
+        raise OperationalException(f'Config file "{path}" must contain a JSON object.')
+    return minimal
+
+
+def _expand_minimal_config(minimal: dict[str, Any], args: Any) -> Config:
+    from VulcanTrader.config.directory_operations import create_datadir, create_userdata_dir
     from VulcanTrader.enums import RunMode
 
-    args_dict: dict[str, Any] = {"config": args.config, "verbosity": args.verbose}
-    if args.user_data_dir:
-        args_dict["user_data_dir"] = args.user_data_dir
-    if args.pairs:
-        args_dict["pairs"] = args.pairs
-    if args.timeframes:
-        args_dict["timeframes"] = args.timeframes
-    if args.datadir:
-        args_dict["datadir"] = args.datadir
-    if args.exchange:
-        args_dict["exchange"] = args.exchange
+    # exchange has no home in the config file itself (see schema comment
+    # above) - always supplied dynamically, either via --exchange (the normal
+    # path: trader_bot.py passes it when auto-launching a master) or, for a
+    # manually-run master/subserver with no bot involved, an "exchange" field
+    # in the config as a fallback.
+    exchange_name = (args.exchange or minimal.get("exchange") or "").lower()
+    if not exchange_name:
+        raise OperationalException(
+            "No exchange specified - pass --exchange (trader_bot.py does this "
+            'automatically) or set "exchange" in the config file.'
+        )
+    data_format = minimal.get("format", "feather")
+    if data_format not in ("feather", "parquet"):
+        raise OperationalException(f'"format" must be "feather" or "parquet", got {data_format!r}.')
 
-    config = Configuration(args_dict, RunMode.UTIL_EXCHANGE).get_config()
-    # Data download/collection doesn't need a stake-currency validated market.
-    config["stake_currency"] = config.get("stake_currency", "")
+    user_data_dir = create_userdata_dir(
+        args.user_data_dir or minimal.get("user_data_dir") or "user_data", create_dir=True
+    )
+    # Deliberately no "pairs" from the config (see schema comment above) - only
+    # an explicit `--pairs` CLI override (standalone/debugging use) seeds a
+    # starting pairlist; otherwise both master and subserver boot with zero
+    # pairs and grow only via client registration / master assignment.
+    starting_pairs = list(args.pairs or [])
+    config: Config = {
+        "dry_run": True,  # data_server never places orders - always a read-only collector
+        "stake_currency": "",
+        "fee": 0.0,
+        "trading_mode": "futures" if minimal.get("funding_rate") else "spot",
+        "margin_mode": "isolated" if minimal.get("funding_rate") else "",
+        "cancel_open_orders_on_exit": False,
+        "unfilledtimeout": {"entry": 10, "exit": 10, "exit_timeout_count": 0, "unit": "minutes"},
+        "entry_pricing": {"price_side": "same", "use_order_book": True, "order_book_top": 1},
+        "exit_pricing": {"price_side": "same", "use_order_book": True, "order_book_top": 1},
+        "orderflow": {
+            "cache_size": 1500, "max_candles": 1500, "scale": 0.0,
+            "stacked_imbalance_range": 3, "imbalance_volume": 1, "imbalance_ratio": 3.0,
+        },
+        "exchange": {
+            "name": exchange_name,
+            "key": "",
+            "secret": "",
+            "ccxt_config": {"enableRateLimit": True, "rateLimit": 1000},
+            "ccxt_async_config": {},
+            "use_public_trades": bool(minimal.get("orderflow", False)),
+            "pair_whitelist": starting_pairs,
+            "pair_blacklist": [],
+        },
+        "pairlists": [{"method": "StaticPairList"}],
+        # dynamic_expand_pairlist (used by DataCollector to fall back to the
+        # exchange's tradable markets when a caller passes no explicit
+        # `pairs`) reads this TOP-LEVEL key directly, not exchange.
+        # pair_whitelist - normally populated by Configuration._resolve_pairs_
+        # list(), which this minimal-config path doesn't go through.
+        "pairs": starting_pairs,
+        "timeframe": args.timeframes[0] if args.timeframes else minimal.get("timeframe", _DEFAULT_TIMEFRAME),
+        "timeframes": args.timeframes or [minimal.get("timeframe", _DEFAULT_TIMEFRAME)],
+        "dataformat_ohlcv": data_format,
+        "dataformat_trades": data_format,
+        "data_server": {"persist_to_disk": bool(minimal.get("persist_to_disk", True))},
+        "user_data_dir": user_data_dir,
+        "runmode": RunMode.UTIL_EXCHANGE,
+    }
+    if args.exchange:
+        config["exchange"]["name"] = args.exchange.lower()
+    config["datadir"] = create_datadir(config, args.datadir or minimal.get("datadir"))
+
+    from VulcanTrader.exchange.check_exchange import check_exchange
+    check_exchange(config, check_for_bad=False)
+
     return config
 
 
@@ -1696,7 +2284,8 @@ def _supervised_run(
 
 
 def _run_standalone(config: Config, args: Any, stop_event: threading.Event) -> None:
-    collector = DataCollector(config)
+    persist_to_disk = bool(config.get("data_server", {}).get("persist_to_disk", True))
+    collector = DataCollector(config, persist_to_disk=persist_to_disk)
     try:
         collector.run_forever(poll_interval=args.poll_interval, stop_event=stop_event)
     finally:
@@ -1704,9 +2293,21 @@ def _run_standalone(config: Config, args: Any, stop_event: threading.Event) -> N
 
 
 def _run_master(config: Config, args: Any, stop_event: threading.Event) -> None:
-    data_handler = get_datahandler(config["datadir"], config.get("dataformat_ohlcv", "feather"))
-    trades_data_handler = get_datahandler(
-        config["datadir"], config.get("dataformat_trades", "feather")
+    # Single switch for BOTH halves of what this master persists: regular OHLCV
+    # for every pair (already unconditional before this flag existed) and
+    # funding-rate history on futures pairs (new - see DataCollector's
+    # `collect_funding_rate_history`). False skips constructing real
+    # datahandlers at all, so DataCache's own "handler is None -> memory-only"
+    # branch (merge_ohlcv/merge_trades) takes care of disabling persistence -
+    # no separate on/off branch needed here.
+    persist_to_disk = bool(config.get("data_server", {}).get("persist_to_disk", True))
+    data_handler = (
+        get_datahandler(config["datadir"], config.get("dataformat_ohlcv", "feather"))
+        if persist_to_disk else None
+    )
+    trades_data_handler = (
+        get_datahandler(config["datadir"], config.get("dataformat_trades", "feather"))
+        if persist_to_disk else None
     )
     trading_mode = config.get("trading_mode", TradingMode.SPOT)
     cache = DataCache(
@@ -1716,25 +2317,48 @@ def _run_master(config: Config, args: Any, stop_event: threading.Event) -> None:
     )
     exchange_name = config["exchange"]["name"]
 
+    # `registry` (constructed below, after `collector`/`distributor` it
+    # depends on) is referenced here by name only - these hooks aren't
+    # actually CALLED until `collector.run_forever()` starts at the very
+    # bottom of this function, well after `registry` is assigned, so the
+    # normal Python closure late-binding rule applies cleanly.
     def _on_ohlcv(pair_key: PairWithTimeframe, df: DataFrame) -> None:
         pair, timeframe, candle_type = pair_key
-        cache.merge_ohlcv(exchange_name, pair, timeframe, candle_type_value(candle_type), df)
+        ct_value = candle_type_value(candle_type)
+        cache.merge_ohlcv(exchange_name, pair, timeframe, ct_value, df)
+        # Push the fresh tick straight to every client watching this pair -
+        # "webhook" style - instead of making each of them wait for their own
+        # next poll to notice it landed. Publishes the full MERGED series (a
+        # cheap in-memory read-back, cache.merge_ohlcv already updated it),
+        # not just the raw new rows in `df` - so a receiving client can
+        # replace its local copy outright instead of needing its own merge
+        # logic to reconstruct what the master already computed once.
+        merged = cache.get_ohlcv(exchange_name, pair, timeframe, ct_value)
+        registry.publish_ohlcv(exchange_name, pair, timeframe, ct_value, merged if merged is not None else df)
 
     def _on_funding_rate(pair: str, payload: dict) -> None:
         cache.set_funding_rate(exchange_name, pair, payload)
+        registry.publish_funding_rate(exchange_name, pair, payload)
 
     def _on_trades(pair: str, df: DataFrame) -> None:
         cache.merge_trades(exchange_name, pair, df)
+        merged = cache.get_trades(exchange_name, pair)
+        registry.publish_trades(exchange_name, pair, merged if merged is not None else df)
 
     # The master's own local collection shares its datadir with `cache`'s
     # data_handlers, so disk persistence is left entirely to the cache to avoid
     # two independent in-memory copies racing to write the same files.
+    # `collect_funding_rate_history` is set explicitly (not left to the
+    # constructor's own default) because that default reads `persist_to_disk`
+    # to decide - which is unconditionally False right here for the reason
+    # above, even though `cache` above may well be persisting for real.
     collector = DataCollector(
         config,
         on_ohlcv=_on_ohlcv,
         on_funding_rate=_on_funding_rate,
         on_trades=_on_trades,
         persist_to_disk=False,
+        collect_funding_rate_history=(persist_to_disk and trading_mode == "futures"),
     )
 
     # Offload work to connected subservers automatically: split the target pair
@@ -1783,7 +2407,7 @@ def _run_subserver(config: Config, args: Any, stop_event: threading.Event) -> No
     # on_assign_pairs is wired in below, once `collector` exists - the forwarder
     # has to exist first since collector's own hooks (forward_ohlcv etc.) need it.
     forwarder = SubserverForwarder(
-        args.master_host, args.master_port, exchange_name, name=args.name
+        args.master_host, args.subserver_port, exchange_name, name=args.name
     )
 
     collector = DataCollector(
@@ -1812,9 +2436,11 @@ def main(argv: list[str] | None = None) -> int:
         "networked master or subserver."
     )
     parser.add_argument(
-        "--mode", choices=["standalone", "master", "subserver"], default="standalone"
+        "--mode", choices=["standalone", "master", "subserver"], default=None,
+        help="Defaults to the config file's \"is_subserver\" (true -> subserver, "
+        "false/absent -> master). \"standalone\" (no networking) must be given explicitly.",
     )
-    parser.add_argument("-c", "--config", nargs="+", required=True, help="Config file(s).")
+    parser.add_argument("-c", "--config", required=True, help="Path to the data_server config file.")
     parser.add_argument("--user-data-dir", dest="user_data_dir", help="user_data directory.")
     parser.add_argument("-p", "--pairs", nargs="+", help="Pairs to collect (default: from config).")
     parser.add_argument(
@@ -1831,11 +2457,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Fixed poll interval in seconds (default: align to the shortest timeframe).",
     )
     parser.add_argument("--name", help="Identify this subserver to the master (subserver mode).")
-    # master-only
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host for master listeners.")
-    parser.add_argument("--port", type=int, default=8720, help="Client-facing port (master mode).")
+    # master-only - fall back to the config file's "host"/"port"/"subserver_port"
+    # when not given on the CLI; None here (not a hardcoded default) so that
+    # fallback can actually take effect. Resolved below, once the raw config
+    # dict is loaded.
+    parser.add_argument("--host", default=None, help="Bind host for master listeners.")
+    parser.add_argument("--port", type=int, default=None, help="Client-facing port (master mode).")
     parser.add_argument(
-        "--subserver-port", type=int, default=8721, help="Subserver-facing port (master mode)."
+        "--subserver-port", type=int, default=None, help="Subserver-facing port (master mode)."
     )
     parser.add_argument(
         "--max-pairs-per-worker",
@@ -1846,24 +2475,49 @@ def main(argv: list[str] | None = None) -> int:
         "for this exchange from VulcanTrader/ratelimit_probe.py (EXCHANGE_MAX_SAFE_PAIRS), "
         f"or {DEFAULT_MAX_SAFE_PAIRS} if the exchange isn't in that table.",
     )
-    # subserver-only
+    # subserver-only - falls back to the config file's "master_host" (see
+    # run-subserver.bat/.sh) when not given on the CLI; None here (not a
+    # hardcoded default) so that fallback can take effect. The port to dial
+    # is --subserver-port above (shared with master mode's bind port - see
+    # the config schema comment: one field, bind-vs-dial depending on role).
     parser.add_argument("--master-host", help="Master server host (subserver mode).")
-    parser.add_argument(
-        "--master-port", type=int, default=8721, help="Master's subserver port (subserver mode)."
-    )
     parser.add_argument("-v", "--verbose", action="count", default=0)
     args = parser.parse_args(argv)
-
-    if args.mode == "subserver" and not args.master_host:
-        parser.error("--master-host is required in subserver mode")
 
     setup_logging(
         level=logging.DEBUG
         if args.verbose >= 2
-        else (logging.INFO if args.verbose else logging.WARNING)
+        else (logging.INFO if args.verbose else logging.WARNING),
+        subdir="data_server",
     )
 
-    config = _build_config(args)
+    raw = _load_minimal_config(args.config)
+    config = _expand_minimal_config(raw, args)
+
+    if args.mode is None:
+        args.mode = "subserver" if raw.get("is_subserver") else "master"
+
+    if args.mode == "subserver":
+        # A subserver dials (master_host, subserver_port) - the SAME port a
+        # master binds for incoming subserver connections - never master_port
+        # (that's the master's separate client/bot-facing port, irrelevant
+        # here). One `--subserver-port` CLI flag/config field serves both
+        # roles, matching the config's own single `master_host` field doing
+        # double duty as bind-vs-dial address depending on `is_subserver`.
+        if not args.master_host:
+            args.master_host = raw.get("master_host")
+        args.subserver_port = args.subserver_port or raw.get("subserver_port") or 8721
+        if not args.name:
+            args.name = raw.get("name")
+        if not args.master_host:
+            parser.error(
+                'is_subserver is true but no master_host is set - add "master_host" '
+                "to the config file (or pass --master-host) - see run-subserver.bat/.sh"
+            )
+    elif args.mode == "master":
+        args.host = args.host or raw.get("master_host") or "0.0.0.0"
+        args.port = args.port or raw.get("master_port") or 8720
+        args.subserver_port = args.subserver_port or raw.get("subserver_port") or 8721
 
     # A one-shot standalone pass is meant to run once and exit - surface any
     # failure directly rather than retrying, so callers (cron, a script) see it.

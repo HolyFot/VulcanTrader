@@ -330,6 +330,13 @@
             </div>
         </div>
         <div style="display:flex; gap:0.75rem; align-items:center;">
+            <select x-model="selectedBot" class="form-input" title="Pick a detected bot account to view its trades/stats, or this portal's own bot"
+                    style="min-width:230px; max-width:340px; padding:6px 8px; font-size:0.8rem;">
+                <option value="">This portal's bot</option>
+                <template x-for="b in bots" :key="b.name">
+                    <option :value="b.name" x-text="botLabel(b)"></option>
+                </template>
+            </select>
             <span class="status-pill" x-show="status">
                 <span class="status-dot" :class="{ stopped: status && status.state !== 'RUNNING' }"></span>
                 <span x-text="status ? (status.state || 'UNKNOWN') : ''"
@@ -338,22 +345,33 @@
                 <span x-text="status ? (status.exchange || '?') : ''"></span>
                 <span style="color:#a0aec0;">·</span>
                 <span x-text="status ? (status.dry_run ? 'DRY' : 'LIVE') : ''"></span>
+                <template x-if="status && status.uptime_secs != null">
+                    <span style="color:#a0aec0; font-size:0.72rem;">
+                        &nbsp;· up <span x-text="formatUptime(status.uptime_secs)"></span>
+                    </span>
+                </template>
                 <template x-if="status && status.last_process">
                     <span style="color:#a0aec0; font-size:0.72rem;">
                         &nbsp;· last <span x-text="formatDate(status.last_process)"></span>
                     </span>
                 </template>
-                <template x-if="status && !status.attached">
+                <template x-if="status && status.account">
+                    <span style="color:#38bdf8;">&nbsp;· account: <span x-text="status.account"></span></span>
+                </template>
+                <template x-if="status && status.crashed">
+                    <span style="color:#ef4444; font-weight:600;">&nbsp;· CRASHED?</span>
+                </template>
+                <template x-if="status && !status.attached && !status.account">
                     <span style="color:#f59e0b;">&nbsp;· not attached</span>
                 </template>
             </span>
             <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:#a0aec0;">
                 <input type="checkbox" x-model="autoRefresh"> Auto-refresh (10s)
             </label>
-            <button class="btn" @click="startBot()" :disabled="loading || status?.state === 'RUNNING'"
-                    title="Start trading">&#9654; Start</button>
+            <button class="btn" @click="startBot()" :disabled="loading || !!selectedBot || status?.state === 'RUNNING'"
+                    :title="selectedBot ? 'Viewing an external bot account — starting only works for this portal\'s bot' : 'Start trading'">&#9654; Start</button>
             <button class="btn btn-danger" @click="stopBot()" :disabled="loading || status?.state !== 'RUNNING'"
-                    title="Pause trading">&#9208; Stop</button>
+                    :title="selectedBot ? 'Gracefully shut down this bot process (stop file, ~5-10 s)' : 'Pause trading'">&#9208; Stop</button>
             <button class="btn btn-logout" @click="logout()" title="Logout"
                     style="min-width:unset; padding:8px 12px; line-height:0;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
@@ -836,6 +854,8 @@ function tradingApp() {
         consoleLogs: [],
         configs: [],
         strategies: [],
+        bots: [],
+        selectedBot: localStorage.getItem('VT_selectedBot') || '',
         selectedConfig: localStorage.getItem('VT_selectedConfig') || '',
         selectedStrategy: localStorage.getItem('VT_selectedStrategy') || '',
         selectedDryRun: true,
@@ -957,12 +977,17 @@ function tradingApp() {
             await Promise.all([
                 this.authedFetch('/api/strategy/info').then(r => { this.strategyInfo = r; }).catch(() => {}),
                 this.loadMeta(),
+                this.loadBots(),
             ]);
             if (this.autoRefresh) this._startTimer();
             this.$watch('closedTrades', () => this.$nextTick(() => this.renderCharts()));
             this.$watch('autoRefresh', v => v ? this._startTimer() : this._stopTimer());
             this.$watch('selectedConfig', v => localStorage.setItem('VT_selectedConfig', v));
             this.$watch('selectedStrategy', v => localStorage.setItem('VT_selectedStrategy', v));
+            this.$watch('selectedBot', v => {
+                localStorage.setItem('VT_selectedBot', v);
+                this.refreshDashboard();
+            });
         },
 
         fmt(v) { return (v >= 0 ? '+' : '') + (+v).toFixed(2); },
@@ -1017,6 +1042,20 @@ function tradingApp() {
         },
         async stopBot() {
             try {
+                if (this.selectedBot) {
+                    if (!confirm(`Shut down the "${this.selectedBot}" bot process? ` +
+                                 'It exits gracefully (cleanup + state saved) once its current ' +
+                                 'processing cycle finishes — usually seconds, longer if the ' +
+                                 'exchange is rate-limiting.')) return;
+                    const r = await this.authedFetch(
+                        '/api/livebots/' + encodeURIComponent(this.selectedBot) + '/stop',
+                        { method: 'POST' });
+                    // The bot needs up to one trade-loop cycle to notice; re-check shortly.
+                    setTimeout(() => this.refreshDashboard(true), 7000);
+                    setTimeout(() => this.refreshDashboard(true), 15000);
+                    await this.refreshAll(true);
+                    return;
+                }
                 await this.authedFetch('/api/stop', { method: 'POST' });
                 await this.refreshAll(true);
             } catch(e) { this.error = 'Stop failed: ' + e.message; }
@@ -1056,11 +1095,35 @@ function tradingApp() {
             }, 10000);
         },
         _stopTimer() { if (this._timer) { clearInterval(this._timer); this._timer = null; } },
+        async loadBots() {
+            try {
+                const r = await this.authedFetch('/api/livebots');
+                this.bots = r.bots || [];
+            } catch (e) {}
+        },
+        botLabel(b) {
+            const mode = b.mode === 'live' ? 'LIVE' : (b.mode === 'dry_run' ? 'PAPER' : '?');
+            let label = (b.running ? '● ' : (b.crashed ? '⚠ ' : '○ ')) + b.name + ' — ' + mode;
+            if (b.running && b.uptime_secs != null) label += ' · up ' + this.formatUptime(b.uptime_secs);
+            else if (b.crashed) label += ' · crashed?';
+            return label;
+        },
+        formatUptime(s) {
+            s = Math.max(0, Math.floor(+s || 0));
+            const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+            if (d > 0) return `${d}d ${h}h ${m}m`;
+            if (h > 0) return `${h}h ${m}m`;
+            return `${m}m`;
+        },
         async refreshDashboard(silent) {
             if (!silent) this.loading = true;
             this.error = null;
+            this.loadBots();
             try {
-                const d = await this.authedFetch('/api/dashboard');
+                const url = this.selectedBot
+                    ? '/api/dashboard?bot=' + encodeURIComponent(this.selectedBot)
+                    : '/api/dashboard';
+                const d = await this.authedFetch(url);
                 if (d.status) this.status = d.status;
                 this.openTrades = d.open_trades || [];
                 this.closedTrades = d.closed_trades || [];

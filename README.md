@@ -1,7 +1,22 @@
 # VulcanTrader
 
 A backtesting, live-trading and web-dashboard stack for
-crypto strategies. Based off the latest FreqTrade, we added a better UI built into the project, pair finding,  regime analysis, MAE/MFE analysis, monthly/daily performance boxes, uncorruptable json DBs, backtesting/hyperopt/pairfinding all in the UI, and a more compact project structure. Also support for Drift & Bitunix exchanges.
+crypto strategies. Based off the latest FreqTrade, we added a better UI built into the project, pair finding,  regime analysis, MAE/MFE analysis, monthly/daily performance boxes, uncorruptable json DBs, backtesting/hyperopt/pairfinding all in the UI, and a more compact project structure. Also support for Drift, Bitunix & Coinbase (Advanced Trade) exchanges.
+
+> Coinbase note: spot only, and candle granularities are limited to
+> 1m/5m/15m/30m/1h/2h/6h/1d (no 4h) with max 300 candles per request —
+> the downloader paginates automatically. Stoploss-on-exchange uses
+> stop-limit orders (Coinbase has no stop-market). `configCoinbaseAll.json`
+> whitelists all 402 USD-quoted pairs; `configCoinbaseTop50.json` whitelists
+> just the top 50 by live 24h quote volume (BTC/ETH/XRP/SOL/... down to
+> FLR/USD) for a much lighter footprint. On a cold start (empty local candle
+> cache) expect a burst of self-healing 429 retries while per-pair startup
+> history backfills — Coinbase's single-pair candle endpoint throttles much
+> harder than its batched OHLCV endpoint; this scales with whitelist size
+> (heavy on the 402-pair config, minor on the Top50 one) and always resolves
+> on its own via the existing retry/backoff. Both configs verified with live
+> dry-run sessions: zero unrecovered failures, zero exhausted retries, steady
+> heartbeats throughout.
 
 Drop a Freqtrade-style `IStrategy` subclass into
 [user_data/strategies/](user_data/strategies) and it should run (just rename imports to VulcanTrader).
@@ -95,13 +110,32 @@ set CONFIG=configBinance
 set STRATEGY=AlphaHunterV4MR
 .\run-paper.bat
 
-# Disable the embedded web portal
-.\run-paper.bat --no-web
+# Disable the embedded web portal (headless)
+.\run-paper.bat --headless
 ```
 
 ```bash
 CONFIG=configBinance STRATEGY=AlphaHunterV5 ./run-paper.sh
-./run-paper.sh --no-web
+./run-paper.sh --headless
+```
+
+### Run headless (no web portal)
+
+Pass `--headless` (alias: `--no-web`) to the `trade` subcommand to run the
+trading bot without starting `web_portal.py` at all — no FastAPI server, no
+open port. Trade notifications that would normally go to the dashboard are
+written to the log instead (`user_data/logs/bot.log`). Useful for servers
+where you don't want an exposed HTTP port, or for running several bot
+processes without port conflicts. A headless bot is still fully visible in
+any running portal (e.g. `run-app.bat`): pick its account from the bot
+dropdown on the Trading page to see its trades, stats and uptime.
+
+```powershell
+.venv\Scripts\python.exe -m VulcanTrader.bot trade -c live --strategy AlphaHunterV5 --dry-run --headless
+```
+
+```bash
+python -m VulcanTrader.bot trade -c live --strategy AlphaHunterV5 --dry-run --headless
 ```
 
 ### Use the web dashboard
@@ -116,6 +150,19 @@ to touch the CLI:
 
 - **Trading** (`/`) — live open/closed trades, wallet balances,
   per-pair candle charts with strategy plot overlays, and pair locks.
+- **Bot account dropdown** (navbar) — the portal scans
+  `user_data/accounts/*.json` persistence files and detects which
+  `trader_bot` processes are currently running (each running bot holds an
+  OS-level lock on its `<account>.json.lock`, plus writes
+  `is_running`/`last_heartbeat` markers into the account file). The
+  dropdown lists every account — `●` running (with uptime), `○` stopped,
+  `⚠` crashed (marked running but no live process) — and selecting one
+  loads that bot's full trades/stats/metrics into the dashboard, headless
+  bots included. The **Stop** button then gracefully shuts down that bot's
+  process: the portal drops a `<account>.json.stop` file which the bot's
+  trade loop picks up within ~2 s, exiting cleanly (cleanup, state saved,
+  lock released) once its current cycle finishes. API: `GET /api/livebots`,
+  `GET /api/dashboard?bot=<name>`, `POST /api/livebots/<name>/stop`.
 - **Backtester** (`/backtester`) — pick any JSON file from
   `user_data/backtest_results/` and inspect performance metrics,
   monthly/daily breakdowns, equity & drawdown curves, hourly P&L /
@@ -177,7 +224,7 @@ And put it correctly in the user_data\data folder. (should be user_data\data\hyp
 
 Run the bot inside `tmux` (or `screen`/`systemd`) so it survives SSH
 disconnects. The web portal is started automatically by the `trade`
-subcommand unless you pass `--no-web`.
+subcommand unless you pass `--headless` (alias: `--no-web`).
 
 ### Start a dry-run trading session
 
@@ -249,8 +296,12 @@ once: a fast backtest engine plus a library of the 23 standard indicators
 Strategies are **not** written in Rust — they live in Python under
 [user_data/strategies/](user_data/strategies); the crate holds no strategies.
 
-A strategy can pull the engine's standard indicator series straight from Rust —
-the exact same code the engine uses — instead of recomputing them in TA-Lib:
+A strategy has two equally valid ways to get its indicators — pick per strategy,
+or mix both in the same file:
+
+**Rust-bridged** — pull the engine's standard indicator series straight from
+Rust, the exact same code the engine itself uses, instead of recomputing them
+in TA-Lib:
 
 ```python
 import vulcan_rust_indicators as vri
@@ -260,12 +311,28 @@ dataframe["rsi"] = ind[0]    # RSI(14)
 dataframe["atr"] = ind[14]   # ATR(14)
 ```
 
-`ind` is a dict `{index: array}` of all 23 standard series — see
-`AllIndicatorsDemoStrategy` for the full index table. Anything the standard set
-doesn't cover you build yourself in pandas/numpy; see `FisherStatReversion` and
-`IchimokuCloud` for custom-indicator examples (Fisher Transform, z-score,
-linreg slope, the full Ichimoku system), and `DonchianBreakout` for a mix
-(bridge RSI/ATR + custom Donchian channels).
+`ind` is a dict `{index: array}` of all 23 standard series. See
+[user_data/strategies/AllIndicatorsDemoStrategy.py](user_data/strategies/AllIndicatorsDemoStrategy.py)
+for the full index table and a worked example reading every one of them.
+
+**Plain TA-Lib** — no Rust dependency at all, just the standard library every
+freqtrade strategy already uses:
+
+```python
+import talib.abstract as ta
+
+dataframe["ema9"] = ta.EMA(dataframe, timeperiod=9)
+dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
+dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+dataframe["macdhist"] = ta.MACD(dataframe)["macdhist"]
+```
+
+See [user_data/strategies/EmaTrendRsiAdx.py](user_data/strategies/EmaTrendRsiAdx.py)
+for a complete TA-Lib-only trend-following strategy (EMA stack + RSI + ADX +
+MACD histogram).
+
+Anything neither covers you build yourself in pandas/numpy — custom
+statistics, calendar/session-anchored levels, and the like.
 
 The crate is built automatically by `install.bat` / `install.sh`, which need a
 Rust toolchain (`cargo`) and `maturin`. To rebuild the extension by hand into
@@ -284,7 +351,7 @@ Backtests run on the Python `backtesting.py` engine by default. Pass
 in Rust (via `vulcan_rust_indicators.run_backtest`):
 
 ```
-python -m VulcanTrader.bot backtest -c configHyper -s DonchianBreakout --engine rust
+python -m VulcanTrader.bot backtest -c configHyperClean -s EmaTrendRsiAdx --engine rust
 ```
 
 The web portal's Backtester page has a matching **Engine** dropdown
@@ -307,7 +374,7 @@ python -m VulcanTrader.bot <subcommand> [options]
 | --------------------- | ------------------------------------------------------------------ |
 | `backtest`            | Run one or more strategies through the backtester (async fan-out). |
 | `download-data`       | Pull historical OHLCV for the configured pairs / timeframes.       |
-| `trade`               | Start the live (or `--dry-run`) trading daemon + web portal.       |
+| `trade`               | Start the live (or `--dry-run`) trading daemon + web portal (`--headless` skips the portal). |
 | `webserver`           | Run the web portal stand-alone (browse backtest results).          |
 | `lookahead-analysis`  | Detect look-ahead bias in strategy entry/exit signals + indicators.|
 | `recursive-analysis`  | Detect recursive-formula bias from insufficient `startup_candle_count`. |

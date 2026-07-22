@@ -23,6 +23,13 @@ KeyStoreKeys = Literal[
     "bot_start_time",
     "startup_time",
     "binance_migration",
+    # Liveness markers written by trader_bot.py so anything reading the account
+    # JSON (dashboards, watchdogs) can tell whether the owning bot process is
+    # alive: is_running flips 1 at startup / 0 on clean shutdown, and
+    # last_heartbeat is refreshed every heartbeat interval - is_running=1 with
+    # a stale last_heartbeat means the bot died without cleanup (crash/kill).
+    "is_running",
+    "last_heartbeat",
 ]
 
 
@@ -100,6 +107,14 @@ class KeyValueStore:
         if kv is None:
             kv = _KeyValueStoreModel(key=key)
             _KeyValueStoreModel._add_instance(kv)
+        # Clear all value slots first: overwriting a key with a different type
+        # otherwise leaves the previous type's slot populated forever - reads
+        # stayed correct (every getter keys off value_type), but the stale
+        # value kept being persisted to the JSON file on every commit.
+        kv.string_value = None
+        kv.datetime_value = None
+        kv.float_value = None
+        kv.int_value = None
         if isinstance(value, str):
             kv.value_type = ValueTypesEnum.STRING
             kv.string_value = value

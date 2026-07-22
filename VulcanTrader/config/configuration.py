@@ -101,6 +101,8 @@ class Configuration:
 
         self._process_common_options(config)
 
+        self._process_data_server_options(config)
+
         self._process_trading_options(config)
 
         self._process_optimize_options(config)
@@ -190,6 +192,22 @@ class Configuration:
         # Support for sd_notify
         if self.args.get("sd_notify"):
             config["internals"].update({"sd_notify": True})
+
+    def _process_data_server_options(self, config: Config) -> None:
+        """
+        Default the `data_server` config block (VulcanTrader/data_server.py integration
+        - see trader_bot.py's `_setup_data_server_client`). `persist_to_disk` controls
+        whether the shared collector (master/subserver/standalone) writes what it
+        gathers - OHLCV for every pair, plus funding-rate history on futures pairs -
+        back to feather files under `datadir` (`datadir/futures` for any non-spot
+        candle type, e.g. `<PAIR>-<timeframe>-funding_rate.feather`), the same layout
+        and same per-pair/per-timeframe append-via-merge `backtesting.py` reads.
+        Defaults to True so existing deployments that never set this block keep
+        today's persist-everything behavior unchanged.
+        """
+        ds = config.setdefault("data_server", {})
+        ds.setdefault("persist_to_disk", True)
+        logger.info("data_server persist_to_disk: %s", ds["persist_to_disk"])
 
     def _process_datadir_options(self, config: Config) -> None:
         """

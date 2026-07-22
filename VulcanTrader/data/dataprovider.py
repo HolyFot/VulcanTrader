@@ -7,7 +7,7 @@ Common Interface for bot and strategy to access data.
 
 import logging
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pandas import DataFrame, Timedelta, Timestamp, to_timedelta
@@ -22,12 +22,17 @@ from VulcanTrader.constants import (
 from VulcanTrader.data.history import get_datahandler, load_pair_history
 from VulcanTrader.enums import CandleType, RPCMessageType, RunMode, TradingMode
 from VulcanTrader.util.exceptions import ExchangeError, OperationalException
-from VulcanTrader.exchange import Exchange, timeframe_to_prev_date, timeframe_to_seconds
+from VulcanTrader.exchange import (
+    Exchange,
+    timeframe_to_minutes,
+    timeframe_to_prev_date,
+    timeframe_to_seconds,
+)
 from VulcanTrader.exchange.exchange_types import FundingRate, OrderBook
 from VulcanTrader.util.misc import append_candles_to_dataframe
 from VulcanTrader.util.rpc_stub import RPCManager
 from VulcanTrader.util.rpc_types import RPCAnalyzedDFMsg
-from VulcanTrader.util import PeriodicCache
+from VulcanTrader.util import PeriodicCache, dt_now
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +59,16 @@ class DataProvider:
         # actually has the data; None (the default) means "not in use" and every
         # call behaves exactly as it did before this feature existed.
         self._data_server_client = None
+        # Filled by the data_server client's "webhook" push callbacks (see
+        # set_data_server_client below) the moment the master forwards a fresh
+        # funding-rate/trades tick for a pair we're watching - checked first by
+        # funding_rate()/trades() so a call right after a push doesn't pay for
+        # a network round trip the push already made unnecessary. OHLCV pushes
+        # instead write straight into `self._exchange._klines` (see
+        # _on_data_server_ohlcv_push), the same slot refresh()'s own pull path
+        # populates, so no separate OHLCV push cache is needed here.
+        self.__ds_funding_rate_cache: dict[str, dict] = {}
+        self.__ds_trades_cache: dict[str, DataFrame] = {}
         self.__cached_pairs: dict[PairWithTimeframe, tuple[DataFrame, datetime]] = {}
         self.__slice_index: dict[str, int] = {}
         self.__slice_date: datetime | None = None
@@ -460,8 +475,58 @@ class DataProvider:
 
     def set_data_server_client(self, client) -> None:
         """Wire in a VulcanTrader.data_server.DataServerClient - see the
-        `_data_server_client` docstring in __init__ for what this changes."""
+        `_data_server_client` docstring in __init__ for what this changes.
+
+        Also wires up its "webhook" push callbacks, so a fresh OHLCV/funding-
+        rate/trades tick the master forwards for a pair this bot is watching
+        (see ClientInterestRegistry.publish_* on the master side) lands here
+        the moment it arrives, instead of waiting for this bot's own next
+        refresh()/funding_rate()/trades() call to poll for it."""
         self._data_server_client = client
+        client.on_ohlcv_push = self._on_data_server_ohlcv_push
+        client.on_funding_rate_push = self._on_data_server_funding_rate_push
+        client.on_trades_push = self._on_data_server_trades_push
+
+    def _inject_klines(self, pair_key: PairWithTimeframe, df: DataFrame) -> None:
+        """Write data_server-sourced candles into ``exchange._klines`` AND keep
+        the exchange's own ``_pairs_last_refresh_time`` bookkeeping in sync,
+        exactly as `_process_ohlcv_df` does after a real fetch. Injecting
+        klines WITHOUT that bookkeeping leaves the entry at 0, and the next
+        direct `refresh_latest_ohlcv()` on that pair (e.g. our own staleness
+        fallback) then hits `_build_coroutine`'s "Time jump detected" branch:
+        it assumes one incremental call can't bridge a gap that large, EVICTS
+        the cached klines, and refetches the pair's ENTIRE candle history -
+        observed live as all 18 pairs full-refetching at Kraken's 1s rate
+        limit for ~3 minutes of "Outdated history" warnings, when a single
+        one-call update per pair was all that was needed."""
+        self._exchange._klines[pair_key] = df
+        self._exchange._pairs_last_refresh_time[pair_key] = int(
+            df["date"].max().timestamp() * 1000
+        )
+
+    def _on_data_server_ohlcv_push(
+        self, pair: str, timeframe: str, candle_type: str, df: DataFrame
+    ) -> None:
+        """Runs on the DataServerClient's own background reader thread - keep
+        this cheap (a dict write), never block it. `df` is the master's full
+        MERGED series for this pair/timeframe (not just the new rows), so this
+        is a straight replace, matching exactly what a `get_ohlcv()` pull
+        would have written via `_refresh_ohlcv_from_data_server` - no merge
+        logic needed here, the master already did it once for everyone."""
+        if self._exchange is None or df is None or df.empty:
+            return
+        try:
+            self._inject_klines((pair, timeframe, CandleType.from_string(candle_type)), df)
+        except Exception:
+            logger.debug("Failed to apply pushed OHLCV for %s/%s/%s", pair, timeframe, candle_type, exc_info=True)
+
+    def _on_data_server_funding_rate_push(self, pair: str, payload: dict) -> None:
+        self.__ds_funding_rate_cache[pair] = payload
+
+    def _on_data_server_trades_push(self, pair: str, df: DataFrame) -> None:
+        if df is None or df.empty:
+            return
+        self.__ds_trades_cache[pair] = df
 
     def _refresh_ohlcv_from_data_server(
         self, pairlist: ListPairsWithTimeframes
@@ -470,11 +535,25 @@ class DataProvider:
         cache first, writing hits straight into exchange._klines (the same slot
         Exchange.refresh_latest_ohlcv() itself populates, so ohlcv()/get_pair_dataframe()
         downstream are unaffected either way). Returns whichever pairs it *couldn't*
-        currently serve, for the caller to fetch directly from the exchange - so a
-        cold cache, a disconnected client, or any client error degrades to exactly
-        the pre-data_server behavior for those pairs, never blocks, never raises.
+        currently serve FRESH data for, for the caller to fetch directly from the
+        exchange - so a cold cache, a disconnected client, stale data, or any client
+        error all degrade to exactly the pre-data_server behavior for those pairs,
+        never blocks, never raises.
+
+        "Fresh" uses the same staleness formula IStrategy.get_latest_candle() checks
+        signals against (timeframe*2 + outdated_offset) - a right-after-registering
+        pull can otherwise land on the master's on-disk cache (loaded lazily from a
+        PRIOR session, potentially hours stale) before the master's own collection
+        loop has fetched anything new for THIS run, which used to count as a "hit"
+        purely because it wasn't empty. That silently skipped the direct-exchange
+        fallback below and left this bot waiting on the master's own fetch+push
+        round trip instead of just fetching it directly like it would with no
+        data_server client at all - the cause of "Outdated history" warnings
+        persisting for a while right after every bot start/reconnect even once the
+        master itself is fetching promptly.
         """
         remaining: ListPairsWithTimeframes = []
+        outdated_offset = self._config.get("exchange", {}).get("outdated_offset", 5)
         for pair_key in pairlist:
             pair, timeframe, candle_type = pair_key
             df = None
@@ -483,9 +562,16 @@ class DataProvider:
             except Exception:
                 logger.debug("data_server get_ohlcv failed for %s - falling back", pair_key, exc_info=True)
             if df is not None and not df.empty:
-                self._exchange._klines[pair_key] = df
-            else:
-                remaining.append(pair_key)
+                max_age = timedelta(minutes=timeframe_to_minutes(timeframe) * 2 + outdated_offset)
+                if df["date"].max().to_pydatetime() >= dt_now() - max_age:
+                    self._inject_klines(pair_key, df)
+                    continue
+                # Stale - still worth keeping as a base for the direct fetch
+                # below to merge onto (a one-call incremental update, thanks to
+                # _inject_klines syncing _pairs_last_refresh_time), but this
+                # pair still needs that real refresh.
+                self._inject_klines(pair_key, df)
+            remaining.append(pair_key)
         return remaining
 
     def refresh(
@@ -576,6 +662,9 @@ class DataProvider:
         if self.runmode in (RunMode.DRY_RUN, RunMode.LIVE):
             if self._exchange is None:
                 raise OperationalException(NO_EXCHANGE_EXCEPTION)
+            pushed = self.__ds_trades_cache.get(pair)
+            if pushed is not None and not pushed.empty:
+                return pushed.copy() if copy else pushed
             if self._data_server_client is not None:
                 try:
                     cached = self._data_server_client.get_trades(pair)
@@ -648,6 +737,9 @@ class DataProvider:
         """
         if self._exchange is None:
             raise OperationalException(NO_EXCHANGE_EXCEPTION)
+        pushed = self.__ds_funding_rate_cache.get(pair)
+        if pushed:
+            return pushed
         if self._data_server_client is not None:
             try:
                 cached = self._data_server_client.get_funding_rate(pair)

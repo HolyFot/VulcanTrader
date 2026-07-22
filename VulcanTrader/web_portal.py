@@ -24,6 +24,8 @@
 #  except ``/api/login``):
 #         POST /api/login                       → { token }
 #         GET  /api/status                      → bot/exchange/state
+#         GET  /api/livebots                    → detected trader_bot accounts
+#         GET  /api/dashboard?bot=NAME          → dashboard from that account DB
 #         GET  /api/messages?limit=N            → recent notifications
 #         GET  /api/trades/open                 → open trades + enrichment
 #         GET  /api/trades/closed?limit=N       → closed trade history
@@ -68,6 +70,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import secrets
 import subprocess
@@ -605,9 +608,20 @@ class WebPortal:
             try:
                 state = getattr(self.bot, "state", None)
                 strat = getattr(self.bot, "strategy", None)
+                started_at = uptime_secs = None
+                try:
+                    from VulcanTrader.persistence.key_value_store import KeyValueStore
+                    st = KeyValueStore.get_datetime_value("startup_time")
+                    if st is not None:
+                        started_at = st.isoformat()
+                        uptime_secs = max(0.0, (datetime.now(UTC) - st).total_seconds())
+                except Exception:
+                    pass
                 return {
                     "attached": True,
                     "version": __version__,
+                    "started_at": started_at,
+                    "uptime_secs": uptime_secs,
                     "state": state.name if state is not None else None,
                     "dry_run": self.config.get("dry_run"),
                     "exchange": self.config.get("exchange", {}).get("name"),
@@ -700,9 +714,25 @@ class WebPortal:
             trades = self._get_closed_trades(limit)
             return {"count": len(trades), "trades": [_trade_to_dict(t) for t in trades]}
 
+        @app.get("/api/livebots", dependencies=[Depends(auth)])
+        def api_livebots() -> dict:
+            """Detected trader_bot persistence accounts (running + stopped)."""
+            return {"bots": self._scan_live_bots()}
+
+        @app.post("/api/livebots/{name}/stop", dependencies=[Depends(auth)])
+        def api_livebot_stop(name: str) -> dict:
+            """Request a graceful shutdown of the trader_bot process owning this account."""
+            return self._request_account_stop(name)
+
         @app.get("/api/dashboard", dependencies=[Depends(auth)])
-        def api_dashboard(closed_limit: int = 2000, msg_limit: int = 200, log_limit: int = 300) -> dict:
-            """Single endpoint combining status + trades + messages + logs for the trading page."""
+        def api_dashboard(closed_limit: int = 2000, msg_limit: int = 200, log_limit: int = 300,
+                          bot: str | None = None) -> dict:
+            """Single endpoint combining status + trades + messages + logs for the trading page.
+
+            ``bot=<account-name>`` (a name from /api/livebots) serves the data of that
+            bot's persistence account instead of the attached/in-process bot."""
+            if bot:
+                return self._account_dashboard(bot, closed_limit)
             status = api_status()
             open_trades = self._get_open_trades()
             closed_trades = self._get_closed_trades(closed_limit)
@@ -913,6 +943,234 @@ class WebPortal:
         except Exception:
             logger.debug("_trades_from_json failed (%s)", db, exc_info=True)
             return []
+
+    # ------------------------------------------------------------------
+    # Multi-bot account detection (user_data/accounts/*.json)
+    #
+    # Every trader_bot.py process persists to one JSON "account" file and
+    # holds an OS-level exclusive lock on the sibling ``<name>.json.lock``
+    # for its whole lifetime (see persistence/models.py). Probing that lock
+    # tells us definitively whether the owning process is alive right now.
+    # The account JSON additionally carries KeyValueStore liveness markers
+    # (``is_running`` / ``last_heartbeat``) written by the bot, used as a
+    # fallback and to flag crashed bots (is_running=1 but lock free).
+    # ------------------------------------------------------------------
+
+    HEARTBEAT_STALE_SECS = 180.0
+
+    @staticmethod
+    def _probe_db_lock(db_path: Path) -> bool | None:
+        """True → a process holds the writer lock (bot running); False → free;
+        None → probe failed (fall back to heartbeat markers)."""
+        lock_path = db_path.with_name(db_path.name + ".lock")
+        if not lock_path.exists():
+            return False
+        try:
+            fd = os.open(str(lock_path), os.O_RDWR)
+        except OSError:
+            return None
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    return False
+                except OSError:
+                    return True
+            else:
+                import fcntl
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    return False
+                except OSError:
+                    return True
+        except Exception:
+            return None
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _accounts_dir(self) -> Path:
+        return self._user_data_dir() / "accounts"
+
+    def _list_account_dbs(self) -> list[Path]:
+        """All candidate persistence DBs: accounts/*.json plus legacy
+        user_data/trades*.json. First occurrence of a stem wins."""
+        out: dict[str, Path] = {}
+        acc = self._accounts_dir()
+        if acc.is_dir():
+            for p in sorted(acc.glob("*.json")):
+                out.setdefault(p.stem, p)
+        ud = self._user_data_dir()
+        if ud.is_dir():
+            for p in sorted(ud.glob("trades*.json")):
+                out.setdefault(p.stem, p)
+        return list(out.values())
+
+    def _find_account_db(self, name: str) -> Path | None:
+        """Resolve a bot name from /api/livebots back to its DB path.
+        Matching by scanned stem (never by joining paths) rules out traversal."""
+        for p in self._list_account_dbs():
+            if p.stem == name:
+                return p
+        return None
+
+    def _account_bot_info(self, path: Path, data: dict | None = None) -> dict | None:
+        """Summarise one account DB: identity, liveness, uptime, trade counts."""
+        if data is None:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                logger.debug("account scan: unreadable %s", path, exc_info=True)
+                return None
+        if not isinstance(data, dict):
+            return None
+        trades = data.get("trades") or []
+        kv = {row.get("key"): row for row in data.get("KeyValueStore") or []
+              if isinstance(row, dict)}
+
+        def _kv_dt(key: str) -> datetime | None:
+            raw = (kv.get(key) or {}).get("datetime_value")
+            if not raw:
+                return None
+            try:
+                dt = datetime.fromisoformat(raw)
+                return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+            except ValueError:
+                return None
+
+        now = datetime.now(UTC)
+        startup = _kv_dt("startup_time")
+        heartbeat = _kv_dt("last_heartbeat")
+        kv_running = (kv.get("is_running") or {}).get("int_value") == 1
+        hb_age = (now - heartbeat).total_seconds() if heartbeat else None
+
+        lock_held = self._probe_db_lock(path)
+        if lock_held is None:
+            running = kv_running and hb_age is not None and hb_age < self.HEARTBEAT_STALE_SECS
+        else:
+            running = lock_held
+        # Bot said it was running but nothing holds the lock → died without cleanup.
+        crashed = kv_running and not running
+
+        open_count = sum(1 for t in trades if t.get("is_open"))
+        closed = [t for t in trades if not t.get("is_open")]
+        last_trade = trades[-1] if trades else {}
+        name_l = path.stem.lower()
+        mode = "live" if "live" in name_l else ("dry_run" if "dry" in name_l else "unknown")
+        try:
+            mtime = _ts_to_iso(path.stat().st_mtime)
+        except OSError:
+            mtime = None
+        return {
+            "name": path.stem,
+            "file": str(path),
+            "mode": mode,
+            "running": running,
+            "crashed": crashed,
+            "started_at": startup.isoformat() if startup else None,
+            "uptime_secs": max(0.0, (now - startup).total_seconds()) if running and startup else None,
+            "bot_start_time": (_kv_dt("bot_start_time") or startup).isoformat()
+            if (_kv_dt("bot_start_time") or startup) else None,
+            "last_heartbeat": heartbeat.isoformat() if heartbeat else None,
+            "heartbeat_age_secs": hb_age,
+            "strategy": last_trade.get("strategy"),
+            "exchange": last_trade.get("exchange"),
+            "open_trades": open_count,
+            "closed_trades": len(closed),
+            "closed_profit_abs": sum(float(t.get("close_profit_abs") or 0) for t in closed),
+            "last_updated": mtime,
+        }
+
+    def _scan_live_bots(self) -> list[dict]:
+        bots = [info for p in self._list_account_dbs()
+                if (info := self._account_bot_info(p)) is not None]
+        bots.sort(key=lambda b: (not b["running"], b["name"].lower()))
+        return bots
+
+    def _request_account_stop(self, name: str) -> dict:
+        """Gracefully stop the external trader_bot process owning ``name``'s DB.
+
+        Creates ``<db>.json.stop`` next to the persistence file; the bot's trade
+        loop (bot.py cmd_trade) polls for it every cycle and shuts down through
+        its normal cleanup path — same as a local Ctrl+C. There is no reliable
+        cross-process graceful signal on Windows, so a stop-file it is."""
+        path = self._find_account_db(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail=f"No account database named {name!r}")
+        info = self._account_bot_info(path)
+        if info is None:
+            raise HTTPException(status_code=502, detail="Account DB malformed")
+        if not info["running"]:
+            raise HTTPException(status_code=409, detail=f"Bot {name!r} is not running.")
+        # Guard: if this account IS the attached bot's own DB, stopping it would
+        # take this portal down with it — that path belongs to the Stop button.
+        if self._is_live_bot() and self.config.get("db_url"):
+            try:
+                from VulcanTrader.persistence.models import _path_from_db_url
+                if _path_from_db_url(self.config["db_url"]) == path:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This account belongs to the portal's own bot — "
+                               "deselect the account and use the regular Stop button.",
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        stop_file = path.with_name(path.name + ".stop")
+        try:
+            stop_file.touch()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not write stop file: {exc}") from exc
+        logger.info("Stop requested for bot account %s (%s)", name, stop_file)
+        return {
+            "requested": True,
+            "detail": "Stop requested — the bot registers it within ~2 s and exits "
+                      "gracefully once its current processing cycle finishes.",
+        }
+
+    def _account_dashboard(self, name: str, closed_limit: int) -> dict:
+        """Dashboard payload built entirely from another bot's account DB."""
+        path = self._find_account_db(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail=f"No account database named {name!r}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=502, detail=f"Account DB unreadable: {exc}") from exc
+        info = self._account_bot_info(path, data)
+        if info is None:
+            raise HTTPException(status_code=502, detail="Account DB malformed")
+        trades = data.get("trades") or []
+        from VulcanTrader.constants import __version__
+        status = {
+            "attached": False,
+            "account": name,
+            "version": __version__,
+            "state": "RUNNING" if info["running"] else "STOPPED",
+            "crashed": info["crashed"],
+            "dry_run": info["mode"] != "live",
+            "mode": info["mode"],
+            "exchange": info["exchange"],
+            "strategy": info["strategy"],
+            "bot_name": name,
+            "started_at": info["started_at"],
+            "uptime_secs": info["uptime_secs"],
+            "last_heartbeat": info["last_heartbeat"],
+        }
+        return {
+            "status": status,
+            "open_trades": [_json_safe(t) for t in trades if t.get("is_open")],
+            "closed_trades": [_json_safe(t) for t in trades if not t.get("is_open")][-closed_limit:],
+            # Another process's notifications/log stream isn't visible from here.
+            "messages": [],
+            "logs": [],
+        }
 
     def _get_pair_locks(self) -> list:
         try:

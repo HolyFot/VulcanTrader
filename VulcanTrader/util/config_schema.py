@@ -792,6 +792,45 @@ CONF_SCHEMA = {
             "required": ["enabled", "listen_ip_address", "listen_port", "username", "password"],
         },
         # end of RPC section
+        "data_server": {
+            "description": "This bot's own use of the shared data_server master "
+            "(VulcanTrader/data_server.py) - whether to use one at all, and the "
+            "ports it should be reachable on. The master/subserver process itself "
+            "reads its own separate, minimal config file (see data_server.py's "
+            "`_load_minimal_config`), not this block - a trading bot never runs "
+            "as a subserver, so master_host/master_port/name have no place here.",
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Auto-launch/use a shared data_server master instead of "
+                    "each bot polling the exchange independently.",
+                    "type": "boolean",
+                },
+                "persist_to_disk": {
+                    "description": "Write collected OHLCV (every pair) and funding-rate "
+                    "history (futures pairs) back to feather files under `datadir`, same "
+                    "layout `backtesting.py` reads from.",
+                    "type": "boolean",
+                    "default": True,
+                },
+                "host": {
+                    "description": "Host the data_server master listens on / clients connect to.",
+                    "type": "string",
+                },
+                "port": {
+                    "description": "Port the data_server master's client-request socket listens on.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535,
+                },
+                "subserver_port": {
+                    "description": "Port the data_server master's subserver-push socket listens on.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535,
+                },
+            },
+        },
         "db_url": {
             "description": "Database connection URL.",
             "type": "string",

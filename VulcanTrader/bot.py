@@ -1,14 +1,14 @@
 # =============================================================================
-#  IccTrader  ::  Top-level orchestrator   (bot.py)
+#  VulcanBot  ::  Top-level orchestrator
 # =============================================================================
 #
 #  Purpose
 #  -------
 #  Single CLI entry-point that hosts and routes between the three runtime
-#  components of IccTrader:
+#  components of VulcanTrader:
 #
 #      * :class:`Backtesting`  (src/backtesting.py)   — historical replay
-#      * :class:`IccTraderBot` (src/trader_bot.py)    — live trading daemon
+#      * :class:`VulcanTraderBot` (src/trader_bot.py)    — live trading daemon
 #      * :class:`WebPortal`    (src/web_portal.py)    — FastAPI dashboard
 #
 #  All invocation paths funnel through this file so configuration loading,
@@ -61,7 +61,7 @@
 #      python -m VulcanTrader.bot webserver --port 8080
 # =============================================================================
 
-"""IccTrader CLI orchestrator (see header comment above for details)."""
+"""CLI orchestrator (see header comment above for details)."""
 
 from __future__ import annotations
 
@@ -351,7 +351,7 @@ def cmd_download_data(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _attach_portal(bot: Any, portal: Any) -> None:
-    """Wire WebPortal into IccTraderBot in place of the ``_emit`` stub."""
+    """Wire WebPortal into VulcanTraderBot in place of the ``_emit`` stub."""
     bot.portal = portal
 
     def _emit(msg: dict) -> None:
@@ -407,6 +407,23 @@ def cmd_trade(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    # Cross-process stop requests: the web portal (or anything else) creates
+    # ``<db>.json.stop`` next to the persistence file; the loop below notices
+    # within one cycle and shuts down exactly like a local Ctrl+C.
+    stop_file: Path | None = None
+    try:
+        import os as _os
+        from VulcanTrader.persistence.models import _path_from_db_url
+        _db_path = _path_from_db_url(config["db_url"])
+        if str(_db_path) != _os.devnull:
+            stop_file = _db_path.with_name(_db_path.name + ".stop")
+            if stop_file.exists():
+                stop_file.unlink()  # stale request from a previous run
+                logger.info("removed stale stop file %s", stop_file)
+    except Exception:
+        logger.debug("stop-file setup failed", exc_info=True)
+        stop_file = None
+
     stop_event = threading.Event()
     _watchdog: list = [None]
 
@@ -443,6 +460,26 @@ def cmd_trade(args: argparse.Namespace) -> int:
     try:
         timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
         logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
+        # Watcher thread so a stop request is registered within ~2 s even while
+        # bot.process() is mid-cycle (a cycle can run minutes under exchange
+        # rate limiting); the loop then exits as soon as the cycle returns
+        # instead of starting another one.
+        if stop_file is not None:
+            def _stop_file_watcher(sf: Path = stop_file) -> None:
+                while not stop_event.wait(2.0):
+                    if sf.exists():
+                        logger.info("stop file %s detected — shutting down gracefully", sf)
+                        try:
+                            sf.unlink()
+                        except OSError:
+                            pass
+                        stop_event.set()
+                        return
+
+            threading.Thread(
+                target=_stop_file_watcher, name="StopFileWatcher", daemon=True
+            ).start()
+
         while not stop_event.is_set():
             t0 = time.perf_counter()
             try:
@@ -587,7 +624,7 @@ def _common_args(p: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="VulcanTrader",
-        description="IccTrader — backtesting, data download, live trading and web portal.",
+        description="VulcanTrader — backtesting, data download, live trading and web portal.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -632,7 +669,10 @@ def build_parser() -> argparse.ArgumentParser:
              "(human-readable JSON mirror, default), sqlite:///foo.sqlite, sqlite:// (in-memory).",
     )
     p_tr.add_argument("--dry-run", dest="dry_run", action="store_true", help="Force dry-run mode.")
-    p_tr.add_argument("--no-web", action="store_true", help="Do not launch the web portal.")
+    p_tr.add_argument(
+        "--headless", "--no-web", dest="no_web", action="store_true",
+        help="Run without the web portal (headless). Notifications fall back to log output.",
+    )
     p_tr.set_defaults(func=cmd_trade)
 
     # webserver ------------------------------------------------------------

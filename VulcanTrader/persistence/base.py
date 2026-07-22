@@ -30,6 +30,25 @@ class _FakeSession:
 
     def add(self, obj: "ModelBase") -> None:
         type(obj)._add_instance(obj)
+        # Mirror the cascade a real SQLAlchemy relationship gives for free: every
+        # call site does `trade.orders.append(order_obj)` then `Trade.session.add
+        # (trade)`, exactly like real freqtrade code does against a relationship-
+        # mapped `orders` collection - there, appending alone stages the child for
+        # the next commit via the relationship's cascade. `trade.orders` here is
+        # just a plain list (see LocalTrade.orders), so without this, appended
+        # Order objects were never added to `Order._instances` at all - they
+        # stayed correctly attached to `trade.orders` for this process's own
+        # in-memory use (recalc_trade_from_orders() etc. worked fine), but every
+        # order silently vanished from persistence: the JSON snapshot's "orders"
+        # list was always empty regardless of how many orders had actually
+        # executed, and any trade reloaded after a restart came back with zero
+        # order history for get_latest_candle-independent things like
+        # recalc_trade_from_orders() to work from. Idempotent like _add_instance
+        # itself, so this runs safely every time a trade is (re-)added, including
+        # when a later exit order is appended to an already-persisted trade.
+        for order in getattr(obj, "orders", None) or ():
+            order.ft_trade_id = obj.id
+            type(order)._add_instance(order)
 
     def delete(self, obj: "ModelBase") -> None:
         type(obj)._delete_instance(obj)
