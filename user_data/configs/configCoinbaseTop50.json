@@ -1,0 +1,136 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 3,
+    "stake_currency": "USD",
+    "max_stake_amount": 20000,
+    "stake_amount": 10000,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run": true,
+    "dry_run_wallet": 100000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "spot",
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "coinbase",
+        "key": "",
+        "secret": "",
+        "ccxt_async_config": {},
+        "use_public_trades": false,
+        "pair_whitelist": [
+            "00/USD",
+            "AAVE/USD",
+            "ADA/USD",
+            "AERO/USD",
+            "ALLO/USD",
+            "AVAX/USD",
+            "BCH/USD",
+            "BILL/USD",
+            "BNB/USD",
+            "BONK/USD",
+            "BTC/USD",
+            "CBETH/USD",
+            "DOGE/USD",
+            "DOT/USD",
+            "ENA/USD",
+            "ERA/USD",
+            "ETH/USD",
+            "FARTCOIN/USD",
+            "FET/USD",
+            "FLR/USD",
+            "HBAR/USD",
+            "HYPE/USD",
+            "ICP/USD",
+            "INJ/USD",
+            "JTO/USD",
+            "LIGHTER/USD",
+            "LINK/USD",
+            "LTC/USD",
+            "MON/USD",
+            "NEAR/USD",
+            "ONDO/USD",
+            "OXT/USD",
+            "PAXG/USD",
+            "PENGU/USD",
+            "PEPE/USD",
+            "PUMP/USD",
+            "SOL/USD",
+            "SUI/USD",
+            "SYRUP/USD",
+            "TAO/USD",
+            "TON/USD",
+            "TRAC/USD",
+            "UNI/USD",
+            "USDT/USD",
+            "USELESS/USD",
+            "VVV/USD",
+            "WLD/USD",
+            "XLM/USD",
+            "XRP/USD",
+            "ZEC/USD"
+        ],
+        "pair_blacklist": [],
+        "ccxt_config": {
+            "enableRateLimit": true
+        }
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "telegram": {
+        "enabled": false,
+        "token": "",
+        "chat_id": ""
+    },
+    "discord": {
+        "enabled": false,
+        "webhook_url": "",
+        "bot_token": "",
+        "allowed_user_ids": []
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8080,
+        "verbosity": "info",
+        "enable_openapi": true,
+        "jwt_secret_key": "somethingRandomSomethingRandom123",
+        "CORS_origins": [],
+        "username": "test",
+        "password": "test"
+    },
+    "data_server": {
+        "enabled": true,
+        "persist_to_disk": true
+    },
+    "db_url": "json:user_data/accounts/trades-CoinbaseTop50.json",
+    "bot_name": "Coinbase Top50",
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}
