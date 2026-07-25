@@ -1,4 +1,16 @@
 {
+    "db_url": "json:user_data/accounts/trades-Drift.json",
+    "bot_name": "Drift",
+    "is_bot": false,
+    "dry_run": true,
+    "strategy": "",
+    "auto_start": false,
+    "show_terminal": false,
+    "tmux": false,
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
+    
     "$schema": "https://schema.freqtrade.io/schema.json",
     "max_open_trades": 3,
     "stake_currency": "USDC",
@@ -6,7 +18,6 @@
     "stake_amount": 10000,
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
-    "dry_run": true,
     "dry_run_wallet": 12000,
     "cancel_open_orders_on_exit": true,
     "trading_mode": "futures",
@@ -35,7 +46,7 @@
         "order_book_top": 1
     },
     "exchange": {
-        "name": "hyperliquid",
+        "name": "drift",
         "key": "",
         "secret": "",
         "ccxt_async_config": {},
@@ -94,33 +105,6 @@
             "refresh_period": 1440
         }
     ],
-    "telegram": {
-        "enabled": false,
-        "token": "",
-        "chat_id": ""
-    },
-    "discord": {
-        "enabled": true,
-        "webhook_url": "",
-        "bot_token": "",
-        "allowed_user_ids": []
-    },
-    "api_server": {
-        "enabled": true,
-        "listen_ip_address": "127.0.0.1",
-        "listen_port": 8080,
-        "verbosity": "info",
-        "enable_openapi": true,
-        "jwt_secret_key": "somethingRandomSomethingRandom123",
-        "CORS_origins": [],
-        "username": "test",
-        "password": "test"
-    },
-    "db_url": "json:user_data/accounts/trades-Drift.json",
-    "bot_name": "Drift",
-    "initial_state": "running",
-    "force_entry_enable": false,
-    "hyperopt_ignore_missing_space": true,
     "internals": {
         "process_throttle_secs": 5
     }

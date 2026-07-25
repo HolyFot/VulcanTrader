@@ -1,0 +1,73 @@
+{
+    "db_url": "json:user_data/accounts/trades-DriftTop50.json",
+    "bot_name": "Drift Top50",
+    "is_bot": false,
+    "dry_run": true,
+    "strategy": "",
+    "auto_start": false,
+    "show_terminal": false,
+    "tmux": false,
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
+    
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 3,
+    "stake_currency": "USDC",
+    "max_stake_amount": 50000,
+    "stake_amount": 10000,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run_wallet": 12000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "liquidation_buffer": 0.05,
+    "leverage": 5,
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "drift",
+        "key": "",
+        "secret": "",
+        "ccxt_async_config": {},
+        "use_public_trades": false,
+        "pair_whitelist": [],
+        "pair_blacklist": [],
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "rateLimit": 50
+        }
+    },
+    "pairlists": [
+        {
+            "method": "VolumePairList",
+            "number_assets": 50,
+            "sort_key": "quoteVolume",
+            "min_value": 0,
+            "refresh_period": 3600
+        }
+    ],
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}

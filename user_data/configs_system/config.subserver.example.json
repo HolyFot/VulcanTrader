@@ -1,0 +1,12 @@
+{
+    "format": "feather",
+    "funding_rate": false,
+    "persist_to_disk": true,
+    "orderflow": false,
+    "is_subserver": true,
+    "master_host": "REPLACE_WITH_MASTER_IP",
+    "subserver_port": 8721,
+    "name": "REPLACE_WITH_SUBSERVER_NAME",
+    "show_terminal": false,
+    "tmux": false
+}

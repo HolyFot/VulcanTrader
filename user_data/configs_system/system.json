@@ -1,0 +1,24 @@
+{
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8080,
+        "verbosity": "info",
+        "enable_openapi": true,
+        "jwt_secret_key": "somethingRandomSomethingRandom123",
+        "CORS_origins": [],
+        "username": "test",
+        "password": "test"
+    },
+    "discord": {
+        "enabled": false,
+        "webhook_url": "",
+        "bot_token": "",
+        "allowed_user_ids": []
+    },
+    "telegram": {
+        "enabled": false,
+        "token": "",
+        "chat_id": ""
+    }
+}

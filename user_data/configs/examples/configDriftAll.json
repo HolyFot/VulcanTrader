@@ -1,0 +1,125 @@
+{
+    "db_url": "json:user_data/accounts/trades-DriftAll.json",
+    "bot_name": "DRIFT ALL",
+    "is_bot": false,
+    "dry_run": true,
+    "strategy": "",
+    "auto_start": false,
+    "show_terminal": false,
+    "tmux": false,
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
+    
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 3,
+    "stake_currency": "USDC",
+    "max_stake_amount": 50000,
+    "stake_amount": 10000,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run_wallet": 12000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "liquidation_buffer": 0.05,
+    "leverage": 5,
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "drift",
+        "key": "",
+        "secret": "",
+        "ccxt_async_config": {},
+        "use_public_trades": false,
+        "pair_whitelist": [
+            "1KMON-PERP",
+            "1KPUMP-PERP",
+            "1MBONK-PERP",
+            "1MPEPE-PERP",
+            "2Z-PERP",
+            "ADA-PERP",
+            "APT-PERP",
+            "ARB-PERP",
+            "ASTER-PERP",
+            "AVAX-PERP",
+            "BERA-PERP",
+            "BNB-PERP",
+            "BP-PERP",
+            "BTC-PERP",
+            "CLOUD-PERP",
+            "DOGE-PERP",
+            "DRIFT-PERP",
+            "ETH-PERP",
+            "FARTCOIN-PERP",
+            "HNT-PERP",
+            "HYPE-PERP",
+            "INJ-PERP",
+            "IP-PERP",
+            "JTO-PERP",
+            "JUP-PERP",
+            "KAITO-PERP",
+            "KMNO-PERP",
+            "LINK-PERP",
+            "LIT-PERP",
+            "LTC-PERP",
+            "ME-PERP",
+            "MET-PERP",
+            "MNT-PERP",
+            "OP-PERP",
+            "PAXG-PERP",
+            "PENGU-PERP",
+            "POL-PERP",
+            "POPCAT-PERP",
+            "PUMP-PERP",
+            "PYTH-PERP",
+            "RAY-PERP",
+            "RENDER-PERP",
+            "SEI-PERP",
+            "SOL-PERP",
+            "SUI-PERP",
+            "TAO-PERP",
+            "TIA-PERP",
+            "TNSR-PERP",
+            "TON-PERP",
+            "TRUMP-PERP",
+            "W-PERP",
+            "WIF-PERP",
+            "XPL-PERP",
+            "XRP-PERP",
+            "ZEC-PERP"
+        ],
+        "pair_blacklist": [],
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "rateLimit": 50
+        }
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}

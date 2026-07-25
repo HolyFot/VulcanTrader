@@ -1,0 +1,120 @@
+{
+    "db_url": "json:user_data/accounts/trades-HyperTop50.json",
+    "bot_name": "Hyper Top50",
+    "is_bot": false,
+    "dry_run": true,
+    "strategy": "",
+    "auto_start": false,
+    "show_terminal": false,
+    "tmux": false,
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "hyperopt_ignore_missing_space": true,
+    
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 3,
+    "stake_currency": "USDC",
+    "max_stake_amount": 20000,
+    "stake_amount": 10000,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run_wallet": 100000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "liquidation_buffer": 0.05,
+    "leverage": 5,
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "hyperliquid",
+        "key": "",
+        "secret": "",
+        "ccxt_async_config": {},
+        "use_public_trades": false,
+        "pair_whitelist": [
+            "AAVE/USDC:USDC",
+            "ACE/USDC:USDC",
+            "ADA/USDC:USDC",
+            "ARB/USDC:USDC",
+            "ASTER/USDC:USDC",
+            "AVAX/USDC:USDC",
+            "BCH/USDC:USDC",
+            "BNB/USDC:USDC",
+            "BTC/USDC:USDC",
+            "CASHCAT/USDC:USDC",
+            "CRV/USDC:USDC",
+            "DOGE/USDC:USDC",
+            "DOT/USDC:USDC",
+            "ENA/USDC:USDC",
+            "ETH/USDC:USDC",
+            "ETHFI/USDC:USDC",
+            "FARTCOIN/USDC:USDC",
+            "GRAM/USDC:USDC",
+            "HBAR/USDC:USDC",
+            "HYPE/USDC:USDC",
+            "INJ/USDC:USDC",
+            "JTO/USDC:USDC",
+            "JUP/USDC:USDC",
+            "KAITO/USDC:USDC",
+            "LINK/USDC:USDC",
+            "LIT/USDC:USDC",
+            "LTC/USDC:USDC",
+            "MON/USDC:USDC",
+            "NEAR/USDC:USDC",
+            "ONDO/USDC:USDC",
+            "PAXG/USDC:USDC",
+            "PENDLE/USDC:USDC",
+            "PUMP/USDC:USDC",
+            "SOL/USDC:USDC",
+            "SPX/USDC:USDC",
+            "SUI/USDC:USDC",
+            "TAO/USDC:USDC",
+            "TRUMP/USDC:USDC",
+            "TRX/USDC:USDC",
+            "UNI/USDC:USDC",
+            "VVV/USDC:USDC",
+            "WLD/USDC:USDC",
+            "WLFI/USDC:USDC",
+            "XMR/USDC:USDC",
+            "XPL/USDC:USDC",
+            "XRP/USDC:USDC",
+            "ZEC/USDC:USDC",
+            "ZRO/USDC:USDC",
+            "kBONK/USDC:USDC",
+            "kPEPE/USDC:USDC"
+        ],
+        "pair_blacklist": [],
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "rateLimit": 50
+        }
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}
