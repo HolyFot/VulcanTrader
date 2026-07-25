@@ -194,14 +194,30 @@
             border-color: #695ff5 !important;
             box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important;
         }
+        /* Chrome/Edge paint autofilled inputs (saved username/password) with
+           their own opaque light background + black text, ignoring
+           `background`/`color` entirely - only this pseudo-class combo (plus
+           the box-shadow-inset trick, since `background-color` itself is
+           still ignored on an autofilled field) can override it. The huge
+           transition delay is the standard trick to stop Chrome's autofill
+           yellow flashing in for a frame before this rule takes over. */
+        .form-input:-webkit-autofill,
+        .form-input:-webkit-autofill:hover,
+        .form-input:-webkit-autofill:focus,
+        .form-input:-webkit-autofill:active {
+            -webkit-text-fill-color: #e0e0e0 !important;
+            caret-color: #e0e0e0;
+            -webkit-box-shadow: 0 0 0px 1000px rgba(30,26,42,0.95) inset !important;
+            box-shadow: 0 0 0px 1000px rgba(30,26,42,0.95) inset !important;
+            transition: background-color 5000s ease-in-out 0s;
+        }
         .login-footer a { color: #695ff5 !important; }
     </style>
 </head>
 <body>
     <div class="login-card">
         <div class="login-header">
-            <h1>VulcanTrader</h1>
-            <p>Sign in to access the dashboard</p>
+            <h1>VulcanTrader <span id="version" style="font-size:0.55em; opacity:0.7; font-weight:400;">v1.2</span></h1>
         </div>
         <div class="login-body">
             <div id="error" class="login-error" style="display:none;"></div>
@@ -214,11 +230,12 @@
                     <label for="password">Password</label>
                     <input id="password" name="password" type="password" class="form-input" required autocomplete="current-password">
                 </div>
-                <button type="submit" id="submit-btn" class="btn-login">Sign In</button>
+                <button type="submit" id="submit-btn" class="btn-login">Login</button>
             </form>
             <div class="login-footer">
                 <a href="/trading">Trading</a> &nbsp;·&nbsp;
-                <a href="/backtester">Backtester</a>
+                <a href="/backtester">Backtester</a> &nbsp;·&nbsp;
+                <a href="/datamanager">Data Manager</a>
             </div>
         </div>
     </div>
@@ -227,6 +244,13 @@
         const form = document.getElementById('login-form');
         const errBox = document.getElementById('error');
         const btn = document.getElementById('submit-btn');
+
+        // No auth needed for this one (see /api/version in web_portal.py) -
+        // static "v1.2" markup above stays put if the fetch fails.
+        fetch('/api/version')
+            .then(r => r.json())
+            .then(d => { if (d.version) document.getElementById('version').textContent = 'v' + d.version; })
+            .catch(() => {});
 
         // Auto-redirect if already authenticated
         if (localStorage.getItem('VulcanTrader_token')) {
@@ -259,7 +283,7 @@
                 errBox.textContent = err.message || 'Login failed';
                 errBox.style.display = 'block';
                 btn.disabled = false;
-                btn.textContent = 'Sign In';
+                btn.textContent = 'Login';
             }
         });
     </script>

@@ -7,7 +7,7 @@
 #  the analysis tools when no bot session is running.
 #
 #  Dashboard: http://localhost:8080
-#  Default password: VulcanTrader
+#  Default password: test
 # ---------------------------------------------------------------------------
 set -euo pipefail
 cd "$(dirname "$0")"

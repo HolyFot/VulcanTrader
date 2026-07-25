@@ -165,12 +165,22 @@ class StrategyResolver(IResolver):
         trading_mode = strategy.config.get("trading_mode", TradingMode.SPOT)
 
         if strategy.can_short and trading_mode == TradingMode.SPOT:
-            raise ImportError(
-                "Short strategies cannot run in spot markets. Please make sure that this "
-                "is the correct strategy and that your trading mode configuration is correct. "
-                "You can run this strategy in spot markets by setting `can_short=False`"
-                " in your strategy. Please note that short signals will be ignored in that case."
+            # Spot markets have no borrowing/margin, so a short genuinely
+            # cannot execute here - but that's no reason to hard-fail the
+            # whole bot over a strategy written short-capable. Auto-downgrade
+            # instead: short entry signals are simply ignored from this point
+            # on (see IStrategy's own entry-signal handling), exactly the
+            # fallback freqtrade's docs describe for `can_short=False`. This
+            # lets any of the project's strategies run on a spot config
+            # (e.g. Kraken) without needing a hand-maintained "Spot" subclass
+            # per strategy.
+            logger.warning(
+                "Strategy '%s' has can_short=True but trading_mode is spot - "
+                "downgrading to can_short=False for this run. Short entry "
+                "signals will be ignored; long-only.",
+                strategy.__class__.__name__,
             )
+            strategy.can_short = False
 
     @staticmethod
     def validate_strategy(strategy: IStrategy) -> IStrategy:

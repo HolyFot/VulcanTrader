@@ -30,6 +30,10 @@ KeyStoreKeys = Literal[
     # a stale last_heartbeat means the bot died without cleanup (crash/kill).
     "is_running",
     "last_heartbeat",
+    # Human-friendly display name (config "bot_name"), persisted so external
+    # readers (web_portal account scan, Discord bot) can show it for accounts
+    # they never attached to in-process - see trader_bot.py's startup().
+    "bot_name",
 ]
 
 

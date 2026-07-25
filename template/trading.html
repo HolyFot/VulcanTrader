@@ -8,6 +8,7 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
     <style>
         * { box-sizing: border-box; }
+        [x-cloak] { display: none !important; }
         body {
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -109,6 +110,7 @@
         .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
         .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
         .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+        .neu { color: #f59e0b; text-shadow: 0 0 10px rgba(245,158,11,0.3); }
 
         /* monthly/daily boxes */
         .period-grid { display: flex; flex-wrap: wrap; gap: 0.75rem; }
@@ -162,6 +164,41 @@
         }
         .badge-open { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
         .badge-closed { background: rgba(160,174,192,0.15); color: #a0aec0; border: 1px solid rgba(160,174,192,0.3); }
+
+        .toggle-check {
+            appearance: none; -webkit-appearance: none;
+            width: 17px; height: 17px; border-radius: 4px;
+            background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.45);
+            cursor: pointer; position: relative; vertical-align: middle;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .toggle-check:checked {
+            background: rgba(16,185,129,0.18); border-color: rgba(16,185,129,0.55);
+        }
+        .toggle-check:checked::after {
+            content: ''; position: absolute; left: 5px; top: 2px;
+            width: 4px; height: 8px;
+            border: solid #10b981; border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+        .toggle-check:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .icon-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 30px; height: 30px; margin: 2px 2px 2px 0;
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.05); color: #aab0c0;
+            font-size: 0.85rem; line-height: 1; font-variant-emoji: text;
+            cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease;
+        }
+        .icon-btn:hover:not(:disabled) { filter: brightness(1.35); transform: translateY(-1px); }
+        .icon-btn:active:not(:disabled) { transform: translateY(0); }
+        .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .icon-btn.success { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.4); color: #10b981; }
+        .icon-btn.danger  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.4); color: #ef4444; }
+        .icon-btn.info    { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); color: #38bdf8; }
+        .icon-btn.warn    { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: #f59e0b; }
+        .icon-btn.accent  { background: rgba(105,95,245,0.16); border-color: rgba(105,95,245,0.45); color: #9089f7; }
 
         .alert {
             background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
@@ -323,55 +360,14 @@
 <div id="app" x-data="tradingApp()" x-init="init()">
     <nav class="navbar">
         <div style="display:flex; align-items:center;">
-            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;" x-text="status && status.version ? 'v'+status.version : 'v1.1'"></span></a>
+            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;" x-text="status && status.version ? 'v'+status.version : 'v1.2'"></span></a>
             <div style="margin-left: 2rem;">
                 <a href="/trading" class="nav-link active">Trading</a>
                 <a href="/backtester" class="nav-link">Backtester</a>
+                <a href="/datamanager" class="nav-link">Data Manager</a>
             </div>
         </div>
         <div style="display:flex; gap:0.75rem; align-items:center;">
-            <select x-model="selectedBot" class="form-input" title="Pick a detected bot account to view its trades/stats, or this portal's own bot"
-                    style="min-width:230px; max-width:340px; padding:6px 8px; font-size:0.8rem;">
-                <option value="">This portal's bot</option>
-                <template x-for="b in bots" :key="b.name">
-                    <option :value="b.name" x-text="botLabel(b)"></option>
-                </template>
-            </select>
-            <span class="status-pill" x-show="status">
-                <span class="status-dot" :class="{ stopped: status && status.state !== 'RUNNING' }"></span>
-                <span x-text="status ? (status.state || 'UNKNOWN') : ''"
-                      :style="status && status.state === 'RUNNING' ? 'color:#10b981;font-weight:600;' : 'color:#ef4444;font-weight:600;'"></span>
-                <span style="color:#a0aec0;">·</span>
-                <span x-text="status ? (status.exchange || '?') : ''"></span>
-                <span style="color:#a0aec0;">·</span>
-                <span x-text="status ? (status.dry_run ? 'DRY' : 'LIVE') : ''"></span>
-                <template x-if="status && status.uptime_secs != null">
-                    <span style="color:#a0aec0; font-size:0.72rem;">
-                        &nbsp;· up <span x-text="formatUptime(status.uptime_secs)"></span>
-                    </span>
-                </template>
-                <template x-if="status && status.last_process">
-                    <span style="color:#a0aec0; font-size:0.72rem;">
-                        &nbsp;· last <span x-text="formatDate(status.last_process)"></span>
-                    </span>
-                </template>
-                <template x-if="status && status.account">
-                    <span style="color:#38bdf8;">&nbsp;· account: <span x-text="status.account"></span></span>
-                </template>
-                <template x-if="status && status.crashed">
-                    <span style="color:#ef4444; font-weight:600;">&nbsp;· CRASHED?</span>
-                </template>
-                <template x-if="status && !status.attached && !status.account">
-                    <span style="color:#f59e0b;">&nbsp;· not attached</span>
-                </template>
-            </span>
-            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:#a0aec0;">
-                <input type="checkbox" x-model="autoRefresh"> Auto-refresh (10s)
-            </label>
-            <button class="btn" @click="startBot()" :disabled="loading || !!selectedBot || status?.state === 'RUNNING'"
-                    :title="selectedBot ? 'Viewing an external bot account — starting only works for this portal\'s bot' : 'Start trading'">&#9654; Start</button>
-            <button class="btn btn-danger" @click="stopBot()" :disabled="loading || status?.state !== 'RUNNING'"
-                    :title="selectedBot ? 'Gracefully shut down this bot process (stop file, ~5-10 s)' : 'Pause trading'">&#9208; Stop</button>
             <button class="btn btn-logout" @click="logout()" title="Logout"
                     style="min-width:unset; padding:8px 12px; line-height:0;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
@@ -391,44 +387,117 @@
             <span class="spinner"></span> Loading trades...
         </div>
 
-        <!-- === BOT CONFIGURATION === -->
+        <!-- === CONFIG MANAGER === -->
         <div class="card" style="margin-bottom:1rem;">
             <h3>
-                Bot Configuration
-                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
-                    Running:&nbsp;<span style="color:#695ff5;" x-text="status && status.bot_name ? status.bot_name : '—'"></span>
-                    &nbsp;·&nbsp;<span x-text="status && status.strategy ? status.strategy : '—'"></span>
-                    &nbsp;·&nbsp;<span :class="status && !status.dry_run ? 'pos' : 'neg'"
-                                       x-text="status ? (status.dry_run ? 'Paper' : 'LIVE') : '—'"></span>
+                <span>
+                    Bots
+                    <template x-if="viewingBot">
+                        <span style="font-size:0.75rem; font-weight:400; color:#38bdf8;">
+                            &nbsp;· viewing <span x-text="viewingBot"></span>
+                            <a href="#" @click.prevent="viewingBot = null; refreshDashboard()"
+                               style="color:#f59e0b; margin-left:0.4rem;">(back)</a>
+                        </span>
+                    </template>
                 </span>
+                <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    Show non-bots
+                    <input type="checkbox" class="toggle-check" x-model="showNonBots" @change="loadMeta()">
+                </label>
             </h3>
-            <div style="display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-end;">
-                <label style="display:flex; flex-direction:column; gap:0.35rem;">
-                    <span style="font-size:0.75rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</span>
-                    <select x-model="selectedConfig" class="form-input" style="min-width:220px;">
-                        <option value="">— Select config —</option>
-                        <template x-for="c in configs" :key="c.name">
-                            <option :value="c.name" x-text="c.name"></option>
+            <div class="table-wrap" style="max-height:420px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Strategy</th>
+                            <th>Auto Start</th>
+                            <th>Mode</th>
+                            <th>Exchange</th>
+                            <th>CPU</th>
+                            <th>RAM</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="cfg in configs" :key="cfg.name">
+                            <tr :style="viewingBot === cfg.account_name ? 'background:rgba(105,95,245,0.12);' : ''">
+                                <td style="font-weight:600; color:#10b981; text-decoration:underline;"
+                                    :style="cfg.running ? 'cursor:pointer;' : 'cursor:default; opacity:0.55;'"
+                                    :title="cfg.running ? 'Click to load this bot\'s live trades/stats' : 'Bot is not running'"
+                                    @click="viewConfigDashboard(cfg)"
+                                    x-text="cfg.name"></td>
+                                <td>
+                                    <span class="badge" :class="cfg.running ? 'badge-open' : (cfg.crashed ? 'badge-open' : 'badge-closed')"
+                                          :style="cfg.crashed ? 'background:rgba(245,158,11,0.15); color:#f59e0b; border-color:rgba(245,158,11,0.3);' : ''"
+                                          x-text="cfg.running ? 'running' : (cfg.crashed ? 'crashed' : 'stopped')"></span>
+                                </td>
+                                <td>
+                                    <select class="form-input" style="min-width:200px; font-size:0.8rem; padding:4px 6px;"
+                                            :value="cfg.strategy || ''"
+                                            @change="setConfigField(cfg, 'strategy', $event.target.value)"
+                                            :disabled="configBusy === cfg.name">
+                                        <option value="">— none —</option>
+                                        <template x-for="s in strategies" :key="s.name">
+                                            <option :value="s.name" x-text="s.name"></option>
+                                        </template>
+                                    </select>
+                                </td>
+                                <td style="text-align:center;">
+                                    <input type="checkbox" class="toggle-check" :checked="cfg.auto_start"
+                                           :disabled="configBusy === cfg.name"
+                                           @change="setConfigField(cfg, 'auto_start', $event.target.checked)">
+                                </td>
+                                <td x-text="cfg.dry_run ? 'Paper' : 'LIVE'" :class="cfg.dry_run ? '' : 'neg'"></td>
+                                <td x-text="cfg.exchange || '-'"></td>
+                                <td :title="cfg.running && cfg.cpu_percent == null ? 'Measuring — updates on the next 10s poll' : ''"
+                                    x-text="cfg.running ? fmtCpu(cfg.cpu_percent) : '-'"></td>
+                                <td :title="cfg.running && cfg.memory_mb == null ? 'Measuring — updates on the next 10s poll' : ''"
+                                    x-text="cfg.running ? fmtMem(cfg.memory_mb) : '-'"></td>
+                                <td style="white-space:nowrap;">
+                                    <button class="icon-btn success" @click="startConfigBot(cfg)"
+                                            :disabled="configBusy === cfg.name || cfg.running || !cfg.strategy"
+                                            :title="!cfg.strategy ? 'Set a strategy first' : 'Start'">&#9654;</button>
+                                    <button class="icon-btn danger" @click="stopConfigBot(cfg)"
+                                            :disabled="configBusy === cfg.name || !cfg.running"
+                                            title="Stop">&#9632;</button>
+                                    <button class="icon-btn info" @click="openConfigEditor(cfg)"
+                                            :disabled="configBusy === cfg.name" title="Edit JSON">&#9998;</button>
+                                    <button class="icon-btn warn" @click="duplicateConfig(cfg)"
+                                            :disabled="configBusy === cfg.name" title="Duplicate">&#10697;</button>
+                                    <button class="icon-btn accent" @click="renameConfig(cfg)"
+                                            :disabled="configBusy === cfg.name || cfg.running"
+                                            :title="cfg.running ? 'Stop the bot first to rename' : 'Rename'">Aa</button>
+                                    <button class="icon-btn danger" @click="deleteConfig(cfg)"
+                                            :disabled="configBusy === cfg.name || cfg.running" title="Delete">&#10005;</button>
+                                </td>
+                            </tr>
                         </template>
-                    </select>
-                </label>
-                <label style="display:flex; flex-direction:column; gap:0.35rem;">
-                    <span style="font-size:0.75rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</span>
-                    <select x-model="selectedStrategy" class="form-input" style="min-width:220px;">
-                        <option value="">— Select strategy —</option>
-                        <template x-for="s in strategies" :key="s.name">
-                            <option :value="s.name" x-text="s.name"></option>
-                        </template>
-                    </select>
-                </label>
-                <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; padding-bottom:0.35rem;">
-                    <input type="checkbox" x-model="selectedDryRun" @change="applyDryRun()"
-                           style="width:16px; height:16px; accent-color:#695ff5; cursor:pointer;">
-                    <span style="font-size:0.85rem; color:#a0aec0;">Paper mode (dry run)</span>
-                </label>
-                <div style="padding-bottom:0.35rem; font-size:0.72rem; color:#6b7280; line-height:1.6;">
-                    Config &amp; strategy require restart to apply.<br>
-                    Paper toggle applies to the running bot immediately.
+                        <tr x-show="configs.length === 0">
+                            <td colspan="9" style="text-align:center; color:#a0aec0;">No configs found.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- === CONFIG JSON EDITOR MODAL === -->
+        <div x-show="configEditor.open" x-cloak
+             style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:2000; display:flex; align-items:center; justify-content:center;"
+             @click.self="closeConfigEditor()">
+            <div class="card" style="width:min(720px, 92vw); max-height:85vh; display:flex; flex-direction:column; margin-bottom:0;">
+                <h3 x-text="'Edit ' + configEditor.name + '.json'"></h3>
+                <div x-show="configEditor.error" class="alert" style="margin-bottom:0.75rem;" x-text="configEditor.error"></div>
+                <textarea x-model="configEditor.content" spellcheck="false"
+                          style="flex:1; min-height:400px; width:100%; font-family:'Courier New', monospace; font-size:0.8rem;
+                                 background:rgba(0,0,0,0.35); color:#e0e0e0; border:1px solid rgba(255,255,255,0.1);
+                                 border-radius:6px; padding:0.75rem; resize:vertical;"></textarea>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1rem;">
+                    <button class="btn" @click="closeConfigEditor()">Cancel</button>
+                    <button class="btn" @click="saveConfigEditor()" :disabled="configEditor.saving">
+                        <span x-text="configEditor.saving ? 'Saving…' : 'Save'"></span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -439,7 +508,7 @@
             <div class="card">
                 <h3>
                     Performance Metrics
-                    <span style="font-weight:400; font-size:0.8rem; color:#a0aec0;">
+                    <span style="font-weight:400; font-size:0.8rem; color:#1a1625; text-shadow:0 1px 1px rgba(255,255,255,0.2);">
                         Closed trades: <span x-text="closedEnriched.length"></span> · Open: <span x-text="openEnriched.length"></span>
                     </span>
                 </h3>
@@ -641,9 +710,14 @@
             <div class="card">
                 <h3>
                     <span>Open Trades (<span x-text="openEnriched.length"></span>)</span>
-                    <span style="font-weight:400; font-size:0.8rem; color:#a0aec0;">
-                        Unrealized: <span :class="openUnrealized >= 0 ? 'pos' : 'neg'" x-text="fmt(openUnrealized)"></span>
+                    <span style="font-weight:400; font-size:0.8rem; color:#1a1625; text-shadow:0 1px 1px rgba(255,255,255,0.2);">
+                        Unrealized: <span :class="openUnrealized > 0 ? 'pos' : (openUnrealized < 0 ? 'neg' : 'neu')"
+                              style="text-shadow:0 1px 1px rgba(255,255,255,0.2);" x-text="fmt(openUnrealized)"></span>
                     </span>
+                    <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                        Show entry tag
+                        <input type="checkbox" class="toggle-check" x-model="showEntryTag">
+                    </label>
                 </h3>
                 <div class="table-wrap">
                     <table>
@@ -656,7 +730,7 @@
                             <th>R</th><th>R:R</th><th>PF</th>
                             <th>Sharpe</th><th>Expectancy R</th>
                             <th>SNR</th><th>Entry Q</th><th>Exit Q</th>
-                            <th>Tag</th>
+                            <th x-show="showEntryTag">Tag</th>
                         </tr></thead>
                         <tbody>
                             <template x-for="(t, i) in openEnriched" :key="'o-' + t.__idx">
@@ -683,10 +757,15 @@
                                         <span x-text="t.__entryQ.toFixed(0)"></span>
                                     </td>
                                     <td>
-                                        <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
-                                        <span x-text="t.__exitQ.toFixed(0)"></span>
+                                        <template x-if="t.__exitQ != null">
+                                            <span>
+                                                <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
+                                                <span x-text="t.__exitQ.toFixed(0)"></span>
+                                            </span>
+                                        </template>
+                                        <span x-show="t.__exitQ == null" style="color:#a0aec0;">-</span>
                                     </td>
-                                    <td style="color:#a0aec0;" x-text="t.enter_tag || '-'"></td>
+                                    <td x-show="showEntryTag" style="color:#a0aec0;" x-text="t.enter_tag || '-'"></td>
                                 </tr>
                             </template>
                             <template x-if="openEnriched.length === 0">
@@ -706,6 +785,10 @@
                 <h3>
                     <span>Closed Trades (<span x-text="closedEnriched.length"></span>)</span>
                     <input x-model="closedFilter" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
+                    <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                        Show exit reason
+                        <input type="checkbox" class="toggle-check" x-model="showExitReason">
+                    </label>
                 </h3>
                 <div class="table-wrap">
                     <table>
@@ -717,7 +800,7 @@
                             <th>R</th><th>R:R</th><th>PF</th>
                             <th>Sharpe</th><th>Expectancy R</th>
                             <th>SNR</th><th>Entry Q</th><th>Exit Q</th>
-                            <th>Exit</th>
+                            <th x-show="showExitReason">Exit</th>
                         </tr></thead>
                         <tbody>
                             <template x-for="(t, i) in filteredClosed" :key="'c-' + t.__idx">
@@ -746,7 +829,7 @@
                                         <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
                                         <span x-text="t.__exitQ.toFixed(0)"></span>
                                     </td>
-                                    <td style="color:#a0aec0;" x-text="t.exit_reason || '-'"></td>
+                                    <td x-show="showExitReason" style="color:#a0aec0;" x-text="t.exit_reason || '-'"></td>
                                 </tr>
                             </template>
                             <template x-if="filteredClosed.length === 0">
@@ -854,11 +937,12 @@ function tradingApp() {
         consoleLogs: [],
         configs: [],
         strategies: [],
-        bots: [],
-        selectedBot: localStorage.getItem('VT_selectedBot') || '',
-        selectedConfig: localStorage.getItem('VT_selectedConfig') || '',
-        selectedStrategy: localStorage.getItem('VT_selectedStrategy') || '',
-        selectedDryRun: true,
+        configEditor: { open: false, name: '', content: '', saving: false, error: '' },
+        configBusy: '',
+        viewingBot: null,
+        showNonBots: false,
+        showEntryTag: false,
+        showExitReason: false,
 
         get allTrades() { return this.openTrades.concat(this.closedTrades); },
         get openEnriched() { return this.openTrades.map((t, i) => this._enrich(t, i, true)); },
@@ -977,21 +1061,25 @@ function tradingApp() {
             await Promise.all([
                 this.authedFetch('/api/strategy/info').then(r => { this.strategyInfo = r; }).catch(() => {}),
                 this.loadMeta(),
-                this.loadBots(),
             ]);
             if (this.autoRefresh) this._startTimer();
             this.$watch('closedTrades', () => this.$nextTick(() => this.renderCharts()));
             this.$watch('autoRefresh', v => v ? this._startTimer() : this._stopTimer());
-            this.$watch('selectedConfig', v => localStorage.setItem('VT_selectedConfig', v));
-            this.$watch('selectedStrategy', v => localStorage.setItem('VT_selectedStrategy', v));
-            this.$watch('selectedBot', v => {
-                localStorage.setItem('VT_selectedBot', v);
-                this.refreshDashboard();
-            });
         },
 
         fmt(v) { return (v >= 0 ? '+' : '') + (+v).toFixed(2); },
         fmtRate(v) { if (v == null || v === '') return '-'; const n = +v; return n < 1 ? n.toPrecision(5) : n.toFixed(4); },
+        fmtCpu(v) {
+            // null = just (re)started, one poll away from a real reading
+            // (see web_portal.py's _proc_stats - cpu_percent needs a delta
+            // between two samples, so the first call after a bot starts is
+            // always null rather than a misleading 0%).
+            return v == null ? '…' : v.toFixed(1) + '%';
+        },
+        fmtMem(v) {
+            if (v == null) return '…';
+            return v >= 1024 ? (v / 1024).toFixed(2) + ' GB' : v.toFixed(0) + ' MB';
+        },
         formatDate(d) {
             if (!d) return '-';
             const dt = new Date(d);
@@ -1026,63 +1114,132 @@ function tradingApp() {
             localStorage.removeItem('VulcanTrader_token');
             window.location.href = '/login';
         },
-        async startBot() {
-            try {
-                await this.authedFetch('/api/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        config: this.selectedConfig || null,
-                        strategy: this.selectedStrategy || null,
-                        dry_run: this.selectedDryRun,
-                    }),
-                });
-                await this.refreshAll(true);
-            } catch(e) { this.error = 'Start failed: ' + e.message; }
-        },
-        async stopBot() {
-            try {
-                if (this.selectedBot) {
-                    if (!confirm(`Shut down the "${this.selectedBot}" bot process? ` +
-                                 'It exits gracefully (cleanup + state saved) once its current ' +
-                                 'processing cycle finishes — usually seconds, longer if the ' +
-                                 'exchange is rate-limiting.')) return;
-                    const r = await this.authedFetch(
-                        '/api/livebots/' + encodeURIComponent(this.selectedBot) + '/stop',
-                        { method: 'POST' });
-                    // The bot needs up to one trade-loop cycle to notice; re-check shortly.
-                    setTimeout(() => this.refreshDashboard(true), 7000);
-                    setTimeout(() => this.refreshDashboard(true), 15000);
-                    await this.refreshAll(true);
-                    return;
-                }
-                await this.authedFetch('/api/stop', { method: 'POST' });
-                await this.refreshAll(true);
-            } catch(e) { this.error = 'Stop failed: ' + e.message; }
-        },
         async loadMeta() {
             try {
                 const [cfgs, strats] = await Promise.all([
-                    this.authedFetch('/api/configs').catch(() => ({ configs: [] })),
+                    this.authedFetch('/api/configs' + (this.showNonBots ? '?all=true' : '')).catch(() => ({ configs: [] })),
                     this.authedFetch('/api/strategies').catch(() => ({ strategies: [] })),
                 ]);
                 this.configs = cfgs.configs || [];
                 this.strategies = strats.strategies || [];
-                if (this.status) {
-                    if (this.status.dry_run !== undefined) this.selectedDryRun = !!this.status.dry_run;
-                    if (this.status.strategy && !this.selectedStrategy) this.selectedStrategy = this.status.strategy;
-                }
             } catch (e) {}
         },
-        async applyDryRun() {
+
+        // === Config manager (each config file ~= one bot) ===
+        async setConfigField(cfg, field, value) {
+            this.configBusy = cfg.name;
             try {
-                await this.authedFetch('/api/bot/configure', {
+                const raw = await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/raw');
+                const parsed = JSON.parse(raw.content);
+                parsed[field] = value;
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/raw', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: JSON.stringify(parsed, null, 4) }),
+                });
+                await this.loadMeta();
+            } catch (e) { this.error = 'Save failed: ' + e.message; }
+            finally { this.configBusy = ''; }
+        },
+        async openConfigEditor(cfg) {
+            this.configEditor = { open: true, name: cfg.name, content: '', saving: false, error: '' };
+            try {
+                const r = await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/raw');
+                this.configEditor.content = r.content;
+            } catch (e) { this.configEditor.error = 'Load failed: ' + e.message; }
+        },
+        closeConfigEditor() { this.configEditor.open = false; },
+        async saveConfigEditor() {
+            this.configEditor.saving = true;
+            this.configEditor.error = '';
+            try {
+                JSON.parse(this.configEditor.content); // validate before sending
+                await this.authedFetch('/api/configs/' + encodeURIComponent(this.configEditor.name) + '/raw', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: this.configEditor.content }),
+                });
+                await this.loadMeta();
+                this.configEditor.open = false;
+            } catch (e) { this.configEditor.error = e.message; }
+            finally { this.configEditor.saving = false; }
+        },
+        async duplicateConfig(cfg) {
+            const newName = prompt('Duplicate "' + cfg.name + '" as:', cfg.name + '_copy');
+            if (!newName || newName === cfg.name) return;
+            this.configBusy = cfg.name;
+            try {
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/duplicate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ dry_run: this.selectedDryRun }),
+                    body: JSON.stringify({ new_name: newName }),
                 });
-                await this.refreshAll(true);
-            } catch (e) { this.error = 'Configure failed: ' + e.message; }
+                await this.loadMeta();
+            } catch (e) { this.error = 'Duplicate failed: ' + e.message; }
+            finally { this.configBusy = ''; }
+        },
+        async renameConfig(cfg) {
+            const newName = prompt('Rename "' + cfg.name + '" to:', cfg.name);
+            if (!newName || newName === cfg.name) return;
+            this.configBusy = cfg.name;
+            try {
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_name: newName }),
+                });
+                await this.loadMeta();
+            } catch (e) { this.error = 'Rename failed: ' + e.message; }
+            finally { this.configBusy = ''; }
+        },
+        async deleteConfig(cfg) {
+            if (!confirm('Delete config "' + cfg.name + '"? This cannot be undone.')) return;
+            this.configBusy = cfg.name;
+            try {
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name), { method: 'DELETE' });
+                await this.loadMeta();
+            } catch (e) { this.error = 'Delete failed: ' + e.message; }
+            finally { this.configBusy = ''; }
+        },
+        // A single fixed-delay refresh isn't reliable here - starting a bot
+        // means a whole new process loading its config/exchange/strategy
+        // (strategy load alone has taken 10+s in this app's own logs) before
+        // it acquires its persistence lock and _list_configs() sees it as
+        // running; stopping means waiting for its current process() cycle to
+        // finish, then cleanup(), before the lock is released. Either can
+        // easily outlast one setTimeout, leaving the Play/Stop button
+        // showing the stale state until some unrelated action happened to
+        // trigger another loadMeta(). Poll instead, until the state actually
+        // flips (or a generous timeout gives up) - configBusy staying set
+        // for that whole window is correct, not a bug: the action really is
+        // still in progress.
+        async _pollConfigUntil(cfgName, expectedRunning, maxWaitMs) {
+            const deadline = Date.now() + maxWaitMs;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 2000));
+                await this.loadMeta();
+                const cfg = this.configs.find(c => c.name === cfgName);
+                if (cfg && !!cfg.running === expectedRunning) return;
+            }
+        },
+        async startConfigBot(cfg) {
+            this.configBusy = cfg.name;
+            try {
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/start', { method: 'POST' });
+                await this.loadMeta();
+                await this._pollConfigUntil(cfg.name, true, 45000);
+            } catch (e) { this.error = 'Start failed: ' + e.message; }
+            finally { this.configBusy = ''; }
+        },
+        async stopConfigBot(cfg) {
+            if (!confirm('Stop the bot for "' + cfg.name + '"? It exits gracefully once its current cycle finishes.')) return;
+            this.configBusy = cfg.name;
+            try {
+                await this.authedFetch('/api/configs/' + encodeURIComponent(cfg.name) + '/stop', { method: 'POST' });
+                await this.loadMeta();
+                await this._pollConfigUntil(cfg.name, false, 30000);
+            } catch (e) { this.error = 'Stop failed: ' + e.message; }
+            finally { this.configBusy = ''; }
         },
         _startTimer() {
             this._stopTimer();
@@ -1090,24 +1247,18 @@ function tradingApp() {
             this._timer = setInterval(async () => {
                 if (this._timerBusy) return;
                 this._timerBusy = true;
-                try { await this.refreshDashboard(true); }
+                try {
+                    await this.refreshDashboard(true);
+                    // Also keeps the Configs table's CPU/RAM columns (and
+                    // running/crashed state) live - loadMeta() has its own
+                    // internal try/catch, so a failure here can't break this
+                    // tick's dashboard refresh.
+                    await this.loadMeta();
+                }
                 finally { this._timerBusy = false; }
             }, 10000);
         },
         _stopTimer() { if (this._timer) { clearInterval(this._timer); this._timer = null; } },
-        async loadBots() {
-            try {
-                const r = await this.authedFetch('/api/livebots');
-                this.bots = r.bots || [];
-            } catch (e) {}
-        },
-        botLabel(b) {
-            const mode = b.mode === 'live' ? 'LIVE' : (b.mode === 'dry_run' ? 'PAPER' : '?');
-            let label = (b.running ? '● ' : (b.crashed ? '⚠ ' : '○ ')) + b.name + ' — ' + mode;
-            if (b.running && b.uptime_secs != null) label += ' · up ' + this.formatUptime(b.uptime_secs);
-            else if (b.crashed) label += ' · crashed?';
-            return label;
-        },
         formatUptime(s) {
             s = Math.max(0, Math.floor(+s || 0));
             const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
@@ -1115,13 +1266,17 @@ function tradingApp() {
             if (h > 0) return `${h}h ${m}m`;
             return `${m}m`;
         },
+        async viewConfigDashboard(cfg) {
+            if (!cfg.running) return;
+            this.viewingBot = cfg.account_name;
+            await this.refreshDashboard();
+        },
         async refreshDashboard(silent) {
             if (!silent) this.loading = true;
             this.error = null;
-            this.loadBots();
             try {
-                const url = this.selectedBot
-                    ? '/api/dashboard?bot=' + encodeURIComponent(this.selectedBot)
+                const url = this.viewingBot
+                    ? '/api/dashboard?bot=' + encodeURIComponent(this.viewingBot)
                     : '/api/dashboard';
                 const d = await this.authedFetch(url);
                 if (d.status) this.status = d.status;
@@ -1158,7 +1313,10 @@ function tradingApp() {
             const expectancyR = r;
             const snr = Math.abs(pnlPct) / 0.01;
             const minR = +t.min_rate || 0, maxR = +t.max_rate || 0;
-            let entryQ = 50, exitQ = 50;
+            // exitQ has nothing to score yet on an open trade (no exit has
+            // happened) - null rather than a fake 50 default, so the
+            // template can render '-' instead of a meaningless quality bar.
+            let entryQ = 50, exitQ = isOpen ? null : 50;
             if (minR && maxR && maxR > minR && +t.open_rate) {
                 const open_r = +t.open_rate;
                 if (t.is_short) {

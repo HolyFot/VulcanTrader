@@ -7,7 +7,7 @@ REM  Use this to browse backtest results, inspect closed trades, and use
 REM  the analysis tools when no bot session is running.
 REM
 REM  Dashboard: http://localhost:8080
-REM  Default password: VulcanTrader
+REM  Default password: test
 REM ---------------------------------------------------------------------------
 setlocal enableextensions
 cd /d "%~dp0"
@@ -25,9 +25,11 @@ set "PORT=%PORT%"
 if "%PORT%"=="" set "PORT=8080"
 
 echo [run-app] config=%CONFIG%  port=%PORT%
+REM No "endlocal"/anything after this line, deliberately - cmd.exe only
+REM prompts "Terminate batch job (Y/N)?" on Ctrl+C when it thinks there's
+REM more of the script left to run once the current command ends. With
+REM this the true last line, Ctrl+C just quits.
 python -m VulcanTrader.bot webserver ^
     -v ^
     -c "%CONFIG%" ^
     --port "%PORT%" %*
-
-endlocal

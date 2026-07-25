@@ -75,10 +75,13 @@ import re
 import secrets
 import subprocess
 import sys
+
+import psutil
 import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -168,6 +171,7 @@ def _trade_to_dict(trade: Any) -> dict:
         "close_date", "profit_abs", "profit_ratio", "close_profit",
         "close_profit_abs", "fee_open", "fee_close", "enter_tag",
         "exit_reason", "strategy", "timeframe", "trading_mode",
+        "min_rate", "max_rate", "open_trade_value", "funding_fees",
     ):
         if hasattr(trade, attr):
             out[attr] = _json_safe(getattr(trade, attr))
@@ -226,6 +230,24 @@ class StartBotRequest(BaseModel):
     config: str | None = None
     strategy: str | None = None
     dry_run: bool = True
+
+
+class ConfigRawRequest(BaseModel):
+    content: str
+
+
+class ConfigNameRequest(BaseModel):
+    new_name: str
+
+
+class DataDownloadRequest(BaseModel):
+    config: str
+    exchange: str | None = None
+    pairs: list[str] | None = None
+    timeframes: list[str] | None = None
+    days: int | None = None
+    timerange: str | None = None
+    erase: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +346,27 @@ class WebPortal:
         # Subprocess bot launched from webserver mode via /api/start
         self._bot_process: subprocess.Popen | None = None
         self._bot_config_name: str | None = None
+
+        # CPU%/RAM per running bot (Configs table) - psutil.Process objects
+        # cached by PID so cpu_percent() gets a real delta between calls
+        # instead of always reading 0.0 (its first call for any given
+        # Process object has no prior sample to diff against - see
+        # _proc_stats).
+        self._proc_stat_cache: dict[int, psutil.Process] = {}
+
+        # Live-price cache for computing OPEN trades' unrealized PnL - keyed
+        # by "<exchange>:<pair>", short TTL so a page with several open
+        # positions across bots doesn't refetch the same ticker per trade,
+        # but still tracks the market closely between auto-refresh polls.
+        self._ticker_cache: dict[str, tuple[float, float]] = {}
+        self.TICKER_CACHE_TTL: float = 5.0
+        # Plain public (no API key) ccxt clients, one per exchange id, used
+        # only to price ANOTHER bot's open trades from its account JSON
+        # snapshot (see _account_dashboard) - this project's own Exchange
+        # wrapper expects a full bot config (whitelist, keys, market
+        # validation) that isn't available/appropriate for read-only,
+        # cross-process dashboard viewing.
+        self._ccxt_public_pool: dict[str, Any] = {}
 
         # Install log capture AFTER logging.basicConfig(force=True) has already run.
         # Also ensure root logger level <= INFO so INFO records reach the handler
@@ -567,6 +610,13 @@ class WebPortal:
                 return FileResponse(f, headers=_no_cache_headers)
             return JSONResponse({"detail": "trading.html not found"}, status_code=404)
 
+        @app.get("/datamanager", include_in_schema=False)
+        def datamanager_page() -> Any:
+            f = TEMPLATE_DIR / "datamanager.html"
+            if f.is_file():
+                return FileResponse(f, headers=_no_cache_headers)
+            return JSONResponse({"detail": "datamanager.html not found"}, status_code=404)
+
         if TEMPLATE_DIR.is_dir():
             app.mount(
                 "/template",
@@ -586,6 +636,14 @@ class WebPortal:
             )
 
         # --------------- auth ---------------
+        # No auth dependency - the login page itself needs this before a
+        # token exists, to show the same "vX.Y" tag trading.html/backtester.html
+        # display in their navbars. Version number only, nothing sensitive.
+        @app.get("/api/version")
+        def api_version() -> dict:
+            from VulcanTrader.constants import __version__
+            return {"version": __version__}
+
         @app.post("/api/login", response_model=LoginResponse)
         def api_login(req: LoginRequest) -> LoginResponse:
             if not secrets.compare_digest(req.password, self._password):
@@ -645,6 +703,7 @@ class WebPortal:
                 if not req.config or not req.strategy:
                     raise HTTPException(status_code=400, detail="Select a config and strategy before starting the bot.")
                 import sys
+                from VulcanTrader.util.proc_launch import launch_detached
                 cmd = [
                     sys.executable, "-m", "VulcanTrader.bot", "trade",
                     "-v", "-c", req.config, "--strategy", req.strategy,
@@ -653,7 +712,16 @@ class WebPortal:
                 if req.dry_run:
                     cmd.append("--dry-run")
                 logger.info("Launching bot subprocess: %s", " ".join(cmd))
-                self._bot_process = subprocess.Popen(cmd)
+                # show_terminal/tmux are per-bot-config settings (see
+                # config_schema.py), so read them from req.config's own file.
+                launch_cfg: dict = {}
+                try:
+                    cfg_path = self._config_path(req.config)
+                    if cfg_path.is_file():
+                        launch_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    logger.debug("could not read %s for launch settings", req.config, exc_info=True)
+                self._bot_process = launch_detached(cmd, launch_cfg)
                 self._bot_config_name = req.config
                 return {"state": "RUNNING"}
             from VulcanTrader.enums import State
@@ -707,7 +775,7 @@ class WebPortal:
         @app.get("/api/trades/open", dependencies=[Depends(auth)])
         def api_open_trades() -> dict:
             trades = self._get_open_trades()
-            return {"count": len(trades), "trades": [_trade_to_dict(t) for t in trades]}
+            return {"count": len(trades), "trades": [self._attach_live_pnl(_trade_to_dict(t)) for t in trades]}
 
         @app.get("/api/trades/closed", dependencies=[Depends(auth)])
         def api_closed_trades(limit: int = 1000) -> dict:
@@ -723,6 +791,11 @@ class WebPortal:
         def api_livebot_stop(name: str) -> dict:
             """Request a graceful shutdown of the trader_bot process owning this account."""
             return self._request_account_stop(name)
+
+        @app.post("/api/livebots/{name}/forceexit", dependencies=[Depends(auth)])
+        def api_livebot_forceexit(name: str, pair: str) -> dict:
+            """Request a force-exit of ``pair`` on the trader_bot process owning this account."""
+            return self._request_account_force_exit(name, pair)
 
         @app.get("/api/dashboard", dependencies=[Depends(auth)])
         def api_dashboard(closed_limit: int = 2000, msg_limit: int = 200, log_limit: int = 300,
@@ -744,7 +817,7 @@ class WebPortal:
                 logs = _tail_log_file(self._log_file, log_limit)
             return {
                 "status": status,
-                "open_trades": [_trade_to_dict(t) for t in open_trades],
+                "open_trades": [self._attach_live_pnl(_trade_to_dict(t)) for t in open_trades],
                 "closed_trades": [_trade_to_dict(t) for t in closed_trades],
                 "messages": messages,
                 "logs": logs,
@@ -787,12 +860,41 @@ class WebPortal:
         # the parameterised /{name} routes, otherwise FastAPI matches "jobs"
         # as a backtest name.
         @app.get("/api/configs", dependencies=[Depends(auth)])
-        def api_configs() -> dict:
-            return {"configs": self._list_configs()}
+        def api_configs(all: bool = False) -> dict:
+            return {"configs": self._list_configs(include_non_bots=all)}
 
         @app.get("/api/strategies", dependencies=[Depends(auth)])
         def api_strategies() -> dict:
             return {"strategies": self._list_strategies()}
+
+        # --------------- config manager (each config ~= one bot) ---------------
+        @app.get("/api/configs/{name}/raw", dependencies=[Depends(auth)])
+        def api_config_raw(name: str) -> dict:
+            return {"content": self._read_config_raw(name)}
+
+        @app.put("/api/configs/{name}/raw", dependencies=[Depends(auth)])
+        def api_config_raw_save(name: str, req: ConfigRawRequest) -> dict:
+            return self._write_config_raw(name, req.content)
+
+        @app.post("/api/configs/{name}/duplicate", dependencies=[Depends(auth)])
+        def api_config_duplicate(name: str, req: ConfigNameRequest) -> dict:
+            return self._duplicate_config(name, req.new_name)
+
+        @app.post("/api/configs/{name}/rename", dependencies=[Depends(auth)])
+        def api_config_rename(name: str, req: ConfigNameRequest) -> dict:
+            return self._rename_config(name, req.new_name)
+
+        @app.delete("/api/configs/{name}", dependencies=[Depends(auth)])
+        def api_config_delete(name: str) -> dict:
+            return self._delete_config(name)
+
+        @app.post("/api/configs/{name}/start", dependencies=[Depends(auth)])
+        def api_config_start(name: str) -> dict:
+            return self._start_config_bot(name)
+
+        @app.post("/api/configs/{name}/stop", dependencies=[Depends(auth)])
+        def api_config_stop(name: str) -> dict:
+            return self._stop_config_bot(name)
 
         @app.post("/api/backtests/run", dependencies=[Depends(auth)])
         def api_backtest_run(req: BacktestRunRequest) -> dict:
@@ -830,6 +932,19 @@ class WebPortal:
         @app.get("/api/hyperopt/jobs/{job_id}", dependencies=[Depends(auth)])
         def api_hyperopt_job(job_id: str, log_offset: int = 0) -> dict:
             return self._get_job(job_id, log_offset=log_offset)
+
+        # --------------- data manager ---------------
+        @app.get("/api/exchanges", dependencies=[Depends(auth)])
+        def api_exchanges() -> dict:
+            return {"exchanges": self._list_exchanges()}
+
+        @app.get("/api/data/coverage", dependencies=[Depends(auth)])
+        def api_data_coverage(exchange: str) -> dict:
+            return self._data_coverage(exchange)
+
+        @app.post("/api/data/download", dependencies=[Depends(auth)])
+        def api_data_download(req: DataDownloadRequest) -> dict:
+            return self._submit_download_job(req)
 
         @app.get("/api/backtests/{name}", dependencies=[Depends(auth)])
         def api_backtest(name: str) -> dict:
@@ -1048,6 +1163,7 @@ class WebPortal:
         heartbeat = _kv_dt("last_heartbeat")
         kv_running = (kv.get("is_running") or {}).get("int_value") == 1
         hb_age = (now - heartbeat).total_seconds() if heartbeat else None
+        bot_name = (kv.get("bot_name") or {}).get("string_value")
 
         lock_held = self._probe_db_lock(path)
         if lock_held is None:
@@ -1068,6 +1184,9 @@ class WebPortal:
             mtime = None
         return {
             "name": path.stem,
+            # Human-friendly label (config "bot_name"); falls back to the
+            # account/db name for accounts persisted before this field existed.
+            "bot_name": bot_name or path.stem,
             "file": str(path),
             "mode": mode,
             "running": running,
@@ -1134,6 +1253,66 @@ class WebPortal:
                       "gracefully once its current processing cycle finishes.",
         }
 
+    def _request_account_force_exit(self, name: str, pair: str) -> dict:
+        """Request a force-exit of *pair* on the trader_bot process owning ``name``'s account.
+
+        If ``name`` happens to be the bot attached to this very process, the
+        request is applied in-process immediately (no polling delay) via
+        ``_schedule_force_exit_pair``. Otherwise it is handed off the same way
+        :meth:`_request_account_stop` hands off stop requests: a small JSON
+        file (``<db>.json.forceexit``, a list of pair strings) next to the
+        account DB, which that bot's own process polls every ~2s (see
+        bot.py's ``_forceexit_file_watcher``) and drains on its next cycle.
+        """
+        path = self._find_account_db(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail=f"No account database named {name!r}")
+
+        if (
+            self._is_live_bot()
+            and self.config.get("db_url")
+            and hasattr(self.bot, "_schedule_force_exit_pair")
+        ):
+            try:
+                from VulcanTrader.persistence.models import _path_from_db_url
+                if _path_from_db_url(self.config["db_url"]) == path:
+                    self.bot._schedule_force_exit_pair(pair)
+                    return {
+                        "requested": True,
+                        "detail": f"Force-exit scheduled for {pair!r} on the attached bot "
+                                  "- will execute on the next process cycle.",
+                    }
+            except Exception:
+                logger.debug("in-process force-exit dispatch failed", exc_info=True)
+
+        info = self._account_bot_info(path)
+        if info is None:
+            raise HTTPException(status_code=502, detail="Account DB malformed")
+        if not info["running"]:
+            raise HTTPException(status_code=409, detail=f"Bot {name!r} is not running.")
+
+        fe_file = path.with_name(path.name + ".forceexit")
+        pending: list[str] = []
+        try:
+            if fe_file.is_file():
+                pending = json.loads(fe_file.read_text(encoding="utf-8") or "[]")
+        except (OSError, ValueError):
+            pending = []
+        if pair not in pending:
+            pending.append(pair)
+        try:
+            tmp = fe_file.with_name(fe_file.name + f".{uuid.uuid4().hex[:8]}.tmp")
+            tmp.write_text(json.dumps(pending), encoding="utf-8")
+            os.replace(tmp, fe_file)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not write forceexit file: {exc}") from exc
+        logger.info("Force-exit requested for %s on bot account %s (%s)", pair, name, fe_file)
+        return {
+            "requested": True,
+            "detail": f"Force-exit for {pair!r} requested - the bot registers it within ~2 s "
+                      "and executes it on its next processing cycle.",
+        }
+
     def _account_dashboard(self, name: str, closed_limit: int) -> dict:
         """Dashboard payload built entirely from another bot's account DB."""
         path = self._find_account_db(name)
@@ -1158,14 +1337,14 @@ class WebPortal:
             "mode": info["mode"],
             "exchange": info["exchange"],
             "strategy": info["strategy"],
-            "bot_name": name,
+            "bot_name": info["bot_name"],
             "started_at": info["started_at"],
             "uptime_secs": info["uptime_secs"],
             "last_heartbeat": info["last_heartbeat"],
         }
         return {
             "status": status,
-            "open_trades": [_json_safe(t) for t in trades if t.get("is_open")],
+            "open_trades": [self._attach_live_pnl(_json_safe(t)) for t in trades if t.get("is_open")],
             "closed_trades": [_json_safe(t) for t in trades if not t.get("is_open")][-closed_limit:],
             # Another process's notifications/log stream isn't visible from here.
             "messages": [],
@@ -1359,21 +1538,714 @@ class WebPortal:
     def _strategies_dir(self) -> Path:
         return self._user_data_dir() / "strategies"
 
-    def _list_configs(self) -> list[dict]:
+    def _data_dir(self) -> Path:
+        return self._user_data_dir() / "data"
+
+    # ------------------------------------------------------------------
+    # Data manager: exchange list + per-exchange OHLCV coverage
+    # ------------------------------------------------------------------
+    def _list_exchanges(self) -> list[dict]:
+        """Every exchange either used by a config or with existing downloaded
+        data, so a newly-configured exchange with nothing downloaded yet
+        still shows up (as a zero-coverage row) instead of being invisible
+        until the first download. ``is_bot`` doesn't matter here - which
+        configs appear in the fleet's Configs table is a different concern
+        from which exchanges have data."""
+        by_name: dict[str, list[str]] = {}
+        cfg_dir = self._configs_dir()
+        if cfg_dir.is_dir():
+            for p in sorted(cfg_dir.glob("*.json")):
+                try:
+                    raw = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                ex = (raw.get("exchange") or {}).get("name")
+                if ex:
+                    by_name.setdefault(ex, []).append(p.stem)
+
+        data_dir = self._data_dir()
+        if data_dir.is_dir():
+            for p in sorted(data_dir.iterdir()):
+                if p.is_dir() and not p.name.startswith("."):
+                    by_name.setdefault(p.name, [])
+
+        out = []
+        for name in sorted(by_name):
+            ex_dir = data_dir / name
+            out.append({
+                "name": name,
+                "configs": by_name[name],
+                "has_data": ex_dir.is_dir(),
+                "has_futures": (ex_dir / "futures").is_dir(),
+            })
+        return out
+
+    @staticmethod
+    def _feather_date_min_max_count(path: Path) -> tuple[str | None, str | None, int]:
+        """Read ONLY the `date` column of a feather OHLCV file - not the full
+        dataframe (`FeatherDataHandler.ohlcv_data_min_max` loads every OHLCV
+        column, casts dtypes, the works). Coverage only ever needs the first/
+        last timestamp and a row count, and an exchange like Hyperliquid can
+        have 10,000+ of these files (every pair x every timeframe x spot/
+        futures/funding_rate) - full-dataframe loads made this endpoint take
+        minutes; a single-column columnar read is fast enough to do live."""
+        import pyarrow.feather as feather
+
+        try:
+            table = feather.read_table(path, columns=["date"])
+        except Exception:
+            return None, None, 0
+        n = table.num_rows
+        if n == 0:
+            return None, None, 0
+        col = table.column("date")
+        start = col[0].as_py()
+        end = col[-1].as_py()
+        return (
+            start.isoformat() if start else None,
+            end.isoformat() if end else None,
+            n,
+        )
+
+    def _data_coverage(self, exchange: str) -> dict:
+        """Per pair+timeframe OHLCV coverage for one exchange: start/end date,
+        candle count, file size, last modified. Filename/pair/timeframe
+        parsing reuses the project's own ``IDataHandler``/``FeatherDataHandler``
+        (see data/history/datahandlers) so this always agrees with what the
+        bots/backtester consider a valid data file - only the actual date-
+        range read is a lightweight custom one (see `_feather_date_min_max_count`)."""
+        exchange = self._validate_name(exchange, "exchange")
+        ex_dir = self._data_dir() / exchange
+        empty_summary = {
+            "pair_count": 0, "file_count": 0, "total_size_bytes": 0,
+            "earliest": None, "latest": None,
+        }
+        if not ex_dir.is_dir():
+            return {"exchange": exchange, "rows": [], "pairs": [], "timeframes": [], "summary": empty_summary}
+
+        from VulcanTrader.data.history.datahandlers import get_datahandler
+        from VulcanTrader.enums import TradingMode
+
+        handler = get_datahandler(ex_dir, "feather")
+        modes = [TradingMode.SPOT]
+        if (ex_dir / "futures").is_dir():
+            modes.append(TradingMode.FUTURES)
+
+        specs: list[tuple[str, str, Any, Path]] = []
+        for mode in modes:
+            for pair, timeframe, candle_type in handler.ohlcv_get_available_data(ex_dir, mode):
+                path = handler._pair_data_filename(ex_dir, pair, timeframe, candle_type)
+                specs.append((pair, timeframe, candle_type, path))
+
+        def _read_one(spec: tuple[str, str, Any, Path]) -> dict | None:
+            pair, timeframe, candle_type, path = spec
+            start, end, count = self._feather_date_min_max_count(path)
+            try:
+                st = path.stat()
+                size, mtime = st.st_size, _ts_to_iso(st.st_mtime)
+            except OSError:
+                size, mtime = 0, None
+            return {
+                "pair": pair,
+                "timeframe": timeframe,
+                "candle_type": candle_type.value,
+                "start": start,
+                "end": end,
+                "candles": count,
+                "size_bytes": size,
+                "modified": mtime,
+            }
+
+        rows: list[dict] = []
+        if specs:
+            # Thread pool, not sequential - thousands of small file reads are
+            # I/O-bound enough (and pyarrow releases the GIL during the
+            # actual read) that this matters: an exchange the size of
+            # Hyperliquid's futures set is ~10k files.
+            with ThreadPoolExecutor(max_workers=64) as pool:
+                rows = list(pool.map(_read_one, specs))
+        rows.sort(key=lambda r: (r["pair"], r["timeframe"], r["candle_type"]))
+
+        starts = [r["start"] for r in rows if r["start"]]
+        ends = [r["end"] for r in rows if r["end"]]
+        summary = {
+            "pair_count": len({r["pair"] for r in rows}),
+            "file_count": len(rows),
+            "total_size_bytes": sum(r["size_bytes"] for r in rows),
+            "earliest": min(starts) if starts else None,
+            "latest": max(ends) if ends else None,
+        }
+        return {
+            "exchange": exchange,
+            "rows": rows,
+            "pairs": sorted({r["pair"] for r in rows}),
+            "timeframes": sorted({r["timeframe"] for r in rows}),
+            "summary": summary,
+        }
+
+    def _estimate_download_units(
+        self, cfg_name: str, pairs_override: list[str] | None, timeframes_override: list[str] | None
+    ) -> tuple[int, int]:
+        """Best-effort (pairs_total, units_total) estimate for a download-data
+        job's progress bar/ETA - "units" meaning (pair, timeframe, candle_type)
+        combinations, matching one "Downloaded data for ..." log line each
+        (see history_utils.py's `_download_pair_history`). Not exact - futures
+        mode also downloads a mark-price and a funding-rate series per pair
+        (see `refresh_backtest_ohlcv_data`), approximated here as +2 timeframe
+        slots rather than replicating that expansion logic exactly. Good
+        enough for progress display; never blocks job submission if the
+        config can't be read for any reason (returns (0, 0), meaning the UI
+        just shows a spinner instead of a bar)."""
+        try:
+            raw = json.loads((self._configs_dir() / f"{cfg_name}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return (0, 0)
+        if not isinstance(raw, dict):
+            return (0, 0)
+
+        pairs = pairs_override or (raw.get("exchange") or {}).get("pair_whitelist") or []
+        timeframes = timeframes_override or raw.get("timeframes")
+        if not timeframes:
+            tf = raw.get("timeframe")
+            # Matches history_utils.py's own download_data(): when a config
+            # has no "timeframe"/"timeframes" at all, it silently downloads
+            # DL_DATA_TIMEFRAMES = ["1m", "5m"] - both, not a single implied
+            # one. Getting this wrong badly undercounts the total (1m history
+            # needs far more paginated calls than 5m/15m), making the bar
+            # look done long before the job actually finishes.
+            timeframes = [tf] if tf else ["1m", "5m"]
+
+        pairs_total = len(pairs)
+        units_per_pair = len(timeframes) + (2 if raw.get("trading_mode") == "futures" else 0)
+        return (pairs_total, pairs_total * max(1, units_per_pair))
+
+    def _submit_download_job(self, req: DataDownloadRequest) -> dict:
+        cfg_name = self._validate_name(req.config, "config")
+        cfg_path = self._configs_dir() / f"{cfg_name}.json"
+        if not cfg_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Config not found: {cfg_name}.json")
+        timerange = self._validate_timerange(req.timerange) if req.timerange else None
+
+        if self._running_job_count() >= self.MAX_CONCURRENT_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Max concurrent jobs reached ({self.MAX_CONCURRENT_JOBS}). Wait for one to finish.",
+            )
+
+        pairs_total, units_total = self._estimate_download_units(cfg_name, req.pairs, req.timeframes)
+
+        job_id = uuid.uuid4().hex[:12]
+        job: dict = {
+            "id": job_id,
+            "kind": "download",
+            "config": cfg_name,
+            "exchange": req.exchange,
+            "pairs": list(req.pairs) if req.pairs else None,
+            "timeframes": list(req.timeframes) if req.timeframes else None,
+            "days": int(req.days) if req.days else None,
+            "timerange": timerange,
+            "erase": bool(req.erase),
+            "status": "queued",
+            "exit_code": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "started_at": None,
+            "finished_at": None,
+            "log": deque(maxlen=self.MAX_JOB_LOG_LINES),
+            "result_file": None,
+            "error": None,
+            "_proc": None,
+            # Progress (see _estimate_download_units) - dl_units_done is
+            # incremented by counting "Downloaded data for " log lines as
+            # they stream from the subprocess.
+            "dl_pairs_total": pairs_total,
+            "dl_units_total": units_total,
+            "dl_units_done": 0,
+        }
+        with self._jobs_lock:
+            self._jobs[job_id] = job
+            self._evict_old_jobs_locked()
+
+        thread = threading.Thread(
+            target=self._run_download_job_thread,
+            args=(job_id,),
+            name=f"download-job-{job_id}",
+            daemon=True,
+        )
+        thread.start()
+        return {"ok": True, "job": self._job_summary(job)}
+
+    def _run_download_job_thread(self, job_id: str) -> None:
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job["status"] = "running"
+            job["started_at"] = datetime.now(UTC).isoformat()
+
+        cmd = [
+            sys.executable, "-m", "VulcanTrader.bot", "download-data",
+            "-v",  # INFO level - without it, "Downloaded data for ..." (what
+                   # the progress counter below greps for) is never emitted
+                   # at all, since default verbosity is WARNING-only.
+            "-c", job["config"],
+            "--user-data-dir", str(self._user_data_dir()),
+        ]
+        if job.get("exchange"):
+            cmd += ["--exchange", job["exchange"]]
+        if job.get("pairs"):
+            cmd += ["--pairs", *job["pairs"]]
+        if job.get("timeframes"):
+            cmd += ["--timeframes", *job["timeframes"]]
+        if job.get("timerange"):
+            cmd += ["--timerange", job["timerange"]]
+        elif job.get("days"):
+            cmd += ["--days", str(job["days"])]
+        if job.get("erase"):
+            cmd.append("--erase")
+
+        job["log"].append(f"$ {' '.join(cmd)}")
+        # A real, independent subprocess - not just "not the same Python
+        # object": stdout is piped back for the live log viewer/progress
+        # counter above, but it must survive independently of this web
+        # portal process's own lifetime. Without the flags below, a plain
+        # Popen's child is still tied to whatever Windows Job Object this
+        # interpreter itself happens to be running in (common in sandboxed/
+        # managed dev environments, CI runners, some IDE/terminal
+        # supervisors) - that job's own cleanup silently kills the child the
+        # moment it fires, which is exactly the bug already found and fixed
+        # for the data_server master in data_server.py's ensure_master_running.
+        # Same fix here: CREATE_BREAKAWAY_FROM_JOB (Windows) / a new session
+        # (POSIX) detach it, while keeping stdout=PIPE so log capture is
+        # unaffected - unlike launch_detached()'s CREATE_NEW_CONSOLE path
+        # (used for trade bots), this can't give the download job its own
+        # visible console without losing the ability to stream its output
+        # into the dashboard.
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_BREAKAWAY_FROM_JOB
+        else:
+            popen_kwargs["start_new_session"] = True
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **popen_kwargs,
+            )
+        except Exception as exc:
+            with self._jobs_lock:
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["finished_at"] = datetime.now(UTC).isoformat()
+            logger.exception("Failed to launch download job %s", job_id)
+            return
+
+        with self._jobs_lock:
+            job["_proc"] = proc
+
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\r\n")
+                with self._jobs_lock:
+                    job["log"].append(line)
+                    if "Downloaded data for " in line:
+                        job["dl_units_done"] += 1
+        except Exception as exc:
+            logger.exception("download job %s stream error", job_id)
+            with self._jobs_lock:
+                job["log"].append(f"[stream error] {exc}")
+
+        rc = proc.wait()
+        with self._jobs_lock:
+            job["exit_code"] = rc
+            job["status"] = "succeeded" if rc == 0 else ("cancelled" if rc < 0 else "failed")
+            job["finished_at"] = datetime.now(UTC).isoformat()
+            job["_proc"] = None
+
+    def _scan_trade_processes(self) -> dict[str, psutil.Process]:
+        """config-name -> psutil.Process for every currently-running
+        ``bot.py trade`` subprocess, found by scanning OS processes rather
+        than tracking PIDs at launch time - simpler, and still correct even
+        for a bot started outside this portal's own launch code (a manual
+        CLI ``bot.py trade``, or one from a previous portal instance)."""
+        out: dict[str, psutil.Process] = {}
+        for proc in psutil.process_iter(["cmdline"]):
+            try:
+                cmdline = proc.info["cmdline"] or []
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+            if "VulcanTrader.bot" not in cmdline or "trade" not in cmdline:
+                continue
+            if "-c" not in cmdline:
+                continue
+            idx = cmdline.index("-c")
+            if idx + 1 < len(cmdline):
+                out[cmdline[idx + 1]] = proc
+        return out
+
+    def _proc_stats(self, proc: psutil.Process | None) -> dict:
+        """(cpu_percent, memory_mb) for one process, or (None, None) if not
+        running / no longer queryable. cpu_percent is normalised to 0-100%
+        of TOTAL system capacity (divided by logical core count) to match
+        what Task Manager shows, rather than psutil's raw per-core-normalised
+        default (which can read over 100% for a multi-threaded process).
+
+        Caches psutil.Process objects by PID across calls (see
+        __init__) because Process.cpu_percent() measures the delta since
+        its OWN previous call - called fresh every time, it can only ever
+        return 0.0 on the first sample. The dashboard polls this periodically
+        (see trading.html's auto-refresh), so the cache naturally gets a real
+        reading from the second poll onward."""
+        if proc is None:
+            return {"cpu_percent": None, "memory_mb": None}
+        cached = self._proc_stat_cache.get(proc.pid)
+        if cached is None:
+            cached = proc
+            try:
+                cached.cpu_percent(interval=None)  # prime - discard the meaningless first 0.0
+                mem = cached.memory_info().rss / (1024 * 1024)
+            except psutil.Error:
+                return {"cpu_percent": None, "memory_mb": None}
+            self._proc_stat_cache[proc.pid] = cached
+            # Memory needs no priming - only cpu_percent's first call is meaningless.
+            return {"cpu_percent": None, "memory_mb": round(mem, 1)}
+        try:
+            cpu = cached.cpu_percent(interval=None) / (psutil.cpu_count() or 1)
+            mem = cached.memory_info().rss / (1024 * 1024)
+            return {"cpu_percent": round(cpu, 1), "memory_mb": round(mem, 1)}
+        except psutil.Error:
+            self._proc_stat_cache.pop(proc.pid, None)
+            return {"cpu_percent": None, "memory_mb": None}
+
+    def _current_price_ccxt_public(self, exchange_name: str, pair: str) -> float | None:
+        """Cached, keyless ticker read via a plain ccxt client - used only
+        for pricing another bot's open trades (see _account_dashboard),
+        where there is no live, already-authenticated Exchange object to
+        reuse. Never touches balances/orders/keys, so it's safe to call
+        against a live-mode bot's exchange too."""
+        key = f"{exchange_name}:{pair}"
+        now = time.time()
+        cached = self._ticker_cache.get(key)
+        if cached is not None and now - cached[0] < self.TICKER_CACHE_TTL:
+            return cached[1]
+        try:
+            import ccxt
+            client = self._ccxt_public_pool.get(exchange_name)
+            if client is None:
+                exchange_class = getattr(ccxt, exchange_name, None)
+                if exchange_class is None:
+                    return cached[1] if cached else None
+                client = exchange_class({"enableRateLimit": True})
+                self._ccxt_public_pool[exchange_name] = client
+            ticker = client.fetch_ticker(pair)
+            price = ticker.get("last") or ticker.get("close") or ticker.get("bid")
+            if price is None:
+                return cached[1] if cached else None
+            price = float(price)
+            self._ticker_cache[key] = (now, price)
+            return price
+        except Exception:
+            logger.debug("public ticker fetch failed for %s:%s", exchange_name, pair, exc_info=True)
+            return cached[1] if cached else None
+
+    def _current_price(self, pair: str, exchange_name: str | None) -> float | None:
+        """Best-effort current price for ``pair``: reuses the attached bot's
+        own live exchange connection when this portal IS that bot's process
+        (cheapest, no extra client - the bot already polls this exchange
+        every cycle), otherwise falls back to a cached public ccxt ticker
+        (see _current_price_ccxt_public) for pricing another bot's trades
+        from its account-JSON snapshot."""
+        if self._is_live_bot():
+            try:
+                exch = getattr(self.bot, "exchange", None)
+                if exch is not None and pair in getattr(exch, "markets", {}):
+                    ticker = exch.fetch_ticker(pair)
+                    price = ticker.get("last") or ticker.get("close") or ticker.get("bid")
+                    if price is not None:
+                        return float(price)
+            except Exception:
+                logger.debug("live exchange ticker fetch failed for %s", pair, exc_info=True)
+        if not exchange_name:
+            return None
+        return self._current_price_ccxt_public(exchange_name, pair)
+
+    def _attach_live_pnl(self, trade: dict) -> dict:
+        """Overwrite an OPEN trade dict's profit_abs/profit_ratio with a
+        live mark-to-market computed from a fresh ticker, and attach
+        current_rate - both the attached-bot and cross-account dashboard
+        paths otherwise only ever serve the trade's LAST-PERSISTED profit
+        fields, which for an open trade means whatever was recorded at
+        entry (typically 0), never updated again until the trade closes.
+        Mirrors Trade.calculate_profit's own formula exactly (see
+        persistence/trade_model.py) so the number matches what the trade
+        will actually realize if closed at this price. No-op (returns
+        ``trade`` unchanged) for closed trades or if a price can't be had."""
+        if not trade.get("is_open"):
+            return trade
+        try:
+            amount = float(trade.get("amount") or 0)
+            open_rate = float(trade.get("open_rate") or 0)
+            if amount <= 0 or open_rate <= 0:
+                return trade
+            price = self._current_price(trade.get("pair", ""), trade.get("exchange"))
+            if price is None:
+                return trade
+
+            leverage = float(trade.get("leverage") or 1.0)
+            is_short = bool(trade.get("is_short"))
+            fee_close = float(trade.get("fee_close") or 0.0)
+            trading_mode = (trade.get("trading_mode") or "spot").lower()
+            funding_fees = float(trade.get("funding_fees") or 0.0)
+
+            open_trade_value = trade.get("open_trade_value")
+            if open_trade_value is None:
+                fee_open = float(trade.get("fee_open") or 0.0)
+                open_value = amount * open_rate
+                open_fees = open_value * fee_open
+                open_trade_value = open_value + open_fees if is_short else open_value - open_fees
+            else:
+                open_trade_value = float(open_trade_value)
+            if open_trade_value == 0:
+                return trade
+
+            close_value = amount * price
+            close_fees = close_value * fee_close
+            close_trade_value = close_value + close_fees if is_short else close_value - close_fees
+            if trading_mode == "futures":
+                close_trade_value = close_trade_value - funding_fees if is_short else close_trade_value + funding_fees
+
+            profit_abs = (open_trade_value - close_trade_value) if is_short else (close_trade_value - open_trade_value)
+            profit_ratio = (
+                (1 - (close_trade_value / open_trade_value)) if is_short
+                else ((close_trade_value / open_trade_value) - 1)
+            ) * leverage
+
+            trade["current_rate"] = price
+            trade["profit_abs"] = round(profit_abs, 8)
+            trade["profit_ratio"] = round(profit_ratio, 8)
+        except Exception:
+            logger.debug("live PnL calc failed for %s", trade.get("pair"), exc_info=True)
+        return trade
+
+    def _list_configs(self, include_non_bots: bool = False) -> list[dict]:
+        """Every config under user_data/configs with ``is_bot`` not explicitly
+        false (see config_schema.py), each treated as one bot definition (see
+        "strategy"/"auto_start" fields) - unless ``include_non_bots`` is set,
+        in which case every config is returned regardless (the dashboard's
+        "Show non-bots" toggle). ``account_name`` / ``running`` let the UI
+        show whether this config's bot is currently live, by matching
+        against the same account scan ``/api/livebots`` uses - the account
+        name a config's bot writes to is always
+        ``<config-name>_<dry_run|live>`` (see ``_start_config_bot``)."""
         d = self._configs_dir()
         if not d.is_dir():
             return []
+        live = {b["name"]: b for b in self._scan_live_bots()}
+        trade_procs = self._scan_trade_processes()
         out = []
         for p in sorted(d.glob("*.json")):
             try:
-                out.append({
-                    "name": p.stem,
-                    "filename": p.name,
-                    "size": p.stat().st_size,
-                })
-            except Exception:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raw = {}
+            if not isinstance(raw, dict):
+                raw = {}
+            if not include_non_bots and raw.get("is_bot", True) is False:
                 continue
+            dry_run = bool(raw.get("dry_run", True))
+            account_name = f"{p.stem}_{'dry_run' if dry_run else 'live'}"
+            bot_info = live.get(account_name)
+            running = bool(bot_info and bot_info.get("running"))
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            proc_stats = self._proc_stats(trade_procs.get(p.stem) if running else None)
+            out.append({
+                "name": p.stem,
+                "filename": p.name,
+                "size": size,
+                "strategy": raw.get("strategy") or None,
+                "is_bot": bool(raw.get("is_bot", True)),
+                "auto_start": bool(raw.get("auto_start", False)),
+                "dry_run": dry_run,
+                "bot_name": raw.get("bot_name") or None,
+                "exchange": (raw.get("exchange") or {}).get("name"),
+                "account_name": account_name,
+                "running": running,
+                "crashed": bool(bot_info and bot_info.get("crashed")),
+                "cpu_percent": proc_stats["cpu_percent"],
+                "memory_mb": proc_stats["memory_mb"],
+            })
         return out
+
+    def _config_path(self, name: str) -> Path:
+        name = self._validate_name(name, "config")
+        return self._configs_dir() / f"{name}.json"
+
+    def _read_config_raw(self, name: str) -> str:
+        p = self._config_path(name)
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not read config: {exc}") from exc
+
+    def _write_config_raw(self, name: str, content: str) -> dict:
+        try:
+            json.loads(content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+        p = self._config_path(name)
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        try:
+            tmp = p.with_name(f".{p.name}.{uuid.uuid4().hex[:8]}.tmp")
+            tmp.write_text(content, encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not write config: {exc}") from exc
+        return {"saved": True, "name": name}
+
+    def _duplicate_config(self, name: str, new_name: str) -> dict:
+        src = self._config_path(name)
+        if not src.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        dst = self._config_path(new_name)
+        if dst.exists():
+            raise HTTPException(status_code=409, detail=f"Config {new_name!r} already exists")
+        try:
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not duplicate config: {exc}") from exc
+        return {"duplicated": True, "name": new_name}
+
+    def _rename_config(self, name: str, new_name: str) -> dict:
+        src = self._config_path(name)
+        if not src.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        dst = self._config_path(new_name)
+        if dst.exists():
+            raise HTTPException(status_code=409, detail=f"Config {new_name!r} already exists")
+        try:
+            src.rename(dst)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not rename config: {exc}") from exc
+        return {"renamed": True, "name": new_name}
+
+    def _delete_config(self, name: str) -> dict:
+        p = self._config_path(name)
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        dry_run = bool(raw.get("dry_run", True)) if isinstance(raw, dict) else True
+        account_name = f"{p.stem}_{'dry_run' if dry_run else 'live'}"
+        info = next((b for b in self._scan_live_bots() if b["name"] == account_name), None)
+        if info and info.get("running"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Config {name!r}'s bot is still running - stop it first.",
+            )
+        try:
+            p.unlink()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not delete config: {exc}") from exc
+        return {"deleted": True, "name": name}
+
+    @staticmethod
+    def _find_free_port(start: int = 8080, tries: int = 200) -> int:
+        import socket
+
+        port = start
+        for _ in range(tries):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", port))
+                    return port
+                except OSError:
+                    port += 1
+        raise HTTPException(status_code=500, detail="No free port found")
+
+    def _start_config_bot(self, name: str) -> dict:
+        """Launch this config as its own detached trade subprocess - the
+        manual, single-config equivalent of ``bot.py autostart``. Persistence
+        account is always ``<config-name>_<dry_run|live>.json`` (keyed by the
+        config's own filename, which is unique by construction - unlike
+        ``strategy``, which two different configs could share)."""
+        p = self._config_path(name)
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"Config {name!r} not found")
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Config unreadable: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="Config is not a JSON object")
+
+        strategy = raw.get("strategy")
+        if not strategy:
+            raise HTTPException(
+                status_code=400, detail=f"Config {name!r} has no 'strategy' set"
+            )
+
+        dry_run = bool(raw.get("dry_run", True))
+        mode = "dry_run" if dry_run else "live"
+        account_name = f"{name}_{mode}"
+        existing = next((b for b in self._scan_live_bots() if b["name"] == account_name), None)
+        if existing and existing.get("running"):
+            raise HTTPException(status_code=409, detail=f"Config {name!r}'s bot is already running.")
+
+        db_url = f"json:///user_data/accounts/{account_name}.json"
+        bot_name = raw.get("bot_name") or strategy
+        port = self._find_free_port(8080)
+
+        cmd = [
+            sys.executable, "-m", "VulcanTrader.bot", "trade",
+            "-v",
+            "-c", name,
+            "--strategy", strategy,
+            "--db-url", db_url,
+            "--port", str(port),
+            "--bot-name", bot_name,
+        ]
+        if dry_run:
+            cmd.append("--dry-run")
+
+        from VulcanTrader.util.proc_launch import launch_detached
+        try:
+            launch_detached(cmd, raw)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not launch bot: {exc}") from exc
+        logger.info("Launched config %s (strategy=%s, port=%d, db=%s)", name, strategy, port, db_url)
+        return {
+            "started": True, "config": name, "strategy": strategy,
+            "port": port, "db_url": db_url, "account_name": account_name,
+        }
+
+    def _stop_config_bot(self, name: str) -> dict:
+        """Stop the trader_bot process owned by this config, via the same
+        stop-file mechanism as ``_request_account_stop``."""
+        p = self._config_path(name)
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        except (OSError, ValueError):
+            raw = {}
+        dry_run = bool(raw.get("dry_run", True)) if isinstance(raw, dict) else True
+        account_name = f"{name}_{'dry_run' if dry_run else 'live'}"
+        return self._request_account_stop(account_name)
 
     def _list_strategies(self) -> list[dict]:
         d = self._strategies_dir()
@@ -1458,6 +2330,17 @@ class WebPortal:
                 "ho_epoch": job.get("ho_epoch"),
                 "ho_total": job.get("ho_total"),
                 "ho_best_loss": job.get("ho_best_loss"),
+            })
+        if job.get("kind") == "download":
+            out.update({
+                "exchange": job.get("exchange"),
+                "pairs": job.get("pairs"),
+                "timeframes": job.get("timeframes"),
+                "days": job.get("days"),
+                "erase": job.get("erase"),
+                "dl_pairs_total": job.get("dl_pairs_total", 0),
+                "dl_units_total": job.get("dl_units_total", 0),
+                "dl_units_done": job.get("dl_units_done", 0),
             })
         return out
 

@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>VulcanTrader - Data Manager</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .navbar {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky; top: 0; z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .brand { color: #fff; font-size: 1.5rem; font-weight: 600; text-decoration: none; }
+        .nav-link {
+            color: #fff; text-decoration: none; padding: 0.5rem 0.85rem;
+            border-radius: 4px; margin-left: 0.25rem;
+            border: 1px solid transparent; transition: all 0.3s ease;
+        }
+        .nav-link:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
+        .nav-link.active {
+            background: linear-gradient(135deg, rgba(105,95,245,0.1), rgba(52,22,100,0.1));
+            border-color: #695ff5; box-shadow: 0 0 10px rgba(105,95,245,0.3);
+        }
+        .btn {
+            background: linear-gradient(135deg, #4c17ad 0%, #341664 50%, #190538 100%);
+            color: #fff; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 0.5rem 1rem; font-weight: 500;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(105,95,245,0.3); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-danger { background: linear-gradient(135deg, #dc2626, #991b1b); }
+        .btn-logout {
+            background: rgba(255,255,255,0.07) !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            box-shadow: none !important;
+            min-width: unset !important;
+            border-radius: 6px !important;
+            font-family: inherit !important;
+            letter-spacing: 0 !important;
+            font-size: 1.1rem !important;
+            opacity: 0.75;
+        }
+        .btn-logout:hover:not(:disabled) { opacity: 1; transform: scale(1.1); }
+
+        /* Flat, distinctly-colored icon buttons for compact/contextual actions -
+           see "Multi-bot fleet control" Configs table in trading.html for the
+           original convention this mirrors. Deliberately NOT .btn - that class
+           is 150px-min-width Cinzel styling meant for primary CTAs. */
+        .icon-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 30px; height: 30px; margin: 2px 2px 2px 0;
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.05); color: #aab0c0;
+            font-size: 0.85rem; line-height: 1; font-variant-emoji: text;
+            cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease;
+        }
+        .icon-btn:hover:not(:disabled) { filter: brightness(1.35); transform: translateY(-1px); }
+        .icon-btn:active:not(:disabled) { transform: translateY(0); }
+        .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .icon-btn.success { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.4); color: #10b981; }
+        .icon-btn.danger  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.4); color: #ef4444; }
+        .icon-btn.info    { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); color: #38bdf8; }
+        .icon-btn.warn    { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: #f59e0b; }
+        .icon-btn.accent  { background: rgba(105,95,245,0.16); border-color: rgba(105,95,245,0.45); color: #9089f7; }
+
+        .content { max-width: 95%; margin: 0 auto; padding: 2rem; }
+
+        .card {
+            background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
+        .card h3 {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            margin: -1.5rem -1.5rem 1rem -1.5rem;
+            padding: 1rem 1.5rem;
+            border-radius: 8px 8px 0 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            color: #e0e0e0; font-size: 1.125rem; font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .form-input, select {
+            background: #1f1f2e; color: #e0e0e0;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem;
+        }
+        .form-input:focus, select:focus { outline: none; border-color: #695ff5; }
+        select option { background: #1f1f2e; color: #e0e0e0; }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 0.75rem;
+        }
+        .metric {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 1rem;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
+        .metric-label {
+            font-size: 0.75rem; color: #a0aec0;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 0.4rem; text-align: center;
+        }
+        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
+
+        .table-wrap { overflow-x: auto; max-height: 600px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th {
+            background: linear-gradient(135deg, #0f0f23, #1a1a3e);
+            color: #a0aec0; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            padding: 0.6rem 0.5rem; text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            white-space: nowrap; font-size: 0.72rem;
+            position: sticky; top: 0; z-index: 1;
+        }
+        td {
+            padding: 0.5rem 0.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: #e0e0e0; white-space: nowrap;
+        }
+        tbody tr:hover { background: rgba(105,95,245,0.08); }
+        .pair-cell { font-weight: 600; color: #695ff5; }
+
+        .badge {
+            display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+            font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em;
+        }
+        .badge-spot { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+        .badge-futures { background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); }
+        .badge-funding_rate { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+        .badge-mark, .badge-index, .badge-premiumIndex { background: rgba(160,174,192,0.15); color: #a0aec0; border: 1px solid rgba(160,174,192,0.3); }
+        .badge-yes { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+        .badge-no { background: rgba(160,174,192,0.12); color: #6b7280; border: 1px solid rgba(160,174,192,0.2); }
+
+        .exchange-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.75rem 1rem; border-radius: 8px;
+            background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+            margin-bottom: 0.6rem; cursor: pointer; transition: all 0.2s ease;
+        }
+        .exchange-row:hover { background: rgba(105,95,245,0.1); border-color: rgba(105,95,245,0.3); }
+        .exchange-row.active { background: rgba(105,95,245,0.16); border-color: #695ff5; }
+        .exchange-name { font-weight: 700; font-size: 1rem; text-transform: capitalize; }
+
+        .alert {
+            background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
+            border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #fca5a5;
+        }
+        .loading { text-align: center; padding: 2.5rem; color: #a0aec0; }
+        .spinner {
+            display: inline-block; width: 20px; height: 20px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-left-color: #695ff5;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.6rem; vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* === VulcanTrader Pro UI overrides === */
+        body {
+            background:
+                linear-gradient(135deg, rgba(15,5,20,0.55), rgba(10,5,15,0.78)),
+                url('/static/background.jpg') center/cover fixed no-repeat,
+                linear-gradient(135deg, #1b0a14 0%, #14081a 50%, #0d0610 100%) !important;
+        }
+        .navbar {
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
+            backdrop-filter: blur(10px) saturate(140%);
+            -webkit-backdrop-filter: blur(10px) saturate(140%);
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset !important;
+            position: relative;
+        }
+        .navbar::after {
+            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
+            box-shadow: 0 0 10px rgba(105,95,245,0.5);
+            pointer-events: none;
+        }
+        .brand {
+            font-family: 'Cinzel', serif !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.10em !important;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.75), 0 0 18px rgba(105,95,245,0.5) !important;
+        }
+        .nav-link.active {
+            background: linear-gradient(135deg, rgba(105,95,245,0.15), rgba(52,22,100,0.15)) !important;
+            border-color: #695ff5 !important;
+            box-shadow: 0 0 10px rgba(105,95,245,0.35) !important;
+        }
+        .btn {
+            background: linear-gradient(135deg, rgba(76,23,173,0.88) 0%, rgba(52,22,100,0.88) 50%, rgba(25,5,56,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
+            background-blend-mode: normal, normal !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            border-radius: 0 !important;
+            padding: 12px 24px !important;
+            min-width: 150px;
+            font-family: 'Cinzel', serif !important;
+            font-weight: 700 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.08em !important;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4), 0 1px 0 rgba(255,255,255,0.12) inset !important;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
+            color: #f5f5f5 !important;
+        }
+        .btn:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 12px 32px rgba(105,95,245,0.5), 0 1px 0 rgba(255,255,255,0.18) inset !important;
+            filter: drop-shadow(0 0 6px rgba(105,95,245,0.4));
+        }
+        .btn-danger { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 50%, #991b1b 100%) !important; }
+        .card {
+            background: linear-gradient(135deg, rgba(27,27,27,0.56) 0%, rgba(20,19,27,0.56) 50%, rgba(13,11,22,0.61) 100%) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.05) inset !important;
+            overflow: hidden;
+        }
+        .card h3 {
+            position: relative;
+            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+            font-family: 'Cinzel', serif !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.08em !important;
+            color: #e0e0e0 !important;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.6), 0 0 18px rgba(105,95,245,0.35) !important;
+        }
+        .card h3::after {
+            content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
+            box-shadow: 0 0 10px rgba(105,95,245,0.5);
+            pointer-events: none;
+        }
+        .metric { background: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.05) !important; }
+        th {
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%) !important;
+            color: #a0aec0 !important;
+            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+        }
+        tbody tr:hover { background: rgba(105,95,245,0.10) !important; }
+        .form-input, select, input[type="text"], input[type="number"], textarea {
+            background: rgba(255,255,255,0.05) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+        }
+        .form-input:focus, select:focus, input:focus, textarea:focus {
+            border-color: #695ff5 !important; box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important;
+        }
+        .pair-cell { color: #695ff5 !important; }
+        .exchange-row { background: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.06) !important; }
+        .exchange-row:hover { background: rgba(105,95,245,0.12) !important; border-color: rgba(105,95,245,0.35) !important; }
+        .exchange-row.active { background: rgba(105,95,245,0.18) !important; border-color: #695ff5 !important; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <nav class="navbar">
+        <div style="display:flex; align-items:center;">
+            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;">v{{ version }}</span></a>
+            <div style="margin-left: 2rem;">
+                <a href="/trading" class="nav-link">Trading</a>
+                <a href="/backtester" class="nav-link">Backtester</a>
+                <a href="/datamanager" class="nav-link active">Data Manager</a>
+            </div>
+        </div>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <button class="btn btn-logout" @click="logout" title="Logout"
+                    style="min-width:unset; padding:8px 12px; line-height:0;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <div class="content">
+        <div v-if="error" class="alert"><strong>Error:</strong> {{ error }}</div>
+
+        <!-- === EXCHANGES === -->
+        <div class="card">
+            <h3>
+                Exchanges
+                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
+                    Click an exchange to view its data coverage
+                </span>
+            </h3>
+            <div v-if="exchangesLoading" class="loading"><span class="spinner"></span> Loading exchanges…</div>
+            <div v-else-if="exchanges.length === 0" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                No exchanges found — no configs and no downloaded data yet.
+            </div>
+            <div v-else>
+                <div v-for="ex in exchanges" :key="ex.name"
+                     class="exchange-row" :class="{ active: selectedExchange === ex.name }"
+                     @click="selectExchange(ex.name)">
+                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                        <span class="exchange-name">{{ ex.name }}</span>
+                        <span style="font-size:0.75rem; color:#a0aec0;" v-if="ex.configs.length">
+                            {{ ex.configs.length }} config{{ ex.configs.length === 1 ? '' : 's' }}
+                        </span>
+                    </div>
+                    <div style="display:flex; gap:0.4rem;">
+                        <span class="badge" :class="ex.has_data ? 'badge-yes' : 'badge-no'">
+                            {{ ex.has_data ? 'has data' : 'no data' }}
+                        </span>
+                        <span v-if="ex.has_futures" class="badge badge-futures">futures</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- === COVERAGE === -->
+        <div class="card" v-if="selectedExchange">
+            <h3>
+                Coverage — {{ selectedExchange }}
+                <span style="display:flex; gap:0.5rem; align-items:center; font-family:inherit; font-weight:400;">
+                    <input v-model="pairFilter" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem; width:150px;">
+                    <select v-model="timeframeFilter" class="form-input" style="font-size:0.8rem;">
+                        <option value="">All timeframes</option>
+                        <option v-for="tf in (coverage ? coverage.timeframes : [])" :key="tf" :value="tf">{{ tf }}</option>
+                    </select>
+                    <button class="icon-btn info" @click="loadCoverage" :disabled="coverageLoading" title="Rescan">&#8635;</button>
+                </span>
+            </h3>
+            <div v-if="coverageLoading" class="loading">
+                <span class="spinner"></span> Scanning coverage… (large exchanges with thousands of files can take a while)
+            </div>
+            <div v-else-if="coverageError" class="alert"><strong>Error:</strong> {{ coverageError }}</div>
+            <template v-else-if="coverage">
+                <div class="metrics-grid" style="margin-bottom:1.25rem;">
+                    <div class="metric">
+                        <div class="metric-label">Pairs</div>
+                        <div class="metric-value">{{ coverage.summary.pair_count }}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Files</div>
+                        <div class="metric-value">{{ coverage.summary.file_count }}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Total Size</div>
+                        <div class="metric-value">{{ fmtBytes(coverage.summary.total_size_bytes) }}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Earliest Candle</div>
+                        <div class="metric-value" style="font-size:0.95rem;">{{ fmtDate(coverage.summary.earliest) }}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Latest Candle</div>
+                        <div class="metric-value" style="font-size:0.95rem;">{{ fmtDate(coverage.summary.latest) }}</div>
+                    </div>
+                </div>
+                <div v-if="filteredRows.length === 0" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                    No pair/timeframe data matches this filter.
+                </div>
+                <div v-else class="table-wrap">
+                    <table>
+                        <thead><tr>
+                            <th>Pair</th><th>Timeframe</th><th>Type</th>
+                            <th>Start</th><th>End</th><th>Candles</th><th>Size</th><th>Modified</th>
+                        </tr></thead>
+                        <tbody>
+                            <tr v-for="r in filteredRows" :key="r.pair + r.timeframe + r.candle_type">
+                                <td class="pair-cell">{{ r.pair }}</td>
+                                <td>{{ r.timeframe }}</td>
+                                <td><span class="badge" :class="'badge-' + r.candle_type">{{ r.candle_type }}</span></td>
+                                <td>{{ fmtDate(r.start) }}</td>
+                                <td>{{ fmtDate(r.end) }}</td>
+                                <td>{{ r.candles }}</td>
+                                <td>{{ fmtBytes(r.size_bytes) }}</td>
+                                <td>{{ fmtDate(r.modified) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </template>
+        </div>
+
+        <!-- === DOWNLOAD === -->
+        <div class="card">
+            <h3>
+                Download Data
+                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
+                    {{ runningDownloadCount }} / {{ jobsMaxConcurrent }} running
+                </span>
+            </h3>
+            <div v-if="downloadError" class="alert"><strong>Error:</strong> {{ downloadError }}</div>
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:0.75rem; align-items:end;">
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
+                    <select v-model="downloadForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        <option value="">— select config —</option>
+                        <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                           title="Overrides the config's own exchange - leave blank to use the config's exchange">Exchange override</label>
+                    <input v-model="downloadForm.exchange" class="form-input" placeholder="(use config's exchange)"
+                           style="width:100%; margin-top:0.25rem;">
+                </div>
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Range</label>
+                    <select v-model="downloadForm.mode" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        <option value="timerange">Explicit timerange</option>
+                        <option value="days">Days back</option>
+                    </select>
+                </div>
+                <div v-if="downloadForm.mode === 'days'">
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Days</label>
+                    <input type="number" min="1" v-model.number="downloadForm.days" class="form-input" style="width:100%; margin-top:0.25rem;">
+                </div>
+                <div v-else>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                           title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)">Timerange</label>
+                    <input v-model="downloadForm.timerange" class="form-input" placeholder="20240101-20240601"
+                           style="width:100%; margin-top:0.25rem;">
+                </div>
+                <label style="display:flex; align-items:center; gap:0.4rem; padding-bottom:0.5rem; cursor:pointer; font-size:0.85rem; color:#cbd5e0;">
+                    <input type="checkbox" v-model="downloadForm.erase" style="accent-color:#695ff5;">
+                    Erase existing data first
+                </label>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-top:0.75rem;">
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                           title="Space-separated, e.g. BTC/USDT ETH/USDT - leave blank to use the config's own pairlist">Pairs (optional)</label>
+                    <textarea v-model="downloadForm.pairsText" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:monospace; font-size:0.8rem;"
+                              placeholder="Leave blank to use the config's own pairlist. Space-separated, e.g. BTC/USDT ETH/USDT"></textarea>
+                </div>
+                <div>
+                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                           title="Space-separated, e.g. 15m 1h - leave blank to use the config's own timeframe(s)">Timeframes (optional)</label>
+                    <textarea v-model="downloadForm.timeframesText" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:monospace; font-size:0.8rem;"
+                              placeholder="Leave blank to use the config's own timeframe(s). Space-separated, e.g. 15m 1h"></textarea>
+                </div>
+            </div>
+            <button class="btn" style="margin-top:1rem;" @click="startDownload"
+                    :disabled="downloadSubmitting || !downloadForm.config || runningDownloadCount >= jobsMaxConcurrent">
+                {{ downloadSubmitting ? 'Starting…' : 'Download' }}
+            </button>
+
+            <!-- === JOBS === -->
+            <div v-if="downloadJobs.length > 0" style="margin-top:1.25rem;">
+                <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
+                    Download Jobs
+                </h4>
+                <div class="table-wrap" style="max-height:260px;">
+                    <table>
+                        <thead><tr>
+                            <th>Status</th><th>Config</th><th>Exchange</th><th>Range</th>
+                            <th>Progress</th><th>Elapsed</th><th>ETA</th>
+                            <th>Started</th><th>Finished</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                            <tr v-for="j in downloadJobs" :key="j.id"
+                                @click="selectJob(j.id)"
+                                :style="{ cursor: 'pointer', background: selectedJobId === j.id ? 'rgba(105,95,245,0.12)' : '' }">
+                                <td><span :style="{ color: jobStatusColor(j.status), fontWeight: 600 }">{{ j.status }}</span></td>
+                                <td>{{ j.config }}</td>
+                                <td>{{ j.exchange || '(config default)' }}</td>
+                                <td>{{ j.timerange || (j.days ? j.days + 'd back' : '—') }}</td>
+                                <td style="min-width:120px;">
+                                    <div style="display:flex; align-items:center; gap:0.4rem;">
+                                        <div style="flex:1; height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden; min-width:60px;">
+                                            <div :style="{ width: jobProgressPct(j) + '%', height: '100%', background: '#695ff5', transition: 'width 0.3s' }"></div>
+                                        </div>
+                                        <span style="font-size:0.72rem; color:#a0aec0; white-space:nowrap;">{{ jobProgressPct(j) }}%</span>
+                                    </div>
+                                    <div v-if="j.dl_units_total" style="font-size:0.68rem; color:#6b7280;">{{ j.dl_units_done }} / {{ j.dl_units_total }}</div>
+                                </td>
+                                <td>{{ jobElapsedStr(j) }}</td>
+                                <td>{{ jobEtaStr(j) }}</td>
+                                <td>{{ fmtDate(j.started_at) }}</td>
+                                <td>{{ fmtDate(j.finished_at) }}</td>
+                                <td>
+                                    <button v-if="j.status === 'running' || j.status === 'queued'" class="icon-btn danger"
+                                            title="Cancel" @click.stop="cancelJob(j.id)">&#9632;</button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div v-if="selectedJob" style="margin-top:0.75rem;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem; flex-wrap:wrap;">
+                        <span>Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)</span>
+                        <span v-if="selectedJob.dl_units_total" style="color:#cbd5e0;">
+                            {{ jobProgressPct(selectedJob) }}% ({{ selectedJob.dl_units_done }}/{{ selectedJob.dl_units_total }})
+                            &nbsp;·&nbsp; Elapsed {{ jobElapsedStr(selectedJob) }}
+                            &nbsp;·&nbsp; ETA {{ jobEtaStr(selectedJob) }}
+                        </span>
+                    </div>
+                    <pre ref="jobLogPre"
+                         style="max-height:320px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap;">{{ jobLogText || '(no output yet)' }}</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+createApp({
+    data() {
+        return {
+            token: localStorage.getItem('VulcanTrader_token') || '',
+            version: '1.2',
+            error: null,
+
+            exchanges: [],
+            exchangesLoading: false,
+            selectedExchange: '',
+
+            coverage: null,
+            coverageLoading: false,
+            coverageError: null,
+            pairFilter: '',
+            timeframeFilter: '',
+
+            configs: [],
+            downloadForm: {
+                config: '', exchange: '', mode: 'timerange', days: 30, timerange: '20250101-',
+                erase: false, pairsText: '', timeframesText: '',
+            },
+            downloadSubmitting: false,
+            downloadError: null,
+
+            jobs: [],
+            jobsMaxConcurrent: 8,
+            jobsPollTimer: null,
+            clockTick: 0,
+            clockTimer: null,
+            selectedJobId: null,
+            jobLogText: '',
+            jobLogTotal: 0,
+        };
+    },
+    computed: {
+        filteredRows() {
+            if (!this.coverage) return [];
+            const pf = this.pairFilter.trim().toUpperCase();
+            const tf = this.timeframeFilter;
+            return this.coverage.rows.filter(r =>
+                (!pf || r.pair.toUpperCase().includes(pf)) && (!tf || r.timeframe === tf)
+            );
+        },
+        downloadJobs() { return this.jobs.filter(j => j.kind === 'download'); },
+        runningDownloadCount() {
+            return this.downloadJobs.filter(j => j.status === 'running' || j.status === 'queued').length;
+        },
+        selectedJob() { return this.jobs.find(j => j.id === this.selectedJobId) || null; },
+    },
+    async mounted() {
+        if (!this.token) { window.location.href = '/login'; return; }
+        fetch('/api/version').then(r => r.json()).then(d => {
+            if (d.version) this.version = d.version;
+        }).catch(() => {});
+        await this.loadExchanges();
+        await this.loadConfigs();
+        await this.refreshJobs();
+        this.jobsPollTimer = setInterval(() => this.refreshJobs(), 2000);
+        // Separate 1s ticker (not tied to the 2s job poll) just to force
+        // elapsed/ETA to visibly count up between polls - clockTick itself
+        // is never read, it only exists so jobElapsedStr/jobEtaStr (which
+        // read Date.now() directly) get re-evaluated on every Vue render.
+        this.clockTimer = setInterval(() => { this.clockTick++; }, 1000);
+    },
+    beforeUnmount() {
+        if (this.jobsPollTimer) clearInterval(this.jobsPollTimer);
+        if (this.clockTimer) clearInterval(this.clockTimer);
+    },
+    methods: {
+        async authedFetch(url) {
+            const r = await fetch(url, { headers: { Authorization: 'Bearer ' + this.token } });
+            if (r.status === 401) {
+                localStorage.removeItem('VulcanTrader_token');
+                window.location.href = '/login';
+                throw new Error('Unauthorized');
+            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        },
+        logout() {
+            localStorage.removeItem('VulcanTrader_token');
+            window.location.href = '/login';
+        },
+        async loadExchanges() {
+            this.exchangesLoading = true;
+            this.error = null;
+            try {
+                const j = await this.authedFetch('/api/exchanges');
+                this.exchanges = j.exchanges || [];
+            } catch (e) { this.error = e.message; }
+            finally { this.exchangesLoading = false; }
+        },
+        async loadConfigs() {
+            try {
+                const j = await this.authedFetch('/api/configs?all=true');
+                this.configs = j.configs || [];
+            } catch (e) { /* non-fatal */ }
+        },
+        async selectExchange(name) {
+            this.selectedExchange = name;
+            if (!this.downloadForm.exchange) this.downloadForm.exchange = '';
+            await this.loadCoverage();
+        },
+        async loadCoverage() {
+            if (!this.selectedExchange) return;
+            this.coverageLoading = true;
+            this.coverageError = null;
+            try {
+                this.coverage = await this.authedFetch(
+                    '/api/data/coverage?exchange=' + encodeURIComponent(this.selectedExchange));
+            } catch (e) {
+                this.coverageError = e.message;
+                this.coverage = null;
+            } finally {
+                this.coverageLoading = false;
+            }
+        },
+        async startDownload() {
+            this.downloadError = null;
+            if (!this.downloadForm.config) { this.downloadError = 'Pick a config.'; return; }
+            this.downloadSubmitting = true;
+            try {
+                const pairs = this.downloadForm.pairsText.trim()
+                    ? this.downloadForm.pairsText.trim().split(/\s+/) : null;
+                const timeframes = this.downloadForm.timeframesText.trim()
+                    ? this.downloadForm.timeframesText.trim().split(/\s+/) : null;
+                const r = await fetch('/api/data/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.token },
+                    body: JSON.stringify({
+                        config: this.downloadForm.config,
+                        exchange: this.downloadForm.exchange || null,
+                        pairs, timeframes,
+                        days: this.downloadForm.mode === 'days' ? this.downloadForm.days : null,
+                        timerange: this.downloadForm.mode === 'timerange' ? this.downloadForm.timerange : null,
+                        erase: this.downloadForm.erase,
+                    }),
+                });
+                if (!r.ok) {
+                    const j = await r.json().catch(() => ({}));
+                    throw new Error(j.detail || 'HTTP ' + r.status);
+                }
+                const j = await r.json();
+                this.selectedJobId = j.job.id;
+                this.jobLogText = '';
+                this.jobLogTotal = 0;
+                await this.refreshJobs();
+            } catch (e) {
+                this.downloadError = e.message;
+            } finally {
+                this.downloadSubmitting = false;
+            }
+        },
+        async refreshJobs() {
+            try {
+                const j = await this.authedFetch('/api/backtests/jobs');
+                this.jobs = j.jobs || [];
+                this.jobsMaxConcurrent = j.max_concurrent || 8;
+                if (this.selectedJobId) await this.refreshSelectedJobLog();
+            } catch (e) { /* polling: stay quiet */ }
+        },
+        async cancelJob(id) {
+            try {
+                await fetch('/api/backtests/jobs/' + id + '/cancel', {
+                    method: 'POST',
+                    headers: { Authorization: 'Bearer ' + this.token },
+                });
+                await this.refreshJobs();
+            } catch (e) { this.downloadError = e.message; }
+        },
+        async selectJob(id) {
+            this.selectedJobId = id;
+            this.jobLogText = '';
+            this.jobLogTotal = 0;
+            await this.refreshSelectedJobLog();
+        },
+        async refreshSelectedJobLog() {
+            if (!this.selectedJobId) return;
+            try {
+                const j = await this.authedFetch(
+                    '/api/backtests/jobs/' + this.selectedJobId + '?log_offset=' + this.jobLogTotal);
+                if (j.log && j.log.length) {
+                    this.jobLogText += (this.jobLogText ? '\n' : '') + j.log.join('\n');
+                    this.jobLogTotal = j.log_total;
+                    this.$nextTick(() => {
+                        const el = this.$refs.jobLogPre;
+                        if (el) el.scrollTop = el.scrollHeight;
+                    });
+                }
+            } catch (e) { /* polling: stay quiet */ }
+        },
+        jobStatusColor(s) {
+            return ({ running: '#f59e0b', queued: '#a0aec0', succeeded: '#10b981',
+                     failed: '#ef4444', cancelled: '#a0aec0', error: '#ef4444' })[s] || '#e0e0e0';
+        },
+        jobProgressPct(j) {
+            if (!j.dl_units_total) return j.status === 'succeeded' ? 100 : 0;
+            return Math.min(100, Math.round((j.dl_units_done / j.dl_units_total) * 100));
+        },
+        _fmtDuration(secs) {
+            secs = Math.max(0, Math.round(secs));
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+            if (h) return `${h}h ${m}m`;
+            if (m) return `${m}m ${s}s`;
+            return `${s}s`;
+        },
+        jobElapsedStr(j) {
+            void this.clockTick;  // re-run this method every clock tick (see mounted())
+            if (!j.started_at) return '-';
+            const end = j.finished_at ? new Date(j.finished_at) : new Date();
+            const start = new Date(j.started_at);
+            return this._fmtDuration((end - start) / 1000);
+        },
+        jobEtaStr(j) {
+            void this.clockTick;
+            if (!j.started_at || j.status !== 'running') return j.status === 'succeeded' ? 'done' : '-';
+            if (!j.dl_units_total || !j.dl_units_done) return 'estimating…';
+            const elapsedSecs = (new Date() - new Date(j.started_at)) / 1000;
+            const rate = j.dl_units_done / elapsedSecs;  // units per second so far
+            if (rate <= 0) return 'estimating…';
+            const remaining = Math.max(0, j.dl_units_total - j.dl_units_done);
+            return this._fmtDuration(remaining / rate);
+        },
+        fmtBytes(n) {
+            if (!n) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            let v = n;
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return v.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+        },
+        fmtDate(d) {
+            if (!d) return '-';
+            const dt = new Date(d);
+            if (isNaN(dt)) return d;
+            return dt.toISOString().replace('T', ' ').slice(0, 16);
+        },
+    },
+}).mount('#app');
+</script>
+</body>
+</html>

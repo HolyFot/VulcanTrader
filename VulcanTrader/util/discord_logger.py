@@ -12,6 +12,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _webhook_url: Optional[str] = None
+_bot_name: Optional[str] = None
 
 
 def init(webhook_url: str):
@@ -21,14 +22,27 @@ def init(webhook_url: str):
     logger.info("Discord logger initialized")
 
 
+def set_bot_name(bot_name: str) -> None:
+    """Tag every subsequent message with ``[bot_name]`` so a shared webhook can
+    be used by several trader_bot.py processes at once and the user can still
+    tell which one logged what."""
+    global _bot_name
+    _bot_name = bot_name or None
+
+
 def is_configured() -> bool:
     return bool(_webhook_url)
+
+
+def _tag(content: str) -> str:
+    return f"**[{_bot_name}]** {content}" if _bot_name else content
 
 
 def _send(content: str):
     """Fire-and-forget POST to Discord webhook."""
     if not _webhook_url:
         return
+    content = _tag(content)
     def _post():
         try:
             import requests
@@ -42,6 +56,7 @@ def _send_file(content: str, file_bytes: bytes, filename: str):
     """Fire-and-forget multipart POST with an attached file (e.g. PNG chart)."""
     if not _webhook_url:
         return
+    content = _tag(content)
 
     def _post():
         try:

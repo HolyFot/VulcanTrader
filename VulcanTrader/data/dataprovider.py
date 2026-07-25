@@ -481,8 +481,16 @@ class DataProvider:
         rate/trades tick the master forwards for a pair this bot is watching
         (see ClientInterestRegistry.publish_* on the master side) lands here
         the moment it arrives, instead of waiting for this bot's own next
-        refresh()/funding_rate()/trades() call to poll for it."""
+        refresh()/funding_rate()/trades() call to poll for it.
+
+        ``client`` is ``None`` whenever ``_setup_data_server_client()`` failed
+        (master unreachable, launch failed, ...) - that path is documented to
+        log-and-swallow and fall back to direct exchange polling, so it must
+        be a no-op here too rather than crashing the whole bot on an
+        AttributeError."""
         self._data_server_client = client
+        if client is None:
+            return
         client.on_ohlcv_push = self._on_data_server_ohlcv_push
         client.on_funding_rate_push = self._on_data_server_funding_rate_push
         client.on_trades_push = self._on_data_server_trades_push

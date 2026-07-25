@@ -1673,6 +1673,8 @@ def ensure_master_running(
     python_executable: str | None = None,
     extra_args: list[str] | None = None,
     startup_timeout: float = 30.0,
+    show_terminal: bool = False,
+    tmux: bool = False,
 ) -> bool:
     """Check whether a data_server master is already listening on (host, port); if
     not, launch one as a fully detached background process, so it outlives
@@ -1681,6 +1683,15 @@ def ensure_master_running(
     lifetime. Returns True if a master is already running or was just launched
     and came up within `startup_timeout`; False if launching failed outright or
     it never came up (callers should fall back to direct exchange polling).
+
+    ``show_terminal``/``tmux`` control the launched master's own visibility -
+    same convention (and same `util.proc_launch.launch_detached` helper) as
+    per-bot trade subprocesses use, but read from the LAUNCHING bot's own
+    ``data_server`` config block (see config_schema.py), not from
+    ``config_path`` - only relevant the moment this function actually spawns
+    a master; a no-op if one is already running. Both default false: an
+    auto-launched background master popping up a visible console/tmux window
+    unasked is more surprising than welcome.
 
     Several trader_bot processes on the same exchange typically start within
     the same second or two of each other (e.g. a batch of paper-trading bots
@@ -1761,19 +1772,17 @@ def ensure_master_running(
             connect_host, port, " ".join(cmd),
         )
         try:
-            popen_kwargs: dict[str, Any] = {}
             if sys.platform == "win32":
-                # CREATE_NEW_CONSOLE instead of DETACHED_PROCESS: the master
-                # gets its OWN real, visible console window with live stdio,
-                # instead of running fully headless - requested directly after
-                # a bot-triggered auto-launch kept coming up with no visible
-                # output anywhere (DETACHED_PROCESS has no console at all by
-                # definition; the file-only capture below was a workaround,
-                # not what was actually wanted). setup_logging(subdir=
-                # "data_server") in main() still independently writes the same
-                # records to logs/data_server/*.txt via its own FileHandler -
-                # that persistence is unaffected by this, it never depended on
-                # stdio redirection.
+                # CREATE_NEW_CONSOLE (only when show_terminal) instead of
+                # DETACHED_PROCESS: the master gets its OWN real, visible
+                # console window with live stdio, instead of running fully
+                # headless - added after an earlier bot-triggered auto-launch
+                # kept coming up with no visible output anywhere. Default is
+                # now headless (show_terminal=False) per config_schema.py -
+                # setup_logging(subdir="data_server") in main() still
+                # independently writes the same records to logs/data_server/
+                # *.txt via its own FileHandler regardless, so nothing is
+                # lost either way.
                 #
                 # CREATE_BREAKAWAY_FROM_JOB: if this interpreter is itself
                 # running inside a Windows Job Object (common under sandboxed/
@@ -1784,25 +1793,32 @@ def ensure_master_running(
                 # dying silently, mid-`Exchange.__init__`, moments after the
                 # parent bot's own tool invocation completed. This flag is a
                 # no-op (silently ignored) unless the job explicitly permits
-                # breakaway, so it's safe to always set.
-                popen_kwargs["creationflags"] = (
-                    subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_BREAKAWAY_FROM_JOB
+                # breakaway, so it's always set regardless of show_terminal.
+                creationflags = subprocess.CREATE_BREAKAWAY_FROM_JOB
+                if show_terminal:
+                    creationflags |= subprocess.CREATE_NEW_CONSOLE
+                subprocess.Popen(
+                    cmd, stdin=subprocess.DEVNULL, close_fds=True, creationflags=creationflags
                 )
-                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, close_fds=True, **popen_kwargs)
+            elif tmux:
+                # Reuse the same tmux window-management (stale-window kill,
+                # shared "VulcanTrader" session, window naming) that per-bot
+                # trade subprocesses already use - see util/proc_launch.py.
+                from VulcanTrader.util.proc_launch import launch_detached
+                launch_detached(cmd, {"tmux": True})
             else:
                 # No portable equivalent of "open a new visible terminal
                 # window" from a background process on POSIX (it depends on
                 # which terminal emulator, if any, is even installed) - stay
                 # headless there and rely on the structured log file, same as
                 # before.
-                popen_kwargs["start_new_session"] = True
                 subprocess.Popen(
                     cmd,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     close_fds=True,
-                    **popen_kwargs,
+                    start_new_session=True,
                 )
         except Exception:
             logger.exception("Failed to launch data server master - continuing without it")
@@ -2144,7 +2160,24 @@ class DataServerClient:
 #                                        // master_host
 #     "name": "kraken-subserver-1"       // subserver role only: self-identification
 #                                        // to the master, default "<exchange>-subserver"
+#     "show_terminal": false,            // Windows only, default false. Read by
+#                                        // ensure_master_running() at the moment it
+#                                        // actually launches a master (no-op if one
+#                                        // is already up) - true opens a new console
+#                                        // window for it, false stays headless.
+#     "tmux": false                      // Linux/macOS only, default false. Same
+#                                        // one-shot-at-launch caveat as show_terminal -
+#                                        // true opens the master in its own tmux
+#                                        // window (session "VulcanTrader") instead of
+#                                        // a plain headless background process.
 #   }
+#
+# show_terminal/tmux here are just this file's copy of whatever the launching
+# bot's own "data_server" config block had (see config_schema.py) - written by
+# trader_bot.py's `_write_data_server_config` fresh on every launch, same as
+# every other field above. Set them on the BOT config, not by hand-editing
+# this auto-written file - it gets fully overwritten the next time any bot
+# on this machine starts.
 #
 # No "pairs" field: which pairs get collected is always dynamic, never
 # config-driven - a master's pairlist is the union of every trading-bot

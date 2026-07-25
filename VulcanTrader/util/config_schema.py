@@ -311,6 +311,58 @@ CONF_SCHEMA = {
             "description": "Name of the trading bot. Passed via API to a client.",
             "type": "string",
         },
+        "is_bot": {
+            "description": (
+                "Marks this config as a fleet-managed trading bot. Default true. Only "
+                "configs with is_bot true appear in the web portal's Configs table and "
+                "are eligible for `bot.py autostart`, even if they also have "
+                "`auto_start: true`. Set to false for a config that exists as a shared "
+                "base/template (e.g. one meant to be duplicated, or backtested against "
+                "many strategies via -s/--strategies) rather than a bot in its own right."
+            ),
+            "type": "boolean",
+        },
+        "strategy": {
+            "description": (
+                "Strategy class name to run for live/dry-run trading (`bot.py trade`) and "
+                "for `bot.py autostart`. Overridden by -s/--strategy on the CLI when given. "
+                "Ignored by `bot.py backtest`/`hyperopt` - those always require an explicit "
+                "-s/--strategy or --strategies, so one shared config can be backtested "
+                "against many strategies without this field pinning it to just one."
+            ),
+            "type": "string",
+        },
+        "auto_start": {
+            "description": (
+                "If true, `bot.py autostart` launches this config as a live/dry-run trade "
+                "instance automatically (using this config's own `strategy`, `dry_run`, "
+                "`db_url` and `api_server.listen_port` - falling back to an auto-derived "
+                "db_url/port when those are absent). Ignored by every other subcommand."
+            ),
+            "type": "boolean",
+        },
+        "show_terminal": {
+            "description": (
+                "Per-bot-config setting (unlike api_server/discord/telegram, which live in "
+                "the shared user_data/configs_system/system.json). Windows only: when true "
+                "(default), launching THIS config via `bot.py autostart` or the web portal's "
+                "config manager gets its own new console window. When false, it launches "
+                "detached with no visible window."
+            ),
+            "type": "boolean",
+        },
+        "tmux": {
+            "description": (
+                "Per-bot-config setting (unlike api_server/discord/telegram, which live in "
+                "the shared user_data/configs_system/system.json). Linux/macOS only: when "
+                "true, launching THIS config via `bot.py autostart` or the web portal's "
+                "config manager opens in its own tmux window (session 'VulcanTrader'), "
+                "attachable with `tmux attach -t VulcanTrader`, instead of running as a plain "
+                "background process with no visible terminal. Falls back to plain background "
+                "if tmux isn't installed. Default false."
+            ),
+            "type": "boolean",
+        },
         "unfilledtimeout": {
             "description": f"Timeout configuration for unfilled orders. {__IN_STRATEGY}",
             "type": "object",
@@ -691,7 +743,7 @@ CONF_SCHEMA = {
                 },
                 "bot_token": {
                     "description": (
-                        f"Discord bot token for slash-command support. "
+                        f"Discord bot token for the interactive '!'-prefix command client. "
                         f"{__VIA_ENV} VulcanTrader__DISCORD__BOT_TOKEN"
                     ),
                     "type": "string",
@@ -828,6 +880,27 @@ CONF_SCHEMA = {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 65535,
+                },
+                "show_terminal": {
+                    "description": "Windows only. Default false. When this bot auto-launches "
+                    "a data_server master (none was already listening), true gives it its "
+                    "own new console window; false launches it fully headless. Only read "
+                    "at the moment a bot actually launches a master - has no effect if one "
+                    "is already running. Written through into `configs_system/"
+                    "data_server.json`'s own `show_terminal` field, but that file is "
+                    "overwritten on every launch, so set it here (per-bot config), not there.",
+                    "type": "boolean",
+                    "default": False,
+                },
+                "tmux": {
+                    "description": "Linux/macOS only. Default false. When this bot "
+                    "auto-launches a data_server master, true opens it in its own tmux "
+                    "window (session \"VulcanTrader\", same one bot subprocesses use) "
+                    "instead of a plain headless background process. Falls back to plain "
+                    "background if tmux isn't installed. Same one-shot-at-launch caveat as "
+                    "`show_terminal` above.",
+                    "type": "boolean",
+                    "default": False,
                 },
             },
         },

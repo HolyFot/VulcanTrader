@@ -9,8 +9,8 @@
 #  a different machine.
 #
 #  data_server has ONE general config per machine (not one per exchange) at
-#  user_data/data_server_configs/config.json. On a dedicated subserver
-#  machine, copy user_data/data_server_configs/config.subserver.example.json
+#  user_data/configs_system/data_server.json. On a dedicated subserver
+#  machine, copy user_data/configs_system/config.subserver.example.json
 #  to that path and set "master_host" to the real master's IP. --mode is
 #  deliberately omitted below: the config's "is_subserver": true already
 #  selects subserver mode on its own.
@@ -28,7 +28,7 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-CONFIG="${CONFIG:-user_data/data_server_configs/config.json}"
+CONFIG="${CONFIG:-user_data/configs_system/data_server.json}"
 
 echo "[run-subserver] config=$CONFIG"
 exec python -m VulcanTrader.data_server \

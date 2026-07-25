@@ -267,6 +267,11 @@ class VulcanTraderBot(LoggingMixin):
         # Pending force-exits requested via Discord / external sources.
         # Protected by _exit_lock; discord bot writes, process() reads + drains.
         self._pending_force_exits: set[int] = set()  # trade IDs
+        # Same idea, but keyed by pair instead of trade id - used for
+        # cross-process requests (the "<db>.json.forceexit" file a remote
+        # Discord/web-portal process writes; see bot.py's forceexit-file
+        # watcher), which knows the pair but not this process's trade ids.
+        self._pending_force_exit_pairs: set[str] = set()
 
         self._last_heartbeat: datetime | None = None  # throttle heartbeat to 1 min
 
@@ -316,6 +321,8 @@ class VulcanTraderBot(LoggingMixin):
             ensure_master_running(
                 host, port, config_path, subserver_port=subserver_port,
                 extra_args=["--exchange", self.config["exchange"]["name"], "--timeframes", timeframe],
+                show_terminal=bool(ds_config.get("show_terminal", False)),
+                tmux=bool(ds_config.get("tmux", False)),
             )
 
             client_id = f"{self.config.get('bot_name', 'trader_bot')}-{os.getpid()}"
@@ -339,7 +346,7 @@ class VulcanTraderBot(LoggingMixin):
         durable file a freshly launched data_server master can load (public
         market-data access only - no API keys needed, and none are written
         here). Written to ONE fixed, general path -
-        ``<user_data_dir>/data_server_configs/config.json`` - not one file per
+        ``<user_data_dir>/configs_system/data_server.json`` - not one file per
         exchange: this machine collects for whichever single exchange this bot
         is configured for, so there's exactly one config to write, matching
         data_server's own "one general config per machine" convention. Not a
@@ -402,13 +409,23 @@ class VulcanTraderBot(LoggingMixin):
             "master_host": ds_config.get("host", "0.0.0.0"),
             "master_port": int(ds_config.get("port", 8720)),
             "subserver_port": int(ds_config.get("subserver_port", 8721)),
+            # Read fresh from THIS bot's config on every write (see this
+            # method's own docstring: the file is fully overwritten each
+            # launch, never merged) - same show_terminal/tmux convention
+            # per-bot trade configs use (config_schema.py), but here they
+            # control the auto-launched data_server master's own window
+            # instead of the bot's. Default false for both: a background
+            # data_server master popping up its own visible console/tmux
+            # window is more surprising than welcome unless asked for.
+            "show_terminal": bool(ds_config.get("show_terminal", False)),
+            "tmux": bool(ds_config.get("tmux", False)),
         }
 
-        out_dir = Path(self.config.get("user_data_dir", "user_data")) / "data_server_configs"
+        out_dir = Path(self.config.get("user_data_dir", "user_data")) / "configs_system"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "config.json"
+        out_path = out_dir / "data_server.json"
         payload = json.dumps(minimal_config, indent=2)
-        tmp_path = out_dir / f".config.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        tmp_path = out_dir / f".data_server.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         tmp_path.write_text(payload)
         os.replace(tmp_path, out_path)
         return str(out_path)
@@ -424,6 +441,18 @@ class VulcanTraderBot(LoggingMixin):
         with self._exit_lock:
             self._pending_force_exits.add(trade_id)
         logger.info("Force exit scheduled for trade id=%s", trade_id)
+
+    def _schedule_force_exit_pair(self, pair: str) -> None:
+        """Request a force exit for every open trade on *pair* on the next
+        process() cycle. Used for cross-process requests (the multi-bot
+        Discord controller / web portal for a bot it isn't attached to)
+        which know the pair but not this process's internal trade ids.
+
+        Safe to call from any thread.
+        """
+        with self._exit_lock:
+            self._pending_force_exit_pairs.add(pair)
+        logger.info("Force exit scheduled for pair=%s", pair)
 
     # ------------------------------------------------------------------
     # web_portal stub
@@ -820,7 +849,14 @@ class VulcanTraderBot(LoggingMixin):
         DB (see KeyStoreKeys) so external readers of the account JSON can tell
         a live bot from a dead one without access to this process.
 
-        Format: ``HEARTBEAT <iso_timestamp> state=<state> open_trades=<count>``
+        Format: ``HEARTBEAT <iso_timestamp> bot=<bot_name> state=<state> open_trades=<count>``
+
+        ``bot_name`` is included specifically because several bots sharing
+        the same exchange/pairlist (e.g. multiple Kraken configs) print
+        near-identical console output otherwise - the only other place a
+        console window identifies itself is the one-time startup message,
+        easy to lose after scrolling. Without it, telling *which* bot's
+        window you're looking at means matching state/pair-count by guess.
         """
         try:
             now = datetime.now(UTC)
@@ -831,7 +867,11 @@ class VulcanTraderBot(LoggingMixin):
             state = self.state.value if hasattr(self.state, "value") else str(self.state)
             open_trades = Trade.get_open_trade_count()
             pairs = len(self.active_pair_whitelist)
-            logger.info("HEARTBEAT %s state=%s open_trades=%d pairs=%d", ts, state, open_trades, pairs)
+            bot_name = self.config.get("bot_name", "bot")
+            logger.info(
+                "HEARTBEAT %s bot=%s state=%s open_trades=%d pairs=%d",
+                ts, bot_name, state, open_trades, pairs,
+            )
             # store_value commits, persisting the marker to the JSON file.
             KeyValueStore.store_value("is_running", 1)
             KeyValueStore.store_value("last_heartbeat", now)
@@ -903,6 +943,11 @@ class VulcanTraderBot(LoggingMixin):
         # the first heartbeat ~one process-cycle later).
         KeyValueStore.store_value("is_running", 1)
         KeyValueStore.store_value("last_heartbeat", datetime.now(UTC))
+        # Persist the human-friendly display name so a reader that never
+        # attached to this bot in-process (web_portal account scan, the
+        # multi-bot Discord controller) can still show it alongside the
+        # account/db name used for control.
+        KeyValueStore.store_value("bot_name", str(self.config.get("bot_name") or "bot"))
 
         # TODO web_portal: was ``self.rpc.startup_messages(self.config, self.pairlists,
         # self.protections)``.
@@ -945,6 +990,33 @@ class VulcanTraderBot(LoggingMixin):
             logger.exception("startup: updating funding fees failed - continuing")
         logger.info("startup: complete.")
 
+        stake_ccy = self.config.get("stake_currency", "")
+        try:
+            balance = self.wallets.get_total(stake_ccy)
+            balance_line = f"{balance:.2f} {stake_ccy}"
+        except Exception:
+            balance_line = "n/a"
+        try:
+            open_count = Trade.get_open_trade_count()
+        except Exception:
+            open_count = 0
+
+        # One line, not three (was bot/mode/strategy/exchange, then a
+        # separate Balance line, then a separate itemized open-trades line) -
+        # a fleet of several bots starting together was posting 3 lines each
+        # to the same Discord channel. Full trade detail is still available
+        # on demand via the dashboard or the `!opentrades` command.
+        self._emit({
+            "type": RPCMessageType.STARTUP,
+            "status": (
+                f"{self.config.get('bot_name', 'bot')} started "
+                f"({'dry-run' if self.config.get('dry_run') else 'LIVE'}, "
+                f"strategy={type(self.strategy).__name__}, "
+                f"exchange={self.config.get('exchange', {}).get('name')}) — "
+                f"balance {balance_line}, {open_count} open trade(s)"
+            ),
+        })
+
     def process(self) -> None:
         """
         Queries the persistence layer for open trades and handles them,
@@ -983,6 +1055,15 @@ class VulcanTraderBot(LoggingMixin):
 
         # Drain Discord-requested force exits before normal exit processing.
         with self._exit_lock:
+            if self._pending_force_exit_pairs:
+                # Resolve cross-process pair requests to this cycle's trade
+                # ids - the pair may not have had an open trade yet when the
+                # request file was written.
+                pending_pairs = self._pending_force_exit_pairs.copy()
+                self._pending_force_exit_pairs.clear()
+                for t in Trade.get_open_trades():
+                    if t.pair in pending_pairs:
+                        self._pending_force_exits.add(t.id)
             if self._pending_force_exits:
                 pending = self._pending_force_exits.copy()
                 self._pending_force_exits.clear()
@@ -1045,10 +1126,11 @@ class VulcanTraderBot(LoggingMixin):
         if len(open_trades) != 0 and self.state != State.RELOAD_CONFIG:
             msg = {
                 "type": RPCMessageType.WARNING,
-                "status": f"{len(open_trades)} open trades active.\n\n"
-                f"Handle these trades manually on {self.exchange.name}, "
-                f"or '/start' the bot again and use '/stopentry' "
-                f"to handle open trades gracefully. \n"
+                "status": f"{len(open_trades)} open trade(s) still active - this process is "
+                f"shutting down and will no longer monitor/exit them automatically.\n\n"
+                f"Handle them manually on {self.exchange.name}, or restart this bot "
+                f"(dashboard's config manager Start button, or `bot.py trade`) to resume "
+                f"automatic management. \n"
                 f"{'Note: Trades are simulated (dry run).' if self.config['dry_run'] else ''}",
             }
             self._emit(msg)

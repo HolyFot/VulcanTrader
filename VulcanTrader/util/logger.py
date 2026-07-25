@@ -60,6 +60,9 @@ class _DiscordHandler(logging.Handler):
     """Forwards WARNING/ERROR records to Discord (fire-and-forget)."""
 
     # Patterns for noisy but benign warnings that should NOT go to Discord.
+    # These are startup-timing/plumbing details, not something a user needs
+    # pinged about - every bot logs several of them, so a fleet of N bots
+    # starting together would otherwise flood Discord with N-per-line noise.
     _SUPPRESS = re.compile(
         r"\[(?:init|exchange-init|reload_markets|fill_leverage_tiers|"
         r"trader_additional_exchange_init)\]"
@@ -68,7 +71,9 @@ class _DiscordHandler(logging.Handler):
         r"|is not installed, voice will NOT be supported"
         r"|Using fallback Tier \d+ pairs"
         r"|data starts at"
-        r"|Backtest result caching",
+        r"|Backtest result caching"
+        r"|has can_short=True but trading_mode is spot"
+        r"|No data server master found at .* - launching one",
         re.IGNORECASE,
     )
 
@@ -188,6 +193,9 @@ def setup_logging(config: dict) -> Path:
     log_to_discord = False
     if webhook_url and discord_enabled:
         discord_logger.init(webhook_url)
+        # Several trader_bot.py processes can share one webhook - tag every
+        # message with this bot's display name so they stay distinguishable.
+        discord_logger.set_bot_name(str(config.get("bot_name") or "bot"))
         log_to_discord = True
 
     return setup(level=level, log_to_discord=log_to_discord)

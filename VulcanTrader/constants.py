@@ -10,7 +10,7 @@ from VulcanTrader.enums import CandleType, PriceType
 
 
 DOCS_LINK = "https://www.VulcanTrader.io/en/stable"
-__version__ = "1.1"
+__version__ = "1.2"
 DEFAULT_CONFIG = "config.json"
 PROCESS_THROTTLE_SECS = 5  # sec
 HYPEROPT_EPOCH = 100  # epochs
