@@ -197,6 +197,11 @@ class VulcanTraderBot(LoggingMixin):
         # out immediately at startup, not just on the first process() tick.
         self._data_server_client = self._setup_data_server_client()
         self.dataprovider.set_data_server_client(self._data_server_client)
+        # Also wires entry/exit-pricing ticker fetches (Exchange.get_rate) through
+        # the shared, deduped data_server ticker cache - see
+        # Exchange._get_ticker_preferring_data_server. Same client, same None-safe
+        # no-op when data_server integration is disabled/unreachable.
+        self.exchange.set_data_server_client(self._data_server_client)
         # Sentinel (not []) so the very first _refresh_active_whitelist() call
         # always registers, even for a pairlist that ends up empty.
         self._data_server_registered_pairs: list[str] | None = None

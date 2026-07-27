@@ -281,12 +281,38 @@ class _LogCaptureHandler(logging.Handler):
 _log_capture = _LogCaptureHandler()
 
 
-def _tail_log_file(path: Path, limit: int) -> list[dict]:
+def _find_latest_log_file() -> Path | None:
+    """Most recently modified per-process timestamped log file under
+    user_data/logs/ (see util/logger.py's setup() - every bot/webserver/CLI
+    invocation gets its own ``VulcanTrader_<timestamp>.txt`` there, size-capped
+    and rotating). Best-effort proxy for "what's currently happening" in
+    viewer mode: since each process now writes its own file instead of one
+    shared bot.log (that file grew to 350MB/3.9M lines with no rotation before
+    this was fixed - see bot.py's main()), there's no longer a single true
+    "the log" to point at, so this picks whichever file was touched most
+    recently. Excludes logs/data_server/ (a separate, non-trading-bot stream)
+    since glob("VulcanTrader_*.txt") on the parent dir doesn't recurse into it
+    anyway."""
+    from VulcanTrader.util.logger import _LOG_DIR
+
+    log_dir = _LOG_DIR
+    try:
+        candidates = [p for p in log_dir.glob("VulcanTrader_*.txt") if p.is_file()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def _tail_log_file(path: Path | None, limit: int) -> list[dict]:
     """Return the last *limit* lines from a bot log file as log dicts.
 
     Used in viewer mode (no live bot in this process) to show the persistent
     log written by a separately-running bot process.
     """
+    if path is None:
+        return []
     try:
         with open(path, "rb") as fh:
             fh.seek(0, 2)
@@ -327,9 +353,9 @@ class WebPortal:
         self._host: str = api_cfg.get("listen_ip_address", "127.0.0.1")
         self._port: int = int(api_cfg.get("listen_port", 8080))
 
-        # Persistent log file written by bot.py (tailed in viewer mode).
-        _user_data = self.config.get("user_data_dir", "user_data") if isinstance(self.config, dict) else "user_data"
-        self._log_file: Path = Path(_user_data) / "logs" / "bot.log"
+        # Viewer-mode log tail resolves the current file fresh on every request
+        # (see _find_latest_log_file) rather than a fixed path stored here -
+        # which process is "most recent" changes as bots restart.
 
         self._messages: deque[dict] = deque(maxlen=self.MAX_MESSAGES)
         self._lock = threading.Lock()
@@ -768,7 +794,7 @@ class WebPortal:
             if self.bot is not None and hasattr(self.bot, "state"):
                 lines = _log_capture.get_lines(limit)
             else:
-                lines = _tail_log_file(self._log_file, limit)
+                lines = _tail_log_file(_find_latest_log_file(), limit)
             return {"count": len(lines), "lines": lines}
 
         # --------------- live trade data ---------------
@@ -814,7 +840,7 @@ class WebPortal:
             if self.bot is not None and hasattr(self.bot, "state"):
                 logs = _log_capture.get_lines(log_limit)
             else:
-                logs = _tail_log_file(self._log_file, log_limit)
+                logs = _tail_log_file(_find_latest_log_file(), log_limit)
             return {
                 "status": status,
                 "open_trades": [self._attach_live_pnl(_trade_to_dict(t)) for t in open_trades],
@@ -1876,7 +1902,7 @@ class WebPortal:
         than tracking PIDs at launch time - simpler, and still correct even
         for a bot started outside this portal's own launch code (a manual
         CLI ``bot.py trade``, or one from a previous portal instance)."""
-        out: dict[str, psutil.Process] = {}
+        groups: dict[str, list[psutil.Process]] = {}
         for proc in psutil.process_iter(["cmdline"]):
             try:
                 cmdline = proc.info["cmdline"] or []
@@ -1888,7 +1914,45 @@ class WebPortal:
                 continue
             idx = cmdline.index("-c")
             if idx + 1 < len(cmdline):
-                out[cmdline[idx + 1]] = proc
+                groups.setdefault(cmdline[idx + 1], []).append(proc)
+
+        out: dict[str, psutil.Process] = {}
+        for config_name, procs in groups.items():
+            if len(procs) == 1:
+                out[config_name] = procs[0]
+                continue
+            # More than one OS process matches this config's cmdline - on Windows, a
+            # venv "Scripts\python.exe" launcher can itself be a thin stub that
+            # re-execs into the real interpreter (e.g. the machine's global
+            # "Python312" install) as a CHILD process, so the SAME `-m
+            # VulcanTrader.bot trade -c <config>` invocation shows up as two OS
+            # processes: the near-empty wrapper and the real worker actually
+            # running the bot. Picking whichever psutil.process_iter() happened
+            # to enumerate last (the old behavior - dict overwrite, no
+            # preference) made stats flicker between the wrapper's numbers
+            # (confirmed live: ~3MB RSS, 0.0% CPU) and the real worker's
+            # (hundreds of MB) depending on OS enumeration order, making a
+            # genuinely healthy bot look dead in the dashboard. Prefer whichever
+            # process in the group is a CHILD of another process in the same
+            # group (the real worker, spawned by the wrapper) - fall back to
+            # the highest-RSS process if no such parent/child relationship is
+            # found (e.g. two independent matches for some other reason), since
+            # that's still a better guess than an arbitrary/unstable pick.
+            pids = {p.pid for p in procs}
+            child = None
+            for p in procs:
+                try:
+                    if p.ppid() in pids:
+                        child = p
+                        break
+                except psutil.Error:
+                    continue
+            if child is None:
+                try:
+                    child = max(procs, key=lambda p: p.memory_info().rss)
+                except psutil.Error:
+                    child = procs[0]
+            out[config_name] = child
         return out
 
     def _proc_stats(self, proc: psutil.Process | None) -> dict:

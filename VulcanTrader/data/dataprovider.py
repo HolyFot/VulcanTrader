@@ -540,25 +540,20 @@ class DataProvider:
         self, pairlist: ListPairsWithTimeframes
     ) -> ListPairsWithTimeframes:
         """Try to serve each (pair, timeframe, candle_type) from the data_server
-        cache first, writing hits straight into exchange._klines (the same slot
+        cache, writing hits straight into exchange._klines (the same slot
         Exchange.refresh_latest_ohlcv() itself populates, so ohlcv()/get_pair_dataframe()
         downstream are unaffected either way). Returns whichever pairs it *couldn't*
-        currently serve FRESH data for, for the caller to fetch directly from the
-        exchange - so a cold cache, a disconnected client, stale data, or any client
-        error all degrade to exactly the pre-data_server behavior for those pairs,
-        never blocks, never raises.
+        currently serve FRESH data for - a cold cache, a disconnected client, stale
+        data, or any client error all just mean "no fresh candles for this pair yet"
+        to the caller (refresh(), which never fetches these directly itself - see its
+        own docstring); this method itself never blocks, never raises.
 
         "Fresh" uses the same staleness formula IStrategy.get_latest_candle() checks
         signals against (timeframe*2 + outdated_offset) - a right-after-registering
         pull can otherwise land on the master's on-disk cache (loaded lazily from a
         PRIOR session, potentially hours stale) before the master's own collection
         loop has fetched anything new for THIS run, which used to count as a "hit"
-        purely because it wasn't empty. That silently skipped the direct-exchange
-        fallback below and left this bot waiting on the master's own fetch+push
-        round trip instead of just fetching it directly like it would with no
-        data_server client at all - the cause of "Outdated history" warnings
-        persisting for a while right after every bot start/reconnect even once the
-        master itself is fetching promptly.
+        purely because it wasn't empty.
         """
         remaining: ListPairsWithTimeframes = []
         outdated_offset = self._config.get("exchange", {}).get("outdated_offset", 5)
@@ -574,10 +569,9 @@ class DataProvider:
                 if df["date"].max().to_pydatetime() >= dt_now() - max_age:
                     self._inject_klines(pair_key, df)
                     continue
-                # Stale - still worth keeping as a base for the direct fetch
-                # below to merge onto (a one-call incremental update, thanks to
-                # _inject_klines syncing _pairs_last_refresh_time), but this
-                # pair still needs that real refresh.
+                # Stale - still worth injecting as better-than-nothing (and as a
+                # merge base for whenever the master's next push/pull lands),
+                # but this pair counts as "not fresh" for the caller.
                 self._inject_klines(pair_key, df)
             remaining.append(pair_key)
         return remaining
@@ -595,9 +589,35 @@ class DataProvider:
         final_pairs = (pairlist + helping_pairs) if helping_pairs else pairlist
         # refresh latest ohlcv data - prefer the data_server cache (shared/deduped
         # across every trader_bot watching this exchange) over a direct exchange
-        # call; whatever it can't currently serve falls back to the exchange.
+        # call.
         if self._data_server_client is not None:
             final_pairs = self._refresh_ohlcv_from_data_server(final_pairs)
+            # Data_server integration is enabled for this bot - it NEVER fetches
+            # OHLCV directly from the exchange itself, full stop, regardless of
+            # whether the client happens to be connected at this exact instant.
+            # A bot's only job re: OHLCV is telling the master which pairs it
+            # wants watched (register()); the master (data_server.py) owns
+            # actually pulling from the exchange, on its own polling interval.
+            #
+            # Originally this only skipped the fallback when
+            # `self._data_server_client.connected()` was True, on the theory
+            # that a genuinely-unreachable master should degrade to direct
+            # polling. In practice that reconnect window (every bot startup,
+            # every master restart, any network blip) is exactly when it fired
+            # hardest: 10 bots restarting together each had an unconnected
+            # client for the first several seconds and, in that gap, each did
+            # its own full-whitelist refresh_latest_ohlcv() directly - the same
+            # mass-rate-limit storm this feature exists to prevent, just moved
+            # to a different trigger (restart) instead of fixed. Skipping
+            # unconditionally means a bot simply has no fresh candles for a
+            # pair until the master (re)connects and catches up, rather than
+            # ever hammering the exchange on its own behalf.
+            final_pairs = []
+        # Only reached when data_server integration is disabled outright for
+        # this bot (``"data_server": {"enabled": false}`` in its config, so
+        # `_data_server_client` is None) - a deliberate opt-out with no master
+        # to depend on, so direct polling is the only option, same as before
+        # this feature existed.
         if final_pairs:
             self._exchange.refresh_latest_ohlcv(final_pairs)
         # refresh latest trades data

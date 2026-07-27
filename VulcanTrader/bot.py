@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import signal
@@ -226,8 +227,11 @@ def _setup_logging(verbosity: int, logfile: str | None) -> None:
     # so that ALL subsequent log calls reach the file.
     setup(level=level)
 
-    # Also append to the persistent bot.log so the standalone web-portal viewer
-    # (run-app.bat) can tail a single stable path across restarts.
+    # Optional EXTRA fixed-path handler, only when the caller explicitly passes
+    # --logfile (see main() - no longer defaulted to one shared bot.log for
+    # every process; the web portal now tails whichever per-process
+    # timestamped file under VulcanTrader/logs/ was written most recently -
+    # see web_portal.py's _find_latest_log_file).
     if logfile:
         root = logging.getLogger()
         fh = logging.FileHandler(logfile, encoding="utf-8")
@@ -651,6 +655,30 @@ def cmd_trade(args: argparse.Namespace) -> int:
 
     try:
         timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
+
+        # Stagger this bot's cycle start within the throttle window so a fleet of
+        # several bots launched together (see _launch_autostart_configs - they all
+        # start within the same second) don't keep hitting the exchange in
+        # lockstep forever after: every bot.process() call can fire its own direct
+        # exchange requests OHLCV/data_server intentionally avoids sharing (ticker
+        # fetches for entry/exit pricing - see Exchange.get_rate - market reloads,
+        # etc.), so N bots on the same 5s period means N-way simultaneous bursts
+        # every single cycle, not just at startup. Deterministic (hash of this
+        # bot's own name/db_url, not random) so the offset is stable across
+        # restarts and every fleet member spreads out independently without
+        # needing to know how many other bots exist or coordinate with them.
+        stagger_key = str(config.get("bot_name") or config.get("db_url") or "")
+        stagger_s = (
+            int(hashlib.sha256(stagger_key.encode()).hexdigest(), 16) % 1000
+        ) / 1000.0 * timeframe_s
+        if stagger_s > 0 and not stop_event.is_set():
+            logger.info(
+                "[trade] staggering initial cycle by %.2fs so this bot's exchange "
+                "calls don't land in lockstep with the rest of the fleet",
+                stagger_s,
+            )
+            stop_event.wait(timeout=stagger_s)
+
         logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
         while not stop_event.is_set():
             t0 = time.perf_counter()
@@ -1232,12 +1260,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     for sub in ("configs", "data", "strategies", "backtest_results", "logs"):
         (ud / sub).mkdir(parents=True, exist_ok=True)
 
-    # Default log file so every subcommand writes persistently to user_data/logs/bot.log.
-    # The web portal tails this file in viewer mode (run-app.bat) to show bot activity
-    # even when the bot runs as a separate process.
-    if not getattr(args, "logfile", None):
-        args.logfile = str(ud / "logs" / "bot.log")
-
+    # No default --logfile here (previously forced every subcommand onto one
+    # fixed, ever-appended user_data/logs/bot.log - confirmed live: a single
+    # 350MB/3.9M-line file, since EVERY bot process, the webserver, and every
+    # autostart/backtest/etc invocation all shared it with no rotation and no
+    # per-run separation). VulcanTrader.util.logger.setup() (called below via
+    # _setup_logging) already gives every process its own freshly-timestamped,
+    # size-capped, rotating file under user_data/logs/ - that's the log,
+    # full stop. --logfile remains available as an explicit opt-in for a
+    # caller that genuinely wants an additional fixed path (e.g. an external
+    # tailer expecting one); it's just no longer defaulted for every run. The
+    # web portal's viewer-mode log tail (web_portal.py) now finds the most
+    # recently written of those timestamped files instead of a fixed name.
     _setup_logging(args.verbose, getattr(args, "logfile", None))
 
     try:

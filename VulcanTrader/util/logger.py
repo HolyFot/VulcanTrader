@@ -30,8 +30,13 @@ ROOT = Path(__file__).resolve().parent.parent
 error_console = Console(stderr=True, width=200)
 
 # ── Constants ───────────────────────────────────────────────────────
-_LOG_DIR = ROOT / "logs"
-_LOG_DIR.mkdir(exist_ok=True)
+# ROOT is the VulcanTrader package dir; user_data/ is always its sibling at
+# the repo root (see AGENTS.md's "Repository layout") - resolving off
+# __file__ instead of CWD means this holds regardless of where a process was
+# launched from. Logs must land under user_data/logs, never VulcanTrader/logs
+# (the package dir isn't user data and shouldn't accumulate runtime output).
+_LOG_DIR = ROOT.parent / "user_data" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _LOG_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"

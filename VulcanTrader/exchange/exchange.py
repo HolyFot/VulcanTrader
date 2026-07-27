@@ -238,6 +238,17 @@ class Exchange:
         self._exit_rate_cache: FtTTLCache = FtTTLCache(maxsize=100, ttl=300)
         self._entry_rate_cache: FtTTLCache = FtTTLCache(maxsize=100, ttl=300)
 
+        # Set by trader_bot.py (mirrors DataProvider.set_data_server_client) when
+        # data_server integration is enabled - see set_data_server_client() below
+        # and get_rate()'s use of it. None (the default) means every get_rate()
+        # call behaves exactly as it did before this existed: a direct
+        # fetch_ticker(). Deliberately a hook on Exchange itself rather than
+        # routing every trader_bot.py get_rate() call site through DataProvider
+        # instead - fewer places to touch for something this risk-sensitive
+        # (entry/exit pricing), and Exchange already has its own analogous
+        # _entry_rate_cache/_exit_rate_cache pattern to extend.
+        self._data_server_client: Any = None
+
         # Holds candles
         self._klines: dict[PairWithTimeframe, DataFrame] = {}
         self._expiring_candle_cache: dict[tuple[str, int], PeriodicCache] = {}
@@ -2282,6 +2293,39 @@ class Exchange:
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
 
+    def set_data_server_client(self, client: Any) -> None:
+        """Wire in a VulcanTrader.data_server.DataServerClient (see the
+        `_data_server_client` docstring in __init__). `client` is `None`
+        whenever data_server integration failed or is disabled - that path
+        must be a no-op here too, not an AttributeError."""
+        self._data_server_client = client
+
+    def _get_ticker_preferring_data_server(self, pair: str) -> Ticker:
+        """Prefer the shared, deduped ticker data_server serves (see
+        data_server.py's TickerFetcher) over an independent direct fetch - N
+        bots independently checking the same pair's price every cycle
+        otherwise means N-way redundant exchange calls purely because each
+        bot has its own Exchange instance with no visibility into what any
+        other bot just fetched (confirmed live: 188 fetch_ticker
+        rate-limit warnings across 6 bots in one ~15 minute session, almost
+        entirely for pairs multiple bots held open trades on simultaneously).
+
+        Always falls back to a normal direct fetch_ticker() call - exactly
+        today's pre-existing behavior, retries and all - when the client is
+        unset, disconnected, or the master doesn't have anything fresh enough
+        cached for this pair. Pricing correctness must never depend on the
+        data_server path succeeding; it's purely a latency/redundancy
+        optimization layered on top of a fetch that still happens anyway
+        when it doesn't pay off."""
+        if self._data_server_client is not None:
+            try:
+                ticker = self._data_server_client.get_ticker(pair)
+            except Exception:
+                ticker = None
+            if ticker:
+                return ticker
+        return self.fetch_ticker(pair)
+
     @retrier
     def fetch_funding_rate(self, pair: str) -> FundingRate:
         """
@@ -2411,16 +2455,42 @@ class Exchange:
 
         price_side = self._get_price_side(side, is_short, conf_strategy)
 
-        if conf_strategy.get("use_order_book", False):
-            order_book_top = conf_strategy.get("order_book_top", 1)
-            if order_book is None:
-                order_book = self.fetch_l2_order_book(pair, order_book_top)
-            rate = self._get_rate_from_ob(pair, side, order_book, name, price_side, order_book_top)
-        else:
-            logger.debug(f"Using Last {price_side.capitalize()} / Last Price")
-            if ticker is None:
-                ticker = self.fetch_ticker(pair)
-            rate = self._get_rate_from_ticker(side, ticker, conf_strategy, price_side)
+        try:
+            if conf_strategy.get("use_order_book", False):
+                order_book_top = conf_strategy.get("order_book_top", 1)
+                if order_book is None:
+                    order_book = self.fetch_l2_order_book(pair, order_book_top)
+                rate = self._get_rate_from_ob(
+                    pair, side, order_book, name, price_side, order_book_top
+                )
+            else:
+                logger.debug(f"Using Last {price_side.capitalize()} / Last Price")
+                if ticker is None:
+                    ticker = self._get_ticker_preferring_data_server(pair)
+                rate = self._get_rate_from_ticker(side, ticker, conf_strategy, price_side)
+        except (DDosProtection, TemporaryError) as e:
+            # A forced refresh (refresh=True - used for exit/stoploss checks that need
+            # the current price, not a 5-minute-old one) hitting a transient exchange
+            # problem (rate limit, DDoS protection, a network blip) used to just raise
+            # here, aborting the exit attempt outright until the next process() cycle
+            # (process_throttle_secs later) - delaying a stoploss/ROI exit for no good
+            # reason when a very recent price is still sitting in cache_rate from the
+            # last successful fetch (confirmed live: "Unable to exit trade" warnings
+            # during a Hyperliquid rate-limit window, for trades that had a cached rate
+            # only seconds old). Fall back to that cached rate - still bounded by its
+            # own TTL (5 min, see cache_rate's FtTTLCache construction above) so a
+            # truly stale entry won't be used - rather than propagate. Only applies
+            # when the LIVE fetch just failed; a cache hit on the `not refresh` branch
+            # above already returns without ever reaching this code.
+            with self._cache_lock:
+                stale_rate = cache_rate.get(pair)
+            if stale_rate:
+                logger.warning(
+                    f"{name}-rate fetch for {pair} failed ({e.__class__.__name__}) - "
+                    f"using last cached rate {stale_rate} instead of aborting."
+                )
+                return stale_rate
+            raise
 
         if rate is None:
             raise PricingError(f"{name}-Rate for {pair} was empty.")
