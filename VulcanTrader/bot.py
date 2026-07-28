@@ -81,28 +81,13 @@ from typing import Any, Sequence
 #   SelectorEventLoop  → ConnectionResetError   [WinError 10054] in _read_from_self
 #   ProactorEventLoop  → ConnectionAbortedError [WinError  1236] on shutdown
 # Neither is a real error. We keep the SelectorEventLoop (better ccxt compat)
-# and suppress both via a logging filter on the 'asyncio' logger.
-if sys.platform == "win32":
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
+# and suppress both - see VulcanTrader/win_asyncio_fix.py (shared with
+# data_server.py, which needs the identical fix for the identical reason;
+# deliberately a top-level module, not under VulcanTrader/util/, so this stays
+# importable with zero third-party deps installed).
+from VulcanTrader.win_asyncio_fix import apply as _apply_win_asyncio_fix
 
-    class _WinAsyncioNoiseFilter(logging.Filter):
-        """Suppress harmless Windows asyncio self-pipe connection errors."""
-        _SUPPRESSED = (ConnectionResetError, ConnectionAbortedError)
-
-        def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
-            if record.exc_info:
-                exc = record.exc_info[1]
-                if isinstance(exc, self._SUPPRESSED):
-                    return False
-            msg = record.getMessage()
-            if "WinError 10054" in msg or "WinError 1236" in msg:
-                return False
-            return True
-
-    logging.getLogger("asyncio").addFilter(_WinAsyncioNoiseFilter())
+_apply_win_asyncio_fix()
 
 logger = logging.getLogger("VulcanTrader.bot")
 

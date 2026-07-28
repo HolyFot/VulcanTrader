@@ -48,14 +48,16 @@ from typing import Any, Callable
 
 # On Windows, ccxt's aiohttp-based async transport is unreliable on the default
 # ProactorEventLoop (spurious WinError 10054/1236 tracebacks, or the connection
-# aborting outright - see VulcanTrader/bot.py for the same fix). Exchange.__init__
-# creates its event loop via asyncio.new_event_loop(), which follows whatever
-# policy is active at that point, so this must run before Exchange is imported/used.
-if sys.platform == "win32":
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
+# aborting outright). Exchange.__init__ creates its event loop via
+# asyncio.new_event_loop(), which follows whatever policy is active at that
+# point, so this must run before Exchange is imported/used. Shared with
+# bot.py (VulcanTrader/win_asyncio_fix.py) so the policy switch and its
+# matching noise-suppression filter can't drift apart again - a previous
+# version of this file set the policy but not the filter, so this process's
+# self-pipe resets logged raw tracebacks all night with no mitigation.
+from VulcanTrader.win_asyncio_fix import apply as _apply_win_asyncio_fix
+
+_apply_win_asyncio_fix()
 
 from pandas import DataFrame, concat, to_datetime
 
