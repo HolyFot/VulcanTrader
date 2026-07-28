@@ -1977,7 +1977,11 @@ class BacktestRegimeAnalyzer:
             var    = sum((r - mean_r) ** 2 for r in dr) / (len(dr) - 1)
             std_r  = math.sqrt(var)
             if std_r > 0:
-                sharpe = (mean_r / std_r) * math.sqrt(252)
+                # 365, not the traditional-market 252 trading-day count: crypto
+                # trades every calendar day including weekends (matches
+                # data/metrics.py's _calculate_annualized_ratio, the canonical
+                # Sharpe helper used everywhere else in this repo).
+                sharpe = (mean_r / std_r) * math.sqrt(365)
 
         # CAGR
         cagr = 0.0

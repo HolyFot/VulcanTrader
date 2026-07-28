@@ -1031,7 +1031,9 @@ function tradingApp() {
                 const v = o.pnls.length > 1
                     ? o.pnls.reduce((s, x) => s + (x - m) ** 2, 0) / (o.pnls.length - 1) : 0;
                 const sd = Math.sqrt(v);
-                const sharpe = sd > 0 ? (m / sd) * Math.sqrt(252) : 0;
+                // 365, not the traditional-market 252 trading-day count: crypto
+                // trades every calendar day including weekends.
+                const sharpe = sd > 0 ? (m / sd) * Math.sqrt(365) : 0;
                 o.ordered.sort((a, b) => a.d - b.d);
                 let eq = this.startingCapital, peak = eq, maxDd = 0;
                 o.ordered.forEach(({ p }) => {
@@ -1374,7 +1376,10 @@ function tradingApp() {
             const m = returns.reduce((s, v) => s + v, 0) / returns.length;
             const v = returns.reduce((s, x) => s + (x - m) ** 2, 0) / (returns.length - 1);
             const sd = Math.sqrt(v);
-            return sd > 0 ? (m / sd) * Math.sqrt(252) : 0;
+            // 365, not the traditional-market 252 trading-day count: crypto trades
+            // every calendar day including weekends (matches data/metrics.py's
+            // _calculate_annualized_ratio, the canonical Python-side Sharpe helper).
+            return sd > 0 ? (m / sd) * Math.sqrt(365) : 0;
         },
         _groupByPeriod(trades, keyFn) {
             const map = {};

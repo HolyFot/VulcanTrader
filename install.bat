@@ -53,6 +53,14 @@ if errorlevel 1 (
 )
 popd
 
+REM The #[pymodule] registration in VulcanTrader/backtester/src/python.rs has
+REM silently dropped functions between source revisions before (compiles fine,
+REM only fails at call-time for whichever strategy happens to use the missing
+REM one) - always print what actually got registered after a build so a
+REM regression is visible immediately instead of surfacing later as an
+REM AttributeError deep in a backtest.
+".venv\Scripts\python.exe" -c "import vulcan_rust_indicators as v; print('[install] vulcan_rust_indicators exports:', [f for f in dir(v) if not f.startswith('_')])"
+
 echo.
 echo [install] done. Activate later with:  .\.venv\Scripts\Activate.ps1
 echo [install] then run:                   run-paper.bat   (or run-live.bat)

@@ -1092,7 +1092,7 @@
                                 <th># Trades</th>
                                 <th title="Win rate for trades entered during this regime">Win Rate</th>
                                 <th title="Profit Factor (gross wins / gross losses)">PF</th>
-                                <th title="Annualised Sharpe ratio (daily returns × √252)">Sharpe</th>
+                                <th title="Annualised Sharpe ratio (daily returns × √365)">Sharpe</th>
                                 <th title="Expectancy in R-multiples: WR × RR – (1–WR)">Expectancy R</th>
                                 <th title="Average win / average loss">R:R</th>
                                 <th title="Compound Annual Growth Rate for trades in this regime">CAGR</th>
@@ -1597,7 +1597,7 @@ createApp({
             const winRateFrac = wins.length / n;
             const expectancyR = winRateFrac * rr - (1 - winRateFrac);
             const roi = (totalPnl / this.startingCapital) * 100;
-            // Sharpe: mean(returns) / std(returns) * sqrt(252) using daily aggregates
+            // Sharpe: mean(returns) / std(returns) * sqrt(365) using daily aggregates
             const dailyReturns = this._dailyReturns(ts);
             const sharpe = this._sharpe(dailyReturns);
             // Equity & DD
@@ -1658,7 +1658,7 @@ createApp({
                 pf: o.gl > 0 ? o.gw / o.gl : (o.gw > 0 ? Infinity : 0),
                 avgR: o.rsum / o.trades,
                 // Same methodology as the headline Sharpe: daily-aggregated
-                // returns over starting capital, annualised by sqrt(252).
+                // returns over starting capital, annualised by sqrt(365).
                 sharpe: this._sharpe(this._dailyReturns(o.ts)),
             })).sort((a, b) => b.pnl - a.pnl);
         },
@@ -2299,7 +2299,10 @@ createApp({
             const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
             const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (returns.length - 1);
             const std = Math.sqrt(variance);
-            return std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+            // 365, not the traditional-market 252 trading-day count: crypto trades
+            // every calendar day including weekends (matches data/metrics.py's
+            // _calculate_annualized_ratio, the canonical Python-side Sharpe helper).
+            return std > 0 ? (mean / std) * Math.sqrt(365) : 0;
         },
         _groupByPeriod(trades, keyFn) {
             const map = {};

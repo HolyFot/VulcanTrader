@@ -42,6 +42,14 @@ fi
 # against a Python newer than PyO3 explicitly supports.
 (cd VulcanTrader/backtester && PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release --features extension-module)
 
+# The #[pymodule] registration in VulcanTrader/backtester/src/python.rs has
+# silently dropped functions between source revisions before (compiles fine,
+# only fails at call-time for whichever strategy happens to use the missing
+# one) - always print what actually got registered after a build so a
+# regression is visible immediately instead of surfacing later as an
+# AttributeError deep in a backtest.
+python -c "import vulcan_rust_indicators as v; print('[install] vulcan_rust_indicators exports:', [f for f in dir(v) if not f.startswith('_')])"
+
 echo
 echo "[install] done. Activate later with:  source .venv/bin/activate"
 echo "[install] then run:                   ./run-paper.sh   (or ./run-live.sh)"

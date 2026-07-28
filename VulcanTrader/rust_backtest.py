@@ -466,15 +466,43 @@ def _joint_multi_pair_backtest(
         except Exception:
             logger.exception("Failed to load funding/mark data; funding fees will be skipped")
 
+    # `do_exit_check` re-accrues funding every bar a trade is open (matching
+    # freqtrade's `_run_funding_fees`, which re-derives it from open_date to the
+    # CURRENT bar every time) - calling `exchange.calculate_funding_fees` as-is
+    # for that would re-sum a slice that grows every bar, i.e. O(hold_time) work
+    # PER BAR -> O(hold_time^2) per trade. Precompute a prefix sum of
+    # open_fund*open_mark per pair once here so each call becomes an O(log n)
+    # searchsorted + O(1) array diff instead - mathematically exact (same
+    # searchsorted "left"/"right" row range as `calculate_funding_fees`, just
+    # summed via cumsum lookup rather than re-summing the slice), not an
+    # incremental/cached approximation, so it's correct for any (open_date,
+    # close_date) pair regardless of call order.
+    _funding_cumsum: dict[str, tuple[pd.Series, np.ndarray]] = {}
+    for _pair, _df in funding_mark.items():
+        if _df.empty:
+            continue
+        _vals = (_df["open_fund"].to_numpy(dtype=np.float64)
+                 * _df["open_mark"].to_numpy(dtype=np.float64))
+        _funding_cumsum[_pair] = (_df["date"], np.concatenate(([0.0], np.cumsum(_vals))))
+
     def funding_fee_for(pair: str, amount: float, is_short: bool,
                         open_date: pd.Timestamp, close_date: pd.Timestamp) -> float:
-        df = funding_mark.get(pair)
-        if df is None or df.empty:
+        cached = _funding_cumsum.get(pair)
+        if cached is None:
             return 0.0
         try:
-            return float(exchange.calculate_funding_fees(df, amount, is_short, open_date, close_date))
+            dates, cumsum = cached
+            unit = dates.dtype.unit
+            lo = pd.Timestamp(open_date).ceil(unit).as_unit(unit)
+            hi = pd.Timestamp(close_date).floor(unit).as_unit(unit)
+            lo_idx = dates.searchsorted(lo, "left")
+            hi_idx = dates.searchsorted(hi, "right")
+            fees = float(cumsum[hi_idx] - cumsum[lo_idx]) * amount
+            if math.isnan(fees):
+                fees = 0.0
+            return fees if is_short else -fees
         except Exception:
-            logger.debug("calculate_funding_fees(%s) failed", pair, exc_info=True)
+            logger.debug("funding_fee_for(%s) failed", pair, exc_info=True)
             return 0.0
 
     trades: list[dict] = []
