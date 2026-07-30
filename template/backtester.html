@@ -815,6 +815,48 @@
                         <div class="metric-value">{{ formatMinutes(metrics.avgDurationMin) }}</div>
                     </div>
                 </div>
+
+                <!-- Volatility Bias: wide box, split out from the grid above so
+                     there's room to show all 4 underlying metric deltas. -->
+                <div class="metric" style="margin-top:0.75rem; align-items:stretch; text-align:left;"
+                     title="Compares win rate, profit factor, ROI, and max drawdown between the most volatile half of trades (by max_rate/min_rate price range) and the calmest half - majority vote across all four decides the label.">
+                    <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+                        <div class="metric-label" style="margin-bottom:0;">Volatility Bias</div>
+                        <div class="metric-value" :class="metrics.volatilityBias.highPoints > metrics.volatilityBias.lowPoints ? 'pos' : (metrics.volatilityBias.highPoints < metrics.volatilityBias.lowPoints ? 'neg' : '')">
+                            {{ metrics.volatilityBias.label }}
+                            <span v-if="metrics.volatilityBias.n >= 20" style="font-size:0.7rem; color:#a0aec0;">
+                                ({{ metrics.volatilityBias.highPoints }}/4 metrics favor high-vol)
+                            </span>
+                        </div>
+                    </div>
+                    <div v-if="metrics.volatilityBias.n >= 20" style="font-size:0.68rem; color:#8a92a0; margin-top:0.6rem;">High-vol trades vs calm trades:</div>
+                    <div v-if="metrics.volatilityBias.n >= 20" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-top:0.35rem;">
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">Win Rate</div>
+                            <div class="metric-mini-value">
+                                {{ metrics.volatilityBias.high.winRate.toFixed(0) }}% vs {{ metrics.volatilityBias.low.winRate.toFixed(0) }}%
+                            </div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">Profit Factor</div>
+                            <div class="metric-mini-value">
+                                {{ isFinite(metrics.volatilityBias.high.pf) ? metrics.volatilityBias.high.pf.toFixed(2) : '∞' }} vs {{ isFinite(metrics.volatilityBias.low.pf) ? metrics.volatilityBias.low.pf.toFixed(2) : '∞' }}
+                            </div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">ROI</div>
+                            <div class="metric-mini-value">
+                                {{ metrics.volatilityBias.high.roi.toFixed(1) }}% vs {{ metrics.volatilityBias.low.roi.toFixed(1) }}%
+                            </div>
+                        </div>
+                        <div class="metric-mini">
+                            <div class="metric-mini-label">Max Drawdown</div>
+                            <div class="metric-mini-value">
+                                {{ metrics.volatilityBias.high.dd.toFixed(1) }}% vs {{ metrics.volatilityBias.low.dd.toFixed(1) }}%
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- === MONTHLY === -->
@@ -1581,7 +1623,8 @@ createApp({
                 return { winRate:0,totalTrades:0,wins:0,losses:0,totalPnl:0,roi:0,
                          sharpe:0,profitFactor:0,expectancyR:0,rr:0,cagr:0,
                          maxDrawdownPct:0,maxDrawdownAbs:0,
-                         startingCapital:this.startingCapital,avgDurationMin:0 };
+                         startingCapital:this.startingCapital,avgDurationMin:0,
+                         volatilityBias:{label:'No data',n:0,highPoints:0,lowPoints:0,high:null,low:null} };
             }
             const wins = ts.filter(t => t.__pnl > 0);
             const losses = ts.filter(t => t.__pnl < 0);
@@ -1615,11 +1658,12 @@ createApp({
                 }
             }
             const avgDurationMin = ts.reduce((s, t) => s + t.__durationMin, 0) / n;
+            const volatilityBias = this._volatilityBias(ts);
             return {
                 winRate, totalTrades: n, wins: wins.length, losses: losses.length,
                 totalPnl, roi, sharpe, profitFactor, expectancyR, rr, cagr,
                 maxDrawdownPct: ddRes.pct, maxDrawdownAbs: ddRes.abs,
-                startingCapital: this.startingCapital, avgDurationMin,
+                startingCapital: this.startingCapital, avgDurationMin, volatilityBias,
             };
         },
         monthly() {
@@ -2282,6 +2326,65 @@ createApp({
                 if (pct > maxPct) maxPct = pct;
             });
             return { abs: maxAbs, pct: maxPct };
+        },
+        _volatilityBias(trades) {
+            // Volatility proxy per trade: the price range realized while the
+            // trade was open, relative to entry price - (max_rate - min_rate) /
+            // open_rate. Both fields already ship in every freqtrade backtest
+            // trade record, so this needs no extra candle fetch (unlike the
+            // regime-analysis panel, which loads full OHLCV history per pair).
+            // Split trades into low-range/high-range halves by median, then
+            // score each half on win rate, profit factor, ROI, and max
+            // drawdown (built from that half's own trades only, via the same
+            // _equity/_maxDrawdown helpers the top-level metrics use) - one
+            // point per metric to whichever half is better. Win rate alone
+            // can favor a bucket that wins small and loses big, so the
+            // majority vote across all four is what decides the label.
+            const withRange = trades
+                .filter(t => t.max_rate != null && t.min_rate != null && +t.open_rate > 0)
+                .map(t => ({ t, range: (+t.max_rate - +t.min_rate) / +t.open_rate }));
+            const n = withRange.length;
+            if (n < 20) {
+                return { label: 'Not enough data', n, highPoints: 0, lowPoints: 0, high: null, low: null };
+            }
+            const sorted = withRange.slice().sort((a, b) => a.range - b.range);
+            const half = Math.floor(n / 2);
+            const lowTrades = sorted.slice(0, half).map(x => x.t);
+            const highTrades = sorted.slice(n - half).map(x => x.t);
+
+            const bucketStats = (ts) => {
+                const wins = ts.filter(t => t.__pnl > 0);
+                const losses = ts.filter(t => t.__pnl < 0);
+                const grossWin = wins.reduce((s, t) => s + t.__pnl, 0);
+                const grossLoss = Math.abs(losses.reduce((s, t) => s + t.__pnl, 0));
+                const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
+                const totalPnl = ts.reduce((s, t) => s + t.__pnl, 0);
+                const roi = this.startingCapital > 0 ? (totalPnl / this.startingCapital) * 100 : 0;
+                const dd = this._maxDrawdown(this._equity(ts, this.startingCapital).values).pct;
+                const winRate = ts.length ? (wins.length / ts.length) * 100 : 0;
+                return { winRate, pf, roi, dd };
+            };
+
+            const low = bucketStats(lowTrades);
+            const high = bucketStats(highTrades);
+
+            let highPoints = 0, lowPoints = 0;
+            const vote = (hv, lv, higherIsBetter = true) => {
+                if (hv === lv) return;
+                const highIsBetter = higherIsBetter ? hv > lv : hv < lv;
+                if (highIsBetter) highPoints++; else lowPoints++;
+            };
+            vote(high.winRate, low.winRate);
+            vote(isFinite(high.pf) ? high.pf : 1e9, isFinite(low.pf) ? low.pf : 1e9);
+            vote(high.roi, low.roi);
+            vote(high.dd, low.dd, false); // lower drawdown is better
+
+            let label;
+            if (highPoints === lowPoints) label = 'Neutral';
+            else if (highPoints > lowPoints) label = 'Likes Volatility';
+            else label = 'Dislike Volatility, prefers calm';
+
+            return { label, n, highPoints, lowPoints, high, low };
         },
         _dailyReturns(trades) {
             const map = {};
