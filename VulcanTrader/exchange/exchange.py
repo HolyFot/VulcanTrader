@@ -1153,6 +1153,18 @@ class Exchange:
             return self.trader_has["exchange_has_overrides"][endpoint]
         return endpoint in self._api_async.has and self._api_async.has[endpoint]
 
+    def exchange_has_emulated(self, endpoint: str) -> bool:
+        """
+        True when ccxt reports `endpoint` as "emulated" - i.e. it works, but is
+        derived from a different underlying call rather than its own API request.
+        Notably hyperliquid's fetchTicker is emulated from fetchTickers, so a
+        single-pair ticker request costs exactly the same upstream request as
+        fetching every pair's ticker at once. Callers doing many single-pair
+        lookups should prefer the bulk call when this returns True.
+        :param endpoint: Name of endpoint (e.g. 'fetchTicker')
+        """
+        return self._api_async.has.get(endpoint) == "emulated"
+
     def features(
         self, market_type: Literal["spot", "futures"], endpoint, attribute, default: T
     ) -> T:

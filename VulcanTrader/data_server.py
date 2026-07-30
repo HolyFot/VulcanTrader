@@ -564,7 +564,7 @@ class DataCollector:
                 len(batch_pairlist), len(pairlist), self._rotation_offset, self._batch_cap,
             )
 
-        rate_limit_cap = _RateLimitLogCapture()
+        rate_limit_cap = _RateLimitLogCapture(owner_thread=threading.get_ident())
         exchange_logger = logging.getLogger("VulcanTrader.exchange")
         exchange_logger.addHandler(rate_limit_cap)
         try:
@@ -1024,10 +1024,33 @@ class TickerFetcher:
         # Sized for real overlap (several DIFFERENT pairs' first-fetch-of-the-
         # window landing at once) - not for total client count, since same-
         # pair requests share one in-flight Future rather than each taking a
-        # worker slot.
+        # worker slot. In bulk mode (below) even different pairs coalesce, so
+        # this only ever has one fetch in flight.
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=8, thread_name_prefix="ticker-ondemand-fetch"
         )
+        # Bulk mode: on exchanges where ccxt EMULATES fetchTicker on top of
+        # fetchTickers (hyperliquid does - it reads the perpetuals
+        # asset-contexts endpoint, which always returns every asset and is
+        # then filtered client-side), a single-pair fetch costs the exact same
+        # upstream request as fetching all pairs. Doing them per-pair was
+        # pure waste: N concurrent workers each issuing the same full-payload
+        # request and discarding all but one pair of it, which is what
+        # generated the bulk of this process's 429s. One bulk call instead
+        # warms the cache for EVERY pair, so the other 43 are then served
+        # from cache for the whole TTL window.
+        try:
+            self._bulk = bool(
+                exchange.exchange_has("fetchTickers")
+                and exchange.exchange_has_emulated("fetchTicker")
+            )
+        except Exception:
+            self._bulk = False
+        if self._bulk:
+            logger.info(
+                "TickerFetcher: %s emulates fetchTicker via fetchTickers - using one "
+                "bulk fetch to warm all pairs per %.1fs window", exchange_name, max_age_s,
+            )
 
     def get(self, pair: str) -> dict | None:
         """Returns None on any failure/timeout - callers (the master's
@@ -1039,15 +1062,18 @@ class TickerFetcher:
         if cached is not None:
             return cached
 
+        # In bulk mode every pair shares ONE in-flight fetch, so N concurrent
+        # requests for N different pairs collapse into a single upstream call.
+        key = self._BULK_KEY if self._bulk else pair
         with self._lock:
-            future = self._inflight.get(pair)
+            future = self._inflight.get(key)
             is_new = future is None
             if is_new:
-                future = self._executor.submit(self._fetch, pair)
-                self._inflight[pair] = future
+                future = self._executor.submit(self._fetch_all if self._bulk else self._fetch, pair)
+                self._inflight[key] = future
 
         try:
-            return future.result(timeout=self.fetch_timeout_s)
+            result = future.result(timeout=self.fetch_timeout_s)
         except concurrent.futures.TimeoutError:
             # Don't cancel - a slow-but-eventually-successful fetch still
             # warms the cache for the next request; this caller just isn't
@@ -1058,6 +1084,29 @@ class TickerFetcher:
         except Exception:
             logger.debug("On-demand ticker fetch failed for %s", pair, exc_info=True)
             return None
+        # Bulk fetches resolve to the whole tickers dict (one shared Future for
+        # many waiting pairs), so each caller picks its own out of it. A missing
+        # pair is returned as None, which callers already treat as "not cached".
+        if self._bulk:
+            return (result or {}).get(pair)
+        return result
+
+    # Single shared in-flight key for bulk mode - not a real pair name.
+    _BULK_KEY = "__all_tickers__"
+
+    def _fetch_all(self, _pair: str) -> dict | None:
+        """One fetchTickers() call, cached for EVERY pair it returns."""
+        try:
+            tickers = self.exchange.get_tickers()
+            for p, t in (tickers or {}).items():
+                self.cache.set_ticker(self.exchange_name, p, t)
+            return tickers
+        except Exception:
+            logger.debug("Bulk ticker fetch failed", exc_info=True)
+            return None
+        finally:
+            with self._lock:
+                self._inflight.pop(self._BULK_KEY, None)
 
     def _fetch(self, pair: str) -> dict | None:
         try:
@@ -1529,14 +1578,26 @@ class _RateLimitLogCapture(logging.Handler):
     only LOGS per-pair fetch exceptions internally - it never re-raises them (see
     ratelimit_probe.py's own docstring on the same point) - so a log capture is the
     only way for the caller to observe this and feed DataCollector's adaptive ramp
-    (see _record_batch_outcome)."""
+    (see _record_batch_outcome).
 
-    def __init__(self) -> None:
+    `owner_thread` scopes the capture to the thread actually running the OHLCV
+    batch. It has to: the handler is attached to the shared, process-wide
+    "VulcanTrader.exchange" logger, and TickerFetcher's on-demand fetch_ticker()
+    workers hit that same logger concurrently from their own threads. Without
+    this filter their 429s were counted as OHLCV-batch pushback and cut the
+    adaptive ramp back to its floor - observed live at 25 ticker 429s vs 1
+    genuine candle-history 429 in one session, which pinned the batch size at
+    10/44 pairs and left pairs 35+ minutes stale."""
+
+    def __init__(self, owner_thread: int | None = None) -> None:
         super().__init__(level=logging.WARNING)
         self.hit = False
+        self._owner_thread = owner_thread
 
     def emit(self, record: logging.LogRecord) -> None:
         if self.hit:
+            return
+        if self._owner_thread is not None and record.thread != self._owner_thread:
             return
         msg = record.getMessage().lower()
         if any(marker in msg for marker in _RATE_LIMIT_LOG_MARKERS):

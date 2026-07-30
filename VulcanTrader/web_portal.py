@@ -981,6 +981,10 @@ class WebPortal:
         def api_bt_regime_analysis(name: str, regime_pair: str = "") -> dict:
             return self._backtest_regime_analysis(name, regime_pair)
 
+        @app.get("/api/backtests/{name}/volatility_bias", dependencies=[Depends(auth)])
+        def api_bt_volatility_bias(name: str, regime_pair: str = "") -> dict:
+            return self._backtest_volatility_bias(name, regime_pair)
+
         @app.get("/api/backtests/{name}/mae_mfe", dependencies=[Depends(auth)])
         def api_bt_mae_mfe(
             name: str,
@@ -4042,6 +4046,161 @@ class WebPortal:
             starting_capital=starting_capital,
         )
         result["regime_pair"] = chosen_pair
+        result["timeframe"] = tf
+        result["starting_capital"] = starting_capital
+        return result
+
+    def _backtest_volatility_bias(self, name: str, regime_pair: str = "") -> dict:
+        """
+        Classify AMBIENT market volatility (ATR% vs its own trailing
+        baseline - see BacktestRegimeAnalyzer.classify_volatility) at each
+        trade's entry and compare performance between HIGH_VOL / LOW_VOL
+        entries.
+
+        Mirrors _backtest_regime_analysis's data loading and pair-selection
+        logic exactly (same reference-pair priority order), but classifies
+        candles by realized volatility instead of trend direction.
+        """
+        try:
+            import pandas as pd
+            from VulcanTrader.regime_analysis import BacktestRegimeAnalyzer
+            from VulcanTrader.data.history import load_pair_history
+            from VulcanTrader.enums import CandleType, TradingMode
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Dependency unavailable: {exc}")
+
+        bt = self._load_backtest(name)
+        trades, tf, trading_mode = self._bt_extract_trades_and_meta(bt)
+
+        if not tf:
+            raise HTTPException(status_code=400, detail="Backtest result missing timeframe")
+
+        datadir = self._datadir()
+        if not datadir.is_dir():
+            raise HTTPException(status_code=400, detail=f"datadir not found: {datadir}")
+
+        data_format = self.config.get("dataformat_ohlcv", "feather")
+        try:
+            tm_enum = TradingMode(trading_mode) if trading_mode else TradingMode.SPOT
+        except Exception:
+            tm_enum = TradingMode.SPOT
+        candle_type = CandleType.get_default(tm_enum.value)
+
+        def _try_load(pair: str):
+            try:
+                df = load_pair_history(
+                    pair=pair, timeframe=tf, datadir=datadir,
+                    data_format=data_format, candle_type=candle_type,
+                )
+                if df is not None and len(df) > 50:
+                    return df
+            except Exception:
+                pass
+            return None
+
+        traded_pairs = list(dict.fromkeys(
+            t.get("pair", "") for t in trades if t.get("pair")
+        ))
+
+        starting_capital = 1000.0
+        if isinstance(bt.get("strategy"), dict):
+            for _strat_data in bt["strategy"].values():
+                starting_capital = float(
+                    _strat_data.get("starting_balance")
+                    or _strat_data.get("dry_run_wallet")
+                    or 1000.0
+                )
+                break
+
+        def _norm_df(df):
+            if "date" in df.columns:
+                df = df.copy()
+                df["date"] = pd.to_datetime(df["date"])
+                if hasattr(df["date"].dtype, "tz") and df["date"].dtype.tz is not None:
+                    df["date"] = df["date"].dt.tz_localize(None)
+            return BacktestRegimeAnalyzer.classify_volatility(df)
+
+        # ── ALL mode: classify each trade by its own pair's volatility ──────
+        if regime_pair.lower() in ("", "__all__", "all"):
+            import bisect as _bisect
+            from datetime import datetime as _dt
+
+            pair_vol_data: dict[str, tuple] = {}
+            for pair in traded_pairs:
+                df = _try_load(pair)
+                if df is not None:
+                    vdf = _norm_df(df)
+                    raw = pd.to_datetime(vdf["date"])
+                    if hasattr(raw.dtype, "tz") and raw.dtype.tz is not None:
+                        raw = raw.dt.tz_localize(None)
+                    pair_vol_data[pair] = (raw.to_list(), vdf["vol_bucket"].to_list())
+
+            if not pair_vol_data:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No candle data found for any traded pair. "
+                           "Download OHLCV data or select a specific volatility pair.",
+                )
+
+            def _lookup_per_pair(pair: str, dt_str: str):
+                if pair not in pair_vol_data:
+                    return None
+                dates, labels = pair_vol_data[pair]
+                try:
+                    dt = _dt.fromisoformat(str(dt_str)[:19].replace(" ", "T"))
+                except ValueError:
+                    return None
+                idx = _bisect.bisect_right(dates, dt) - 1
+                if idx < 0:
+                    return labels[0] if labels else None
+                if idx >= len(labels):
+                    return labels[-1]
+                return labels[idx]
+
+            trade_vol_buckets = [
+                _lookup_per_pair(t.get("pair", ""), t.get("open_date") or "")
+                for t in trades
+            ]
+
+            result = BacktestRegimeAnalyzer.analyze_trades_by_volatility(
+                trades=trades,
+                vol_df=None,
+                starting_capital=starting_capital,
+                trade_vol_buckets=trade_vol_buckets,
+            )
+            result["vol_pair"] = "ALL"
+            result["timeframe"] = tf
+            result["starting_capital"] = starting_capital
+            return result
+
+        # ── Specific pair or BTC fallback ────────────────────────────────────
+        btc_candidates = ["BTC/USDT", "BTC/USDT:USDT", "BTC/USD", "BTC/BUSD"]
+        candidates = [regime_pair] if regime_pair else []
+        candidates.extend(btc_candidates)
+        candidates.extend(traded_pairs)
+
+        chosen_pair = None
+        vol_df = None
+        for pair in candidates:
+            df = _try_load(pair)
+            if df is not None:
+                chosen_pair = pair
+                vol_df = _norm_df(df)
+                break
+
+        if vol_df is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No candle data found for volatility classification. "
+                       "Ensure BTC/USDT data is downloaded or pass ?regime_pair=<pair>.",
+            )
+
+        result = BacktestRegimeAnalyzer.analyze_trades_by_volatility(
+            trades=trades,
+            vol_df=vol_df,
+            starting_capital=starting_capital,
+        )
+        result["vol_pair"] = chosen_pair
         result["timeframe"] = tf
         result["starting_capital"] = starting_capital
         return result

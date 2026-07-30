@@ -1783,6 +1783,10 @@ class BacktestRegimeAnalyzer:
 
     REGIMES: List[str] = ["EXTREME_BULL", "BULL", "RANGING", "BEAR", "EXTREME_BEAR"]
 
+    # Ambient-volatility buckets (see classify_volatility) - independent of
+    # any trade's own outcome or duration, unlike a max_rate/min_rate proxy.
+    VOL_BUCKETS: List[str] = ["HIGH_VOL", "LOW_VOL"]
+
     # Colors used by the frontend for chart backgrounds / labels
     REGIME_COLORS: Dict[str, Dict[str, str]] = {
         "EXTREME_BULL": {"solid": "#10b981", "text": "#10b981", "bg": "rgba(16,185,129,0.25)"},
@@ -1888,6 +1892,61 @@ class BacktestRegimeAnalyzer:
         df["regime"] = pd.Series(raw, index=df.index).map(cls._TREND_MAP).fillna("RANGING")
         return df
 
+    # ------------------------------------------------------------------ classify_volatility
+
+    @staticmethod
+    def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+        """Wilder-smoothed Average True Range (same TR/alpha convention as _adx)."""
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            (high - low),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        alpha = 1.0 / period
+        return tr.ewm(alpha=alpha, adjust=False).mean()
+
+    @classmethod
+    def classify_volatility(
+        cls,
+        df: pd.DataFrame,
+        atr_period: int = 14,
+        baseline_window: int = 100,
+        min_periods: int = 30,
+    ) -> pd.DataFrame:
+        """
+        Add a ``vol_bucket`` column classifying AMBIENT market volatility per
+        candle - deliberately independent of any single trade's own price
+        path, unlike a max_rate/min_rate-derived proxy computed over a
+        trade's own holding window (which conflates volatility with trade
+        duration and with the trade's own favourable/adverse excursion).
+
+        atr_pct      : ATR(atr_period) as a fraction of close - the realized
+                       volatility of the candle itself.
+        vol_baseline : trailing rolling mean of atr_pct over `baseline_window`
+                       candles, shifted by one bar so candle i's baseline
+                       never includes candle i - purely backward-looking, so
+                       classifying a trade's entry this way carries no
+                       look-ahead and no information about how that trade
+                       later played out.
+        vol_bucket   : HIGH_VOL if atr_pct is above its own trailing
+                       baseline, else LOW_VOL. Candles without enough
+                       trailing history to form a baseline are left
+                       unclassified (None).
+
+        Returns
+        -------
+        Copy of df with extra columns: atr_pct, vol_baseline, vol_bucket.
+        """
+        df = df.copy()
+        atr = cls._atr(df["high"], df["low"], df["close"], atr_period)
+        df["atr_pct"] = atr / df["close"].replace(0, np.nan)
+        baseline = df["atr_pct"].rolling(baseline_window, min_periods=min_periods).mean().shift(1)
+        df["vol_baseline"] = baseline
+        df["vol_bucket"] = np.where(df["atr_pct"] > baseline, "HIGH_VOL", "LOW_VOL")
+        df.loc[baseline.isna(), "vol_bucket"] = None
+        return df
+
     # ------------------------------------------------------------------ regime_periods
 
     @classmethod
@@ -1936,7 +1995,8 @@ class BacktestRegimeAnalyzer:
             return {
                 "trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
                 "sharpe": 0.0, "expectancy_r": 0.0, "rr": 0.0,
-                "cagr": 0.0, "total_pnl": 0.0,
+                "cagr": 0.0, "total_pnl": 0.0, "roi_pct": 0.0,
+                "max_drawdown_pct": 0.0,
             }
 
         def _pnl(t):
@@ -2004,6 +2064,31 @@ class BacktestRegimeAnalyzer:
                 if final_eq > 0:
                     cagr = (math.pow(final_eq / starting_capital, 1.0 / years) - 1.0) * 100.0
 
+        roi_pct = (total_pnl / starting_capital * 100.0) if starting_capital > 0 else 0.0
+
+        # Max drawdown, isolated to this bucket's own trades in their own
+        # chronological order (as if only these trades were taken, starting
+        # fresh from starting_capital) - mirrors the frontend's _equity/
+        # _maxDrawdown helpers used for the top-level metrics.
+        dd_pairs = []
+        for t in trades:
+            d = t.get("close_date") or t.get("open_date")
+            if not d:
+                continue
+            dd_pairs.append((str(d), _pnl(t)))
+        dd_pairs.sort(key=lambda x: x[0])
+        max_dd_pct = 0.0
+        eq = starting_capital
+        peak = starting_capital
+        for _, p in dd_pairs:
+            eq += p
+            if eq > peak:
+                peak = eq
+            if peak > 0:
+                dd_pct = (peak - eq) / peak * 100.0
+                if dd_pct > max_dd_pct:
+                    max_dd_pct = dd_pct
+
         return {
             "trades":      n,
             "win_rate":    round(win_rate,  2),
@@ -2013,6 +2098,8 @@ class BacktestRegimeAnalyzer:
             "rr":          round(rr,       3),
             "cagr":        round(cagr,     2),
             "total_pnl":   round(total_pnl, 4),
+            "roi_pct":     round(roi_pct,   2),
+            "max_drawdown_pct": round(max_dd_pct, 2),
         }
 
     # ------------------------------------------------------------------ main entry point
@@ -2120,4 +2207,123 @@ class BacktestRegimeAnalyzer:
             "per_regime_metrics": per_regime_metrics,
             "equity_series":      equity_series,
             "regime_colors":      cls.REGIME_COLORS,
+        }
+
+    # ------------------------------------------------------------------ volatility bias
+
+    @classmethod
+    def analyze_trades_by_volatility(
+        cls,
+        trades: list,
+        vol_df: "pd.DataFrame | None",
+        starting_capital: float = 1000.0,
+        trade_vol_buckets: "list[str] | None" = None,
+    ) -> Dict:
+        """
+        Group backtest trades by the AMBIENT market volatility bucket
+        (HIGH_VOL / LOW_VOL, see classify_volatility) in effect at each
+        trade's ENTRY, then compare win rate / profit factor / ROI / max
+        drawdown between the two groups - majority vote across all four
+        decides the "Volatility Bias" label.
+
+        Because vol_bucket is derived purely from prior candles relative to
+        their own trailing baseline, it carries no information about how the
+        trade itself played out (its duration, its MFE/MAE) - unlike a
+        max_rate/min_rate range computed over the trade's own holding
+        window, which is confounded with both.
+
+        Parameters
+        ----------
+        trades           : list of trade dicts from a backtest result JSON.
+        vol_df           : DataFrame with ``date`` and ``vol_bucket`` columns
+                            (output of :meth:`classify_volatility`).
+        starting_capital : Initial capital used for ROI/drawdown calculations.
+        trade_vol_buckets: Optional precomputed per-trade bucket list (ALL
+                           mode, where each trade is looked up against its
+                           own pair's volatility series).
+
+        Returns
+        -------
+        dict with keys: per_bucket_metrics, label, high_points, low_points, n
+        """
+        import bisect
+
+        no_data = (vol_df is None or len(vol_df) == 0) and trade_vol_buckets is None
+        if no_data or not trades:
+            return {
+                "per_bucket_metrics": {b: cls._metrics_for([], starting_capital) for b in cls.VOL_BUCKETS},
+                "label": "Not enough data",
+                "high_points": 0,
+                "low_points": 0,
+                "n": 0,
+            }
+
+        if trade_vol_buckets is None:
+            raw_dates = pd.to_datetime(vol_df["date"])
+            if hasattr(raw_dates.dtype, "tz") and raw_dates.dtype.tz is not None:
+                raw_dates = raw_dates.dt.tz_localize(None)
+            vol_dates = raw_dates.to_list()
+            vol_labels = vol_df["vol_bucket"].to_list()
+
+            def _lookup(dt_str: str):
+                s = str(dt_str)[:19].replace(" ", "T")
+                try:
+                    from datetime import datetime as _dt
+                    dt = _dt.fromisoformat(s)
+                except ValueError:
+                    return None
+                idx = bisect.bisect_right(vol_dates, dt) - 1
+                if idx < 0:
+                    return vol_labels[0] if vol_labels else None
+                if idx >= len(vol_labels):
+                    return vol_labels[-1]
+                return vol_labels[idx]
+
+            trade_vol_buckets = [_lookup(t.get("open_date") or "") for t in trades]
+
+        groups: Dict[str, list] = {b: [] for b in cls.VOL_BUCKETS}
+        for t, b in zip(trades, trade_vol_buckets):
+            if b in groups:
+                groups[b].append(t)
+
+        per_bucket_metrics = {b: cls._metrics_for(groups[b], starting_capital) for b in cls.VOL_BUCKETS}
+        n = len(groups["HIGH_VOL"]) + len(groups["LOW_VOL"])
+        high = per_bucket_metrics["HIGH_VOL"]
+        low = per_bucket_metrics["LOW_VOL"]
+
+        high_points = 0
+        low_points = 0
+        if n >= 20:
+            def _vote(hv, lv, higher_is_better: bool = True) -> None:
+                nonlocal high_points, low_points
+                if hv == lv:
+                    return
+                high_is_better = (hv > lv) if higher_is_better else (hv < lv)
+                if high_is_better:
+                    high_points += 1
+                else:
+                    low_points += 1
+
+            hpf = high["profit_factor"] if high["profit_factor"] is not None else 1e9
+            lpf = low["profit_factor"] if low["profit_factor"] is not None else 1e9
+            _vote(high["win_rate"], low["win_rate"])
+            _vote(hpf, lpf)
+            _vote(high["roi_pct"], low["roi_pct"])
+            _vote(high["max_drawdown_pct"], low["max_drawdown_pct"], higher_is_better=False)
+
+        if n < 20:
+            label = "Not enough data"
+        elif high_points == low_points:
+            label = "Neutral"
+        elif high_points > low_points:
+            label = "Likes Volatility"
+        else:
+            label = "Dislike Volatility, prefers calm"
+
+        return {
+            "per_bucket_metrics": per_bucket_metrics,
+            "label": label,
+            "high_points": high_points,
+            "low_points": low_points,
+            "n": n,
         }
