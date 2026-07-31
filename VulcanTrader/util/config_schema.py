@@ -466,6 +466,73 @@ CONF_SCHEMA = {
             },
             "required": ["price_side"],
         },
+        "limit_order_simulation": {
+            "description": (
+                "Backtest-only: how resting LIMIT orders are simulated. `order_types` already "
+                "says whether an order is a limit or a market order, and `unfilledtimeout` says "
+                "how long an unfilled one lives; what a candle-level backtest cannot get from "
+                "live pricing (entry_pricing/exit_pricing read an order book) is how far from "
+                "the market the order rests — that is what the offsets here supply.\n"
+                "An offset of 0 (the default) prices the order at the candle's own open, which "
+                "always fills immediately: results are then identical to a market order. A "
+                "positive offset makes the order REST on the favourable side (below the open "
+                "for a long entry, above it for a long exit); it then fills only on a candle "
+                "whose range actually reaches it, and pays `fee_maker` when it does. Entries "
+                "that never fill mean the trade never happens; exits that never fill leave the "
+                "position open for a later exit condition. Stoploss, trailing-stop and ROI "
+                "exits are unaffected — they keep filling at their own price and taker fee."
+            ),
+            "type": "object",
+            "properties": {
+                "entry_offset": {
+                    "description": (
+                        "Fraction of price a resting ENTRY limit sits below the candle open "
+                        "(above it, for shorts). E.g. 0.001 = 10 bps better than the open."
+                    ),
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 0.0,
+                },
+                "exit_offset": {
+                    "description": (
+                        "Fraction of price a resting EXIT limit sits above the candle open "
+                        "(below it, for shorts). Applies to exit-signal / custom-exit exits only."
+                    ),
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 0.0,
+                },
+                "entry_timeout_bars": {
+                    "description": (
+                        "Bars an unfilled entry order survives past the bar it was placed on "
+                        "before being cancelled (0 = fill-or-kill on that bar). Overrides the "
+                        "bar count derived from `unfilledtimeout.entry`. Omit both and the "
+                        "order rests until it fills or the strategy cancels it, which is what "
+                        "freqtrade does with no `unfilledtimeout` set."
+                    ),
+                    "type": "integer",
+                    "minimum": 0,
+                },
+                "exit_timeout_bars": {
+                    "description": (
+                        "Same, for exit orders. A timed-out exit order leaves the POSITION "
+                        "open — the exit has to be re-triggered by a later bar."
+                    ),
+                    "type": "integer",
+                    "minimum": 0,
+                },
+                "fee_maker": {
+                    "description": (
+                        "Fee paid by a fill that rested on the book. Defaults to the single "
+                        "`fee` value, which leaves results identical to an all-taker run."
+                    ),
+                    "type": "number",
+                    "minimum": 0.0,
+                },
+            },
+        },
         "custom_price_max_distance_ratio": {
             "description": "Maximum distance ratio between current and custom entry or exit price.",
             "type": "number",

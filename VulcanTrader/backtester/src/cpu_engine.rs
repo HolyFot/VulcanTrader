@@ -19,6 +19,24 @@ use super::backtest::{
     BacktestResult, ExitReason, EntryReason,
     UnifiedBacktestConfig,
 };
+use super::backtest::order_fills;
+
+/// Exits that are driven by a SIGNAL rather than by a protective price level.
+/// Only these are simulated as resting limit orders: a stoploss, trailing
+/// stop, ROI target or max-hold exit already resolves to its own fill price,
+/// and (for the stop cases) is the thing protecting the account — turning it
+/// into a might-not-fill order would leave positions open through exactly the
+/// moves the stop exists to escape. freqtrade draws the same line: only
+/// EXIT_SIGNAL / CUSTOM_EXIT / PARTIAL_EXIT get custom limit pricing in
+/// `_get_exit_for_signal`.
+#[inline]
+fn is_signal_exit(r: ExitReason) -> bool {
+    matches!(
+        r,
+        ExitReason::Signal | ExitReason::CciExit | ExitReason::RsiExit
+            | ExitReason::MacdExit | ExitReason::CustomExit
+    )
+}
 
 // =============================================================================
 // TRADING ENGINE RESULT STRUCTURES
@@ -39,6 +57,13 @@ pub struct TradingEngineResult {
     pub starting_balance: f32,
     /// Whether compounding was enabled
     pub compounding_enabled: bool,
+    /// Limit-order simulation counters, mirroring freqtrade's own
+    /// `timedout_entry_orders` / `timedout_exit_orders` backtest stats. All
+    /// zero unless a resting offset is configured (see OrderSimConfig).
+    pub entry_orders_placed: usize,
+    pub entry_orders_timedout: usize,
+    pub exit_orders_placed: usize,
+    pub exit_orders_timedout: usize,
 }
 
 impl TradingEngineResult {
@@ -50,6 +75,10 @@ impl TradingEngineResult {
             final_equity: 10000.0,
             starting_balance: 10000.0,
             compounding_enabled: true,
+            entry_orders_placed: 0,
+            entry_orders_timedout: 0,
+            exit_orders_placed: 0,
+            exit_orders_timedout: 0,
         }
     }
     
@@ -138,6 +167,55 @@ pub fn apply_overlay_to_ub_cfg(ub: &mut crate::backtest::UnifiedBacktestConfig, 
         for (k, v) in obj { if let Some(f) = v.as_f64() { roi_map.insert(k.clone(), f as f32); } }
         assign_minimal_roi(ub, &roi_map, ub.timeframe_minutes);
     }
+
+    // --- Limit-order simulation -------------------------------------------
+    // Flat keys first, then freqtrade's own nested shapes (which a caller can
+    // hand through verbatim from a bot config / IStrategy attribute), so the
+    // nested form wins when both are present.
+    str_k!("entry_order_type", ub.entry_order_type);
+    str_k!("exit_order_type", ub.exit_order_type);
+    f32_k!("entry_limit_offset", ub.entry_limit_offset);
+    f32_k!("exit_limit_offset", ub.exit_limit_offset);
+    usize_k!("entry_fill_timeout_bars", ub.entry_fill_timeout_bars);
+    usize_k!("exit_fill_timeout_bars", ub.exit_fill_timeout_bars);
+    if let Some(v) = overlay.get("limit_order_offset").and_then(Value::as_f64) {
+        ub.entry_limit_offset = v as f32;
+        ub.exit_limit_offset = v as f32;
+    }
+
+    if let Some(ot) = overlay.get("order_types").and_then(Value::as_object) {
+        if let Some(v) = ot.get("entry").and_then(Value::as_str) { ub.entry_order_type = v.to_string(); }
+        if let Some(v) = ot.get("exit").and_then(Value::as_str) { ub.exit_order_type = v.to_string(); }
+    }
+    // freqtrade's `unfilledtimeout` is in `unit` (minutes by default, or
+    // seconds); the engine counts bars, so convert with this config's own
+    // timeframe. A timeout shorter than one bar floors to 0 = fill-or-kill on
+    // the placement bar, which is the honest bar-resolution answer.
+    if let Some(ut) = overlay.get("unfilledtimeout").and_then(Value::as_object) {
+        let per_bar = ub.timeframe_minutes.max(1) as f64;
+        let unit_div = match ut.get("unit").and_then(Value::as_str) {
+            Some(u) if u.eq_ignore_ascii_case("seconds") => 60.0,
+            _ => 1.0,
+        };
+        let to_bars = |v: f64| -> usize { ((v / unit_div) / per_bar).floor().max(0.0) as usize };
+        if let Some(v) = ut.get("entry").and_then(Value::as_f64) { ub.entry_fill_timeout_bars = to_bars(v); }
+        if let Some(v) = ut.get("exit").and_then(Value::as_f64) { ub.exit_fill_timeout_bars = to_bars(v); }
+    }
+}
+
+/// Copy a StrategyConfig's limit-order settings into the flat scalars the
+/// engine loop reads. Kept in one place because all four `run_*` entry points
+/// build their UnifiedBacktestConfig the same way.
+pub fn apply_order_sim_to_ub_cfg(
+    ub: &mut crate::backtest::UnifiedBacktestConfig,
+    cfg: &super::backtest::StrategyConfig,
+) {
+    ub.entry_order_type = cfg.entry_order.order_type.as_str().to_string();
+    ub.entry_limit_offset = cfg.entry_order.offset;
+    ub.entry_fill_timeout_bars = cfg.entry_order.timeout_bars;
+    ub.exit_order_type = cfg.exit_order.order_type.as_str().to_string();
+    ub.exit_limit_offset = cfg.exit_order.offset;
+    ub.exit_fill_timeout_bars = cfg.exit_order.timeout_bars;
 }
 
 pub fn assign_minimal_roi(
@@ -260,6 +338,7 @@ pub fn run_strategy_backtest(
     ub_cfg.atr_stop_enabled = cfg.atr_stop_enabled;
     ub_cfg.atr_stop_multiplier = cfg.atr_stop_multiplier;
     ub_cfg.entry_edge_filter = cfg.entry_edge_filter;
+    apply_order_sim_to_ub_cfg(&mut ub_cfg, &cfg);
     assign_minimal_roi(&mut ub_cfg, &cfg.minimal_roi, tf_min);
     ub_cfg.starting_balance = initial_capital;
     if cfg.ecp_enabled { ub_cfg.ecp_mode = cfg.ecp_mode.clone(); }
@@ -426,6 +505,7 @@ pub fn run_strategy_backtest_precomputed(
     ub_cfg.atr_stop_enabled = cfg.atr_stop_enabled;
     ub_cfg.atr_stop_multiplier = cfg.atr_stop_multiplier;
     ub_cfg.entry_edge_filter = cfg.entry_edge_filter;
+    apply_order_sim_to_ub_cfg(&mut ub_cfg, &cfg);
     assign_minimal_roi(&mut ub_cfg, &cfg.minimal_roi, tf_min);
     ub_cfg.starting_balance = initial_capital;
     if cfg.ecp_enabled { ub_cfg.ecp_mode = cfg.ecp_mode.clone(); }
@@ -503,6 +583,12 @@ fn trading_result_to_json(
             "max_consecutive_wins": 0, "max_consecutive_losses": 0,
             "holding_avg_minutes": 0.0, "winner_holding_avg_minutes": 0.0, "loser_holding_avg_minutes": 0.0,
             "trade_count_long": 0, "trade_count_short": 0, "backtest_days": crate::metrics::days_period(n_bars, timeframe_minutes),
+            // Carried on the empty result too: "every order expired unfilled"
+            // is exactly the case where these counters explain the zero.
+            "entry_orders_placed": result.entry_orders_placed,
+            "timedout_entry_orders": result.entry_orders_timedout,
+            "exit_orders_placed": result.exit_orders_placed,
+            "timedout_exit_orders": result.exit_orders_timedout,
         });
     }
 
@@ -646,6 +732,13 @@ fn trading_result_to_json(
         obj.insert("trade_count_long".into(), serde_json::json!(trade_count_long));
         obj.insert("trade_count_short".into(), serde_json::json!(trade_count_short));
         obj.insert("backtest_days".into(), serde_json::json!(ext.backtest_days));
+        // Limit-order simulation counters (freqtrade's own
+        // timedout_entry_orders / timedout_exit_orders). Zero unless a
+        // resting offset is configured.
+        obj.insert("entry_orders_placed".into(), serde_json::json!(result.entry_orders_placed));
+        obj.insert("timedout_entry_orders".into(), serde_json::json!(result.entry_orders_timedout));
+        obj.insert("exit_orders_placed".into(), serde_json::json!(result.exit_orders_placed));
+        obj.insert("timedout_exit_orders".into(), serde_json::json!(result.exit_orders_timedout));
     }
     out
 }
@@ -733,6 +826,25 @@ fn unified_backtest_pythonstyle(
     let leverage = config.leverage_default;
     let use_dollar_fees = config.fee_mode.eq_ignore_ascii_case("dollar");
     let fee_rate = if use_dollar_fees { 0.0 } else { config.fee_taker };
+    // --- Limit-order simulation -------------------------------------------
+    // With the defaults (limit-at-open, zero offset) every order is
+    // immediately marketable, so it fills on its own placement bar at that
+    // bar's open and pays taker — byte-for-byte the pre-limit-order
+    // behaviour. A non-zero offset is what makes an order REST: it then only
+    // fills on a bar that actually trades through it, and pays maker when it
+    // does.
+    let entry_order = config.to_entry_order();
+    let exit_order = config.to_exit_order();
+    let fee_maker_rate = if use_dollar_fees { 0.0 } else { config.fee_maker };
+    // Entry-side fee is fixed by the order type: a resting entry is always a
+    // maker fill (the market came to it), a marketable one always taker.
+    let entry_fee = if entry_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let limit_exit_fee = if exit_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let entry_fee_dollars = if entry_order.is_maker() {
+        config.fee_dollars_maker_per_contract
+    } else {
+        config.fee_dollars_taker_per_contract
+    };
     let contract_mult = 1.0_f32;
     // eval_start_bar (default 0) is the first bar a trade may actually FILL
     // on, separate from startup_candle_count's indicator-warmup role — see
@@ -763,6 +875,24 @@ fn unified_backtest_pythonstyle(
     let mut trade_leverage = leverage;
     let mut current_entry_reason = EntryReason::Signal;
 
+    // --- Resting-order state ----------------------------------------------
+    // At most one entry order and one exit order can be live at a time
+    // (freqtrade: "assumption: there can't be multiple open entry orders at
+    // any given time", and one position per pair). Only ever populated when
+    // the corresponding side is configured to rest.
+    let mut pending_entry = false;
+    let mut pending_entry_price = 0.0f32;
+    let mut pending_entry_bar = 0usize;
+    let mut pending_entry_reason = EntryReason::Signal;
+    let mut pending_exit = false;
+    let mut pending_exit_price = 0.0f32;
+    let mut pending_exit_bar = 0usize;
+    let mut pending_exit_reason = ExitReason::Signal;
+    let mut entry_orders_placed = 0usize;
+    let mut entry_orders_timedout = 0usize;
+    let mut exit_orders_placed = 0usize;
+    let mut exit_orders_timedout = 0usize;
+
     // Unified ratcheting stop tracker — Mode2's core structural difference
     // from Mode1's separately-recomputed-each-bar effective_sl/trailing_stop_price.
     let mut stop_loss_price = 0.0f32;
@@ -789,6 +919,15 @@ fn unified_backtest_pythonstyle(
     // freqtrade re-entered on literally the bar after each exit — an edge
     // requirement would have missed that entirely.
     for i in (start_idx + 1)..n {
+        // --- 1. Time out a still-unfilled entry order -----------------------
+        // freqtrade's `backtest_loop` step 1 (`manage_open_orders`) runs
+        // BEFORE this bar's entry processing, so an order that expires on bar
+        // i frees the slot for a fresh order on that same bar.
+        if pending_entry && i.saturating_sub(pending_entry_bar) > entry_order.timeout_bars {
+            pending_entry = false;
+            entry_orders_timedout += 1;
+        }
+
         let signal_active = entry_signals[i] > 0;
         let no_exit_conflict = exit_signals[i] == 0;
         // Optional per-strategy throttle on top of freqtrade's real
@@ -798,20 +937,41 @@ fn unified_backtest_pythonstyle(
             crate::backtest::EntryEdgeFilter::Full => i == 0 || entry_signals[i - 1] == 0,
             crate::backtest::EntryEdgeFilter::Cooldown(bars) => i >= last_exit_idx + bars,
         };
-        let can_enter = !in_position && signal_active && no_exit_conflict && i > last_exit_idx && edge_ok;
+        let can_enter = !in_position && !pending_entry && signal_active && no_exit_conflict
+            && i > last_exit_idx && edge_ok;
 
+        // --- 2. Place the entry order --------------------------------------
         if can_enter {
+            pending_entry = true;
+            pending_entry_price = entry_order.entry_price(open_prices[i], is_long);
+            pending_entry_bar = i;
+            // Attributed to the bar the order was PLACED on — that's the bar
+            // whose indicators actually produced the decision, even if the
+            // fill lands later.
+            pending_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, is_long);
+            entry_orders_placed += 1;
+        }
+
+        // --- 3. Fill a live entry order ------------------------------------
+        // Deliberately not `else`: freqtrade's step 3 (`_try_close_open_order`)
+        // runs on the same candle the order was created in, so a marketable
+        // order (market, or limit with no offset) still fills instantly at
+        // this bar's open, exactly as before. An order that rests only fills
+        // on a bar whose range actually reaches it.
+        if pending_entry && order_fills(pending_entry_price, low_prices[i], high_prices[i]) {
+            pending_entry = false;
             in_position = true;
-            current_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, is_long);
+            current_entry_reason = pending_entry_reason;
 
             trade_leverage = leverage.min(config.leverage_max).max(0.1);
             trade_position_size = base_position_size.min(effective_max_trade).max(0.0);
 
-            base_price = open_prices[i]; // fill at this bar's own open, not its close
-            entry_price = if is_long { base_price * (1.0 + fee_rate) } else { base_price * (1.0 - fee_rate) };
+            base_price = pending_entry_price;
+            entry_price = if is_long { base_price * (1.0 + entry_fee) } else { base_price * (1.0 - entry_fee) };
             entry_idx = i;
             trailing_activated = false;
             stop_is_trailing = false;
+            pending_exit = false;
             // Initial stop is the static base stoploss (freqtrade sets this
             // at entry before any custom_stoploss call can tighten it).
             stop_loss_price = if is_long { base_price * (1.0 + config.base_stoploss / trade_leverage) }
@@ -834,10 +994,17 @@ fn unified_backtest_pythonstyle(
             // raw return can be a few bps above a target that the real,
             // fee-inclusive profit never actually reaches. Mirror it exactly
             // rather than approximating with a flat subtraction.
+            //
+            // The OPEN leg carries this trade's actual entry fee (maker when
+            // the entry rested); the CLOSE leg stays on the taker rate,
+            // because what these thresholds gate — trailing activation and
+            // ROI — are protective/market exits that pay taker. A maker entry
+            // legitimately shifts the threshold slightly: it really did cost
+            // less to get in.
             let leveraged_bound_return = if is_long {
-                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + fee_rate)) - 1.0) * trade_leverage
+                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + entry_fee)) - 1.0) * trade_leverage
             } else {
-                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - fee_rate))) * trade_leverage
+                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - entry_fee))) * trade_leverage
             };
 
             // freqtrade's `dir_correct` gate (strategy/interface.py
@@ -946,8 +1113,66 @@ fn unified_backtest_pythonstyle(
                 }
             }
 
+            // --- Resting exit orders -------------------------------------
+            // A signal-driven exit under a resting exit config becomes an
+            // ORDER rather than an immediate fill: priced `exit_limit_offset`
+            // on the favourable side of this bar's open, it closes the trade
+            // only on a bar that actually trades through it.
+            //
+            // Re-deciding every bar (rather than freezing the first order in
+            // place) is freqtrade's own behaviour: `_check_trade_exit` runs on
+            // every bar the position is open, and `handle_similar_order`
+            // cancels-and-replaces a resting order whenever the newly-computed
+            // price differs — which also restarts its timeout clock. The same
+            // re-decision is what lets a stoploss/ROI trigger supersede a
+            // resting exit order mid-flight instead of being shut out by it.
+            let mut fill_pending_exit = false;
+            if should_exit && is_signal_exit(exit_reason) && exit_order.can_rest() {
+                let mut px = exit_order.exit_price(open_prices[i], is_long);
+                // freqtrade: "We can't place orders lower than current low"
+                // (long) / higher than the current high (short) — such an
+                // order would have filled instantly in live trading. A no-op
+                // for any favourable offset, kept for correctness at 0.
+                px = if is_long { px.max(low_prices[i]) } else { px.min(high_prices[i]) };
+                if pending_exit && pending_exit_price == px {
+                    // Identical order already resting: freqtrade's
+                    // handle_similar_order leaves it (and its clock) alone.
+                } else {
+                    pending_exit = true;
+                    pending_exit_price = px;
+                    pending_exit_bar = i;
+                    pending_exit_reason = exit_reason;
+                    exit_orders_placed += 1;
+                }
+                if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    fill_pending_exit = true;
+                } else {
+                    should_exit = false; // rests; the position stays open
+                }
+            } else if should_exit {
+                pending_exit = false; // protective exit cancels any resting order
+            }
+
+            // A resting exit order placed on an earlier bar: time it out, or
+            // fill it if this bar reaches it. freqtrade's timed-out exit
+            // "closes the exit order and retries exiting on the next signal",
+            // leaving the position itself open.
+            if !should_exit && pending_exit {
+                if i.saturating_sub(pending_exit_bar) > exit_order.timeout_bars {
+                    pending_exit = false;
+                    exit_orders_timedout += 1;
+                } else if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    should_exit = true;
+                    fill_pending_exit = true;
+                    exit_reason = pending_exit_reason;
+                }
+            }
+
             if should_exit {
                 let base_exit_price = match exit_reason {
+                    // A resting limit order fills at its own price, whatever
+                    // condition originally placed it.
+                    _ if fill_pending_exit => pending_exit_price,
                     ExitReason::TrailingStop if time_in_position == 0 => {
                         // freqtrade's documented pessimistic same-candle case: assume
                         // price just barely armed the trail (reached the activation
@@ -997,9 +1222,12 @@ fn unified_backtest_pythonstyle(
                         // fee-sized amount (~a few bps, but systematic across
                         // every ROI-tagged trade, and the dominant source of
                         // ROI-trade profit mismatches against the Python engine).
+                        // fee_open is this trade's own entry fee (maker when it
+                        // rested); fee_close stays taker — an ROI exit is a
+                        // protective/market fill, never a resting order.
                         let side_1: f32 = if is_long { 1.0 } else { -1.0 };
                         let roi_rate = base_price * roi_pct;
-                        let open_fee_rate = side_1 * base_price * (1.0 + side_1 * fee_rate);
+                        let open_fee_rate = side_1 * base_price * (1.0 + side_1 * entry_fee);
                         let raw_close = -(roi_rate + open_fee_rate) / (fee_rate - side_1);
                         // Can't fill outside the candle's own actual range.
                         raw_close.clamp(low_prices[i].min(high_prices[i]), low_prices[i].max(high_prices[i]))
@@ -1011,7 +1239,10 @@ fn unified_backtest_pythonstyle(
                     _ => open_prices[i],
                 };
 
-                let exit_price = if is_long { base_exit_price * (1.0 - fee_rate) } else { base_exit_price * (1.0 + fee_rate) };
+                // Maker only when this exit actually filled as a resting
+                // order; every protective exit pays taker.
+                let exit_fee = if fill_pending_exit { limit_exit_fee } else { fee_rate };
+                let exit_price = if is_long { base_exit_price * (1.0 - exit_fee) } else { base_exit_price * (1.0 + exit_fee) };
                 let raw_profit = if is_long { (exit_price - entry_price) / entry_price } else { (entry_price - exit_price) / entry_price };
                 let mut leveraged_profit = raw_profit * trade_leverage;
 
@@ -1022,7 +1253,16 @@ fn unified_backtest_pythonstyle(
                     let notional = if config.compounding_enabled { trade_position_size }
                         else { (config.starting_balance * config.tradable_balance_ratio).min(effective_max_trade) };
                     let contracts = (notional / (entry_price * contract_mult)).ceil().max(1.0);
-                    let fees = 2.0 * contracts * config.fee_dollars_taker_per_contract;
+                    // Per-side dollar fees rather than 2x taker: a resting
+                    // fill is charged the maker rate on that side. Identical
+                    // to the old `2.0 * contracts * taker` whenever both sides
+                    // are taker fills, which is the default.
+                    let exit_fee_dollars = if fill_pending_exit {
+                        config.fee_dollars_maker_per_contract
+                    } else {
+                        config.fee_dollars_taker_per_contract
+                    };
+                    let fees = contracts * (entry_fee_dollars + exit_fee_dollars);
                     pnl_amount -= fees;
                     if notional > 0.0 { leveraged_profit -= fees / notional; }
                 }
@@ -1040,6 +1280,7 @@ fn unified_backtest_pythonstyle(
                 leverages_used.push(trade_leverage);
                 durations.push((i - entry_idx) as i32);
                 in_position = false;
+                pending_exit = false;
                 last_exit_idx = i;
             }
         }
@@ -1051,12 +1292,19 @@ fn unified_backtest_pythonstyle(
         exit_reasons, entry_reasons, leverages: leverages_used, durations,
     };
 
+    // An order still resting when the data runs out never filled — count it
+    // with the timeouts rather than silently dropping it.
+    if pending_entry { entry_orders_timedout += 1; }
+    if pending_exit { exit_orders_timedout += 1; }
+
     TradingEngineResult {
         backtest_result: result,
         ecp_mode: config.ecp_mode.clone(),
         time_decay_adjustments: time_decay_count,
         final_equity: current_equity, starting_balance: config.starting_balance,
         compounding_enabled: config.compounding_enabled,
+        entry_orders_placed, entry_orders_timedout,
+        exit_orders_placed, exit_orders_timedout,
     }
 }
 
@@ -1088,6 +1336,18 @@ fn unified_backtest_pythonstyle_joint(
     let leverage = config.leverage_default;
     let use_dollar_fees = config.fee_mode.eq_ignore_ascii_case("dollar");
     let fee_rate = if use_dollar_fees { 0.0 } else { config.fee_taker };
+    // Limit-order simulation — see unified_backtest_pythonstyle for the full
+    // rationale; this loop mirrors it with `is_long` chosen per trade.
+    let entry_order = config.to_entry_order();
+    let exit_order = config.to_exit_order();
+    let fee_maker_rate = if use_dollar_fees { 0.0 } else { config.fee_maker };
+    let entry_fee = if entry_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let limit_exit_fee = if exit_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let entry_fee_dollars = if entry_order.is_maker() {
+        config.fee_dollars_maker_per_contract
+    } else {
+        config.fee_dollars_taker_per_contract
+    };
     let contract_mult = 1.0_f32;
     let start_idx = config.startup_candle_count.max(config.eval_start_bar.saturating_sub(1)).min(n.saturating_sub(1));
 
@@ -1120,10 +1380,32 @@ fn unified_backtest_pythonstyle_joint(
     let mut stop_is_trailing = false;
     let mut trailing_activated = false;
 
+    // Resting-order state. The pending entry carries its own direction: an
+    // order placed off a long signal stays a long order even if the short
+    // signal takes over before it fills.
+    let mut pending_entry = false;
+    let mut pending_entry_price = 0.0f32;
+    let mut pending_entry_bar = 0usize;
+    let mut pending_entry_is_long = true;
+    let mut pending_entry_reason = EntryReason::Signal;
+    let mut pending_exit = false;
+    let mut pending_exit_price = 0.0f32;
+    let mut pending_exit_bar = 0usize;
+    let mut pending_exit_reason = ExitReason::Signal;
+    let mut entry_orders_placed = 0usize;
+    let mut entry_orders_timedout = 0usize;
+    let mut exit_orders_placed = 0usize;
+    let mut exit_orders_timedout = 0usize;
+
     let time_decay_count = 0usize;
     let mut last_exit_idx: usize = 0;
 
     for i in (start_idx + 1)..n {
+        if pending_entry && i.saturating_sub(pending_entry_bar) > entry_order.timeout_bars {
+            pending_entry = false;
+            entry_orders_timedout += 1;
+        }
+
         if !in_position {
             let long_active = long_entry_signals[i] > 0 && long_exit_signals[i] == 0;
             let short_active = short_entry_signals[i] > 0 && short_exit_signals[i] == 0;
@@ -1144,21 +1426,32 @@ fn unified_backtest_pythonstyle_joint(
                 }
                 crate::backtest::EntryEdgeFilter::Cooldown(bars) => i >= last_exit_idx + bars,
             };
-            let can_enter = want_entry && i > last_exit_idx && edge_ok;
+            let can_enter = want_entry && !pending_entry && i > last_exit_idx && edge_ok;
 
             if can_enter {
-                is_long = entry_is_long;
+                pending_entry = true;
+                pending_entry_is_long = entry_is_long;
+                pending_entry_price = entry_order.entry_price(open_prices[i], entry_is_long);
+                pending_entry_bar = i;
+                pending_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, entry_is_long);
+                entry_orders_placed += 1;
+            }
+
+            if pending_entry && order_fills(pending_entry_price, low_prices[i], high_prices[i]) {
+                pending_entry = false;
+                is_long = pending_entry_is_long;
                 in_position = true;
-                current_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, is_long);
+                current_entry_reason = pending_entry_reason;
 
                 trade_leverage = leverage.min(config.leverage_max).max(0.1);
                 trade_position_size = base_position_size.min(effective_max_trade).max(0.0);
 
-                base_price = open_prices[i];
-                entry_price = if is_long { base_price * (1.0 + fee_rate) } else { base_price * (1.0 - fee_rate) };
+                base_price = pending_entry_price;
+                entry_price = if is_long { base_price * (1.0 + entry_fee) } else { base_price * (1.0 - entry_fee) };
                 entry_idx = i;
                 trailing_activated = false;
                 stop_is_trailing = false;
+                pending_exit = false;
                 stop_loss_price = if is_long { base_price * (1.0 + config.base_stoploss / trade_leverage) }
                                   else { base_price * (1.0 - config.base_stoploss / trade_leverage) };
             }
@@ -1169,9 +1462,9 @@ fn unified_backtest_pythonstyle_joint(
             let time_in_position = i - entry_idx;
             let bound = if is_long { high_prices[i] } else { low_prices[i] };
             let leveraged_bound_return = if is_long {
-                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + fee_rate)) - 1.0) * trade_leverage
+                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + entry_fee)) - 1.0) * trade_leverage
             } else {
-                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - fee_rate))) * trade_leverage
+                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - entry_fee))) * trade_leverage
             };
 
             let dir_correct = if is_long { stop_loss_price < low_prices[i] } else { stop_loss_price > high_prices[i] };
@@ -1234,8 +1527,42 @@ fn unified_backtest_pythonstyle_joint(
             if !should_exit && macd_exit_triggered { should_exit = true; exit_reason = ExitReason::MacdExit; }
             if !should_exit && max_hold_triggered { should_exit = true; exit_reason = ExitReason::MaxHoldPeriod; }
 
+            // Resting exit orders — identical lifecycle to
+            // unified_backtest_pythonstyle's; see the commentary there.
+            let mut fill_pending_exit = false;
+            if should_exit && is_signal_exit(exit_reason) && exit_order.can_rest() {
+                let mut px = exit_order.exit_price(open_prices[i], is_long);
+                px = if is_long { px.max(low_prices[i]) } else { px.min(high_prices[i]) };
+                if !(pending_exit && pending_exit_price == px) {
+                    pending_exit = true;
+                    pending_exit_price = px;
+                    pending_exit_bar = i;
+                    pending_exit_reason = exit_reason;
+                    exit_orders_placed += 1;
+                }
+                if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    fill_pending_exit = true;
+                } else {
+                    should_exit = false;
+                }
+            } else if should_exit {
+                pending_exit = false;
+            }
+
+            if !should_exit && pending_exit {
+                if i.saturating_sub(pending_exit_bar) > exit_order.timeout_bars {
+                    pending_exit = false;
+                    exit_orders_timedout += 1;
+                } else if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    should_exit = true;
+                    fill_pending_exit = true;
+                    exit_reason = pending_exit_reason;
+                }
+            }
+
             if should_exit {
                 let base_exit_price = match exit_reason {
+                    _ if fill_pending_exit => pending_exit_price,
                     ExitReason::TrailingStop if time_in_position == 0 => {
                         let trail_dist = config.trailing_offset / trade_leverage;
                         if is_long {
@@ -1256,7 +1583,8 @@ fn unified_backtest_pythonstyle_joint(
                     _ => open_prices[i],
                 };
 
-                let exit_price = if is_long { base_exit_price * (1.0 - fee_rate) } else { base_exit_price * (1.0 + fee_rate) };
+                let exit_fee = if fill_pending_exit { limit_exit_fee } else { fee_rate };
+                let exit_price = if is_long { base_exit_price * (1.0 - exit_fee) } else { base_exit_price * (1.0 + exit_fee) };
                 let raw_profit = if is_long { (exit_price - entry_price) / entry_price } else { (entry_price - exit_price) / entry_price };
                 let mut leveraged_profit = raw_profit * trade_leverage;
 
@@ -1267,7 +1595,12 @@ fn unified_backtest_pythonstyle_joint(
                     let notional = if config.compounding_enabled { trade_position_size }
                         else { (config.starting_balance * config.tradable_balance_ratio).min(effective_max_trade) };
                     let contracts = (notional / (entry_price * contract_mult)).ceil().max(1.0);
-                    let fees = 2.0 * contracts * config.fee_dollars_taker_per_contract;
+                    let exit_fee_dollars = if fill_pending_exit {
+                        config.fee_dollars_maker_per_contract
+                    } else {
+                        config.fee_dollars_taker_per_contract
+                    };
+                    let fees = contracts * (entry_fee_dollars + exit_fee_dollars);
                     pnl_amount -= fees;
                     if notional > 0.0 { leveraged_profit -= fees / notional; }
                 }
@@ -1286,6 +1619,7 @@ fn unified_backtest_pythonstyle_joint(
                 durations.push((i - entry_idx) as i32);
                 is_long_vec.push(is_long);
                 in_position = false;
+                pending_exit = false;
                 last_exit_idx = i;
 
                 // freqtrade calls backtest_loop up to twice per bar
@@ -1308,21 +1642,34 @@ fn unified_backtest_pythonstyle_joint(
                     crate::backtest::EntryEdgeFilter::Cooldown(bars) => bars == 0,
                 };
 
+                // The reversal entry is an ORDER like any other: it fills on
+                // this same bar when marketable, and otherwise rests into the
+                // following bars exactly like a normally-placed one.
                 if reversal_active && reversal_edge_ok {
-                    is_long = reversal_is_long;
-                    in_position = true;
-                    current_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, is_long);
+                    pending_entry = true;
+                    pending_entry_is_long = reversal_is_long;
+                    pending_entry_price = entry_order.entry_price(open_prices[i], reversal_is_long);
+                    pending_entry_bar = i;
+                    pending_entry_reason = determine_entry_reason(rsi, cci, macd_hist, bb_pos, i, reversal_is_long);
+                    entry_orders_placed += 1;
 
-                    trade_leverage = leverage.min(config.leverage_max).max(0.1);
-                    trade_position_size = base_position_size.min(effective_max_trade).max(0.0);
+                    if order_fills(pending_entry_price, low_prices[i], high_prices[i]) {
+                        pending_entry = false;
+                        is_long = reversal_is_long;
+                        in_position = true;
+                        current_entry_reason = pending_entry_reason;
 
-                    base_price = open_prices[i];
-                    entry_price = if is_long { base_price * (1.0 + fee_rate) } else { base_price * (1.0 - fee_rate) };
-                    entry_idx = i;
-                    trailing_activated = false;
-                    stop_is_trailing = false;
-                    stop_loss_price = if is_long { base_price * (1.0 + config.base_stoploss / trade_leverage) }
-                                      else { base_price * (1.0 - config.base_stoploss / trade_leverage) };
+                        trade_leverage = leverage.min(config.leverage_max).max(0.1);
+                        trade_position_size = base_position_size.min(effective_max_trade).max(0.0);
+
+                        base_price = pending_entry_price;
+                        entry_price = if is_long { base_price * (1.0 + entry_fee) } else { base_price * (1.0 - entry_fee) };
+                        entry_idx = i;
+                        trailing_activated = false;
+                        stop_is_trailing = false;
+                        stop_loss_price = if is_long { base_price * (1.0 + config.base_stoploss / trade_leverage) }
+                                          else { base_price * (1.0 - config.base_stoploss / trade_leverage) };
+                    }
                 }
             }
         }
@@ -1335,12 +1682,17 @@ fn unified_backtest_pythonstyle_joint(
     };
     let _ = is_long_vec; // available for a future per-trade direction field if needed
 
+    if pending_entry { entry_orders_timedout += 1; }
+    if pending_exit { exit_orders_timedout += 1; }
+
     TradingEngineResult {
         backtest_result: result,
         ecp_mode: config.ecp_mode.clone(),
         time_decay_adjustments: time_decay_count,
         final_equity: current_equity, starting_balance: config.starting_balance,
         compounding_enabled: config.compounding_enabled,
+        entry_orders_placed, entry_orders_timedout,
+        exit_orders_placed, exit_orders_timedout,
     }
 }
 
@@ -1457,6 +1809,17 @@ fn sweep_dir(
     let leverage = config.leverage_default;
     let use_dollar_fees = config.fee_mode.eq_ignore_ascii_case("dollar");
     let fee_rate = if use_dollar_fees { 0.0 } else { config.fee_taker };
+    // Limit-order simulation — see unified_backtest_pythonstyle.
+    let entry_order = config.to_entry_order();
+    let exit_order = config.to_exit_order();
+    let fee_maker_rate = if use_dollar_fees { 0.0 } else { config.fee_maker };
+    let entry_fee = if entry_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let limit_exit_fee = if exit_order.is_maker() { fee_maker_rate } else { fee_rate };
+    let entry_fee_dollars = if entry_order.is_maker() {
+        config.fee_dollars_maker_per_contract
+    } else {
+        config.fee_dollars_taker_per_contract
+    };
     let start_idx = config.startup_candle_count.max(config.eval_start_bar.saturating_sub(1)).min(n.saturating_sub(1));
     let effective_max_trade = config.max_trade_amount.min(config.max_open_capital);
 
@@ -1474,6 +1837,14 @@ fn sweep_dir(
     let mut stop_is_trailing  = false;
     let mut trailing_activated = false;
 
+    let mut pending_entry = false;
+    let mut pending_entry_price = 0.0f32;
+    let mut pending_entry_bar = 0usize;
+    let mut pending_exit = false;
+    let mut pending_exit_price = 0.0f32;
+    let mut pending_exit_bar = 0usize;
+    let mut pending_exit_reason = ExitReason::Signal;
+
     let mut last_exit_idx: usize = 0;
 
     let mut ds = DirStats { total_trades: 0, wins: 0, gross_profit: 0.0, gross_loss: 0.0,
@@ -1485,6 +1856,10 @@ fn sweep_dir(
     if first >= n { return ds; }
 
     for i in first..n {
+        if pending_entry && i.saturating_sub(pending_entry_bar) > entry_order.timeout_bars {
+            pending_entry = false;
+        }
+
         let signal_active = entry_signals[i] > 0;
         let no_exit_conflict = exit_signals[i] == 0;
         let edge_ok = match config.entry_edge_filter {
@@ -1492,19 +1867,28 @@ fn sweep_dir(
             crate::backtest::EntryEdgeFilter::Full => i == 0 || entry_signals[i - 1] == 0,
             crate::backtest::EntryEdgeFilter::Cooldown(bars) => i >= last_exit_idx + bars,
         };
-        let can_enter = !in_position && signal_active && no_exit_conflict && i > last_exit_idx && edge_ok;
+        let can_enter = !in_position && !pending_entry && signal_active && no_exit_conflict
+            && i > last_exit_idx && edge_ok;
 
         if can_enter {
+            pending_entry = true;
+            pending_entry_price = entry_order.entry_price(open_prices[i], is_long);
+            pending_entry_bar = i;
+        }
+
+        if pending_entry && order_fills(pending_entry_price, low_prices[i], high_prices[i]) {
+            pending_entry = false;
             in_position = true;
 
             trade_leverage = leverage.min(config.leverage_max).max(0.1);
             trade_position_size = base_position_size.min(effective_max_trade).max(0.0);
 
-            base_price = open_prices[i];
-            entry_price = if is_long { base_price * (1.0 + fee_rate) } else { base_price * (1.0 - fee_rate) };
+            base_price = pending_entry_price;
+            entry_price = if is_long { base_price * (1.0 + entry_fee) } else { base_price * (1.0 - entry_fee) };
             entry_idx = i;
             trailing_activated = false;
             stop_is_trailing = false;
+            pending_exit = false;
             stop_loss_price = if is_long { base_price * (1.0 + config.base_stoploss / trade_leverage) }
                               else { base_price * (1.0 - config.base_stoploss / trade_leverage) };
         }
@@ -1513,9 +1897,9 @@ fn sweep_dir(
             let time_in_position = i - entry_idx;
             let bound = if is_long { high_prices[i] } else { low_prices[i] };
             let leveraged_bound_return = if is_long {
-                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + fee_rate)) - 1.0) * trade_leverage
+                ((bound * (1.0 - fee_rate)) / (base_price * (1.0 + entry_fee)) - 1.0) * trade_leverage
             } else {
-                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - fee_rate))) * trade_leverage
+                (1.0 - (bound * (1.0 + fee_rate)) / (base_price * (1.0 - entry_fee))) * trade_leverage
             };
 
             let dir_correct = if is_long { stop_loss_price < low_prices[i] } else { stop_loss_price > high_prices[i] };
@@ -1578,8 +1962,42 @@ fn sweep_dir(
             if !should_exit && macd_exit_triggered { should_exit = true; exit_reason = ExitReason::MacdExit; }
             if !should_exit && max_hold_triggered { should_exit = true; exit_reason = ExitReason::MaxHoldPeriod; }
 
+            // Resting exit orders — identical lifecycle to
+            // unified_backtest_pythonstyle's; see the commentary there. (This
+            // path drops the order counters: sweeps only read the summary
+            // scalars, and DirStats deliberately carries nothing per-trade.)
+            let mut fill_pending_exit = false;
+            if should_exit && is_signal_exit(exit_reason) && exit_order.can_rest() {
+                let mut px = exit_order.exit_price(open_prices[i], is_long);
+                px = if is_long { px.max(low_prices[i]) } else { px.min(high_prices[i]) };
+                if !(pending_exit && pending_exit_price == px) {
+                    pending_exit = true;
+                    pending_exit_price = px;
+                    pending_exit_bar = i;
+                    pending_exit_reason = exit_reason;
+                }
+                if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    fill_pending_exit = true;
+                } else {
+                    should_exit = false;
+                }
+            } else if should_exit {
+                pending_exit = false;
+            }
+
+            if !should_exit && pending_exit {
+                if i.saturating_sub(pending_exit_bar) > exit_order.timeout_bars {
+                    pending_exit = false;
+                } else if order_fills(pending_exit_price, low_prices[i], high_prices[i]) {
+                    should_exit = true;
+                    fill_pending_exit = true;
+                    exit_reason = pending_exit_reason;
+                }
+            }
+
             if should_exit {
                 let base_exit_price = match exit_reason {
+                    _ if fill_pending_exit => pending_exit_price,
                     ExitReason::TrailingStop if time_in_position == 0 => {
                         let trail_dist = config.trailing_offset / trade_leverage;
                         if is_long {
@@ -1600,7 +2018,8 @@ fn sweep_dir(
                     _ => open_prices[i],
                 };
 
-                let exit_price = if is_long { base_exit_price * (1.0 - fee_rate) } else { base_exit_price * (1.0 + fee_rate) };
+                let exit_fee = if fill_pending_exit { limit_exit_fee } else { fee_rate };
+                let exit_price = if is_long { base_exit_price * (1.0 - exit_fee) } else { base_exit_price * (1.0 + exit_fee) };
                 let raw_profit = if is_long { (exit_price - entry_price) / entry_price } else { (entry_price - exit_price) / entry_price };
                 let mut lp = raw_profit * trade_leverage;
                 let mut pnl = if config.compounding_enabled { trade_position_size * lp }
@@ -1610,7 +2029,12 @@ fn sweep_dir(
                     let notional = if config.compounding_enabled { trade_position_size }
                         else { (config.starting_balance * config.tradable_balance_ratio).min(effective_max_trade) };
                     let contracts = (notional / entry_price).ceil().max(1.0);
-                    let fees = 2.0 * contracts * config.fee_dollars_taker_per_contract;
+                    let exit_fee_dollars = if fill_pending_exit {
+                        config.fee_dollars_maker_per_contract
+                    } else {
+                        config.fee_dollars_taker_per_contract
+                    };
+                    let fees = contracts * (entry_fee_dollars + exit_fee_dollars);
                     pnl -= fees;
                     if notional > 0.0 { lp -= fees / notional; }
                 }
@@ -1629,6 +2053,7 @@ fn sweep_dir(
                 let dd = if peak > 0.0 { (peak - bal) / peak } else { 0.0 };
                 if dd > ds.max_dd { ds.max_dd = dd; }
                 in_position = false;
+                pending_exit = false;
                 last_exit_idx = i;
             }
         }
@@ -1852,11 +2277,27 @@ pub fn run_strategy_backtest_summary(
     let want_short = want_short_raw && !cfg.is_spot();
     let want_long  = direction == "long" || direction == "both" || (want_short_raw && cfg.is_spot());
 
-    // sweep_dir mirrors Mode2 semantics, which needs exit signals shifted
-    // one bar (freqtrade's real _get_ohlcv_as_lists .shift(1) - see the
-    // identical shift/rationale in unified_backtest's dispatcher). Applied
-    // once here rather than per sweep_dir call, since these arrays are
-    // shared across every parameter combo.
+    // sweep_dir mirrors Mode2 semantics, which needs BOTH signal arrays
+    // shifted one bar (freqtrade's real _get_ohlcv_as_lists .shift(1) - see
+    // the identical shift/rationale in unified_backtest's dispatcher).
+    // Applied once here rather than per sweep_dir call, since these arrays
+    // are shared across every parameter combo.
+    //
+    // `mk_exit` takes the RAW (unshifted) entry signals, exactly like
+    // run_strategy_backtest's build_exit_signals: populate_exit_trend is told
+    // where the signals actually occurred, not where they get acted on. The
+    // shift is applied afterwards, to both sides.
+    //
+    // Entries were previously left UNSHIFTED here while exits were shifted,
+    // so this fast path entered a bar earlier than the full engine — a real
+    // lookahead (acting on a signal derived from a candle's own close during
+    // that same candle) and a silent sweep-vs-backtest mismatch. Caught by
+    // `sweep_fast_path_agrees_with_the_full_engine_under_limit_orders`.
+    let shift1 = |sigs: &[u8]| -> Vec<u8> {
+        let mut out = vec![0u8; sigs.len()];
+        for i in 1..sigs.len() { out[i] = sigs[i - 1]; }
+        out
+    };
     let mk_exit = |entry_sigs: &[u8], dir_str: &str| -> Vec<u8> {
         let entry_idx: Vec<usize> = (0..n).filter(|&i| entry_sigs[i] != 0).collect();
         let entry_px: Vec<f32>   = entry_idx.iter().map(|&i| close[i]).collect();
@@ -1886,6 +2327,7 @@ pub fn run_strategy_backtest_summary(
     ub.trailing_offset = cfg.trailing_stop_positive;
     ub.atr_stop_enabled = cfg.atr_stop_enabled; ub.atr_stop_multiplier = cfg.atr_stop_multiplier;
     ub.entry_edge_filter = cfg.entry_edge_filter;
+    apply_order_sim_to_ub_cfg(&mut ub, &cfg);
     assign_minimal_roi(&mut ub, &cfg.minimal_roi, tf_min);
     ub.starting_balance = initial_capital;
     if cfg.ecp_enabled { ub.ecp_mode = cfg.ecp_mode.clone(); }
@@ -1894,10 +2336,12 @@ pub fn run_strategy_backtest_summary(
     if want_long && want_short {
         let long_exits  = mk_exit(&long_sigs,  "long");
         let short_exits = mk_exit(&short_sigs, "short");
+        let long_entries  = shift1(&long_sigs);
+        let short_entries = shift1(&short_sigs);
         let mut lcfg = ub.clone(); lcfg.direction = "long".to_string();
         let mut scfg = ub.clone(); scfg.direction = "short".to_string();
-        let lds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, &long_sigs,  &long_exits,  &lcfg);
-        let sds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, &short_sigs, &short_exits, &scfg);
+        let lds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, &long_entries,  &long_exits,  &lcfg);
+        let sds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, &short_entries, &short_exits, &scfg);
 
         let ls = ds_score(&lds, n, tf_min);
         let ss = ds_score(&sds, n, tf_min);
@@ -1918,8 +2362,9 @@ pub fn run_strategy_backtest_summary(
     } else {
         let (entry_sigs, dir_str) = if want_short { (&short_sigs, "short") } else { (&long_sigs, "long") };
         let exit_sigs = mk_exit(entry_sigs, dir_str);
+        let entry_shifted = shift1(entry_sigs);
         let mut dcfg = ub; dcfg.direction = dir_str.to_string();
-        let ds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, entry_sigs, &exit_sigs, &dcfg);
+        let ds = sweep_dir(close, open, high, low, rsi_c, mh_c, bb_c, atr_c, cci_c, &entry_shifted, &exit_sigs, &dcfg);
         ds_to_json(&ds, &cfg, dir_str, initial_capital, n, tf_min)
     }
 }
@@ -2024,11 +2469,27 @@ pub fn run_param_sweep(
     let want_short = want_short_raw && !cfg.is_spot();
     let want_long  = direction == "long" || direction == "both" || (want_short_raw && cfg.is_spot());
 
-    // sweep_dir mirrors Mode2 semantics, which needs exit signals shifted
-    // one bar (freqtrade's real _get_ohlcv_as_lists .shift(1) - see the
-    // identical shift/rationale in unified_backtest's dispatcher). Applied
-    // once here rather than per sweep_dir call, since these arrays are
-    // shared across every parameter combo.
+    // sweep_dir mirrors Mode2 semantics, which needs BOTH signal arrays
+    // shifted one bar (freqtrade's real _get_ohlcv_as_lists .shift(1) - see
+    // the identical shift/rationale in unified_backtest's dispatcher).
+    // Applied once here rather than per sweep_dir call, since these arrays
+    // are shared across every parameter combo.
+    //
+    // `mk_exit` takes the RAW (unshifted) entry signals, exactly like
+    // run_strategy_backtest's build_exit_signals: populate_exit_trend is told
+    // where the signals actually occurred, not where they get acted on. The
+    // shift is applied afterwards, to both sides.
+    //
+    // Entries were previously left UNSHIFTED here while exits were shifted,
+    // so this fast path entered a bar earlier than the full engine — a real
+    // lookahead (acting on a signal derived from a candle's own close during
+    // that same candle) and a silent sweep-vs-backtest mismatch. Caught by
+    // `sweep_fast_path_agrees_with_the_full_engine_under_limit_orders`.
+    let shift1 = |sigs: &[u8]| -> Vec<u8> {
+        let mut out = vec![0u8; sigs.len()];
+        for i in 1..sigs.len() { out[i] = sigs[i - 1]; }
+        out
+    };
     let mk_exit = |entry_sigs: &[u8], dir_str: &str| -> Vec<u8> {
         let entry_idx: Vec<usize> = (0..n).filter(|&i| entry_sigs[i] != 0).collect();
         let entry_px: Vec<f32>   = entry_idx.iter().map(|&i| close[i]).collect();
@@ -2040,10 +2501,13 @@ pub fn run_param_sweep(
     };
     let long_exits  = if want_long  { mk_exit(&long_sigs,  "long")  } else { vec![0u8; n] };
     let short_exits = if want_short { mk_exit(&short_sigs, "short") } else { vec![0u8; n] };
+    // Entries get the identical shift as exits — see mk_exit's comment above.
+    let long_entries  = shift1(&long_sigs);
+    let short_entries = shift1(&short_sigs);
 
     // Pre-slice borrows — shared immutably across all rayon threads.
-    let long_sigs_s   = long_sigs.as_slice();
-    let short_sigs_s  = short_sigs.as_slice();
+    let long_sigs_s   = long_entries.as_slice();
+    let short_sigs_s  = short_entries.as_slice();
     let long_exits_s  = long_exits.as_slice();
     let short_exits_s = short_exits.as_slice();
 
@@ -2069,6 +2533,7 @@ pub fn run_param_sweep(
     base_ub.atr_stop_enabled = cfg.atr_stop_enabled;
     base_ub.atr_stop_multiplier = cfg.atr_stop_multiplier;
     base_ub.entry_edge_filter = cfg.entry_edge_filter;
+    apply_order_sim_to_ub_cfg(&mut base_ub, &cfg);
     base_ub.starting_balance = initial_capital;
     if cfg.ecp_enabled { base_ub.ecp_mode = cfg.ecp_mode.clone(); }
     if let Some(ov) = base_overlay { apply_overlay_to_ub_cfg(&mut base_ub, ov); }

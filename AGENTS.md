@@ -360,6 +360,58 @@ macd_hist, bb_pos, atr, cci, entry_signals, exit_signals, direction,
 config_json)` — the `--engine rust` path (see above). `config_json` maps to
 `UnifiedBacktestConfig` fields (which now derive `serde::Deserialize`, `#[serde(default)]`).
 
+### Limit-order simulation
+
+Entries and signal-driven exits are modelled as orders with a placement bar, a
+price and a fill test (freqtrade's `_get_order_filled`: `low <= price <= high`),
+in all three simulation loops — `unified_backtest_pythonstyle`,
+`unified_backtest_pythonstyle_joint` and the `sweep_dir` fast path — and in
+`rust_backtest.py`'s Python joint simulator.
+
+| Config field (`UnifiedBacktestConfig`) | Meaning |
+|---|---|
+| `entry_order_type` / `exit_order_type` | `"limit"` (default, matching freqtrade's own `order_types`) or `"market"` |
+| `entry_limit_offset` / `exit_limit_offset` | Fraction of price the resting order sits on the FAVOURABLE side of the bar open. **0 (default) = always fills instantly at the open**, identical to a market fill |
+| `entry_fill_timeout_bars` / `exit_fill_timeout_bars` | Bars an unfilled order lives past its placement bar. `usize::MAX` (default) = no timeout, matching freqtrade with no `unfilledtimeout`; 0 = fill-or-kill |
+
+`apply_overlay_to_ub_cfg` also accepts freqtrade's native shapes verbatim:
+`order_types: {entry, exit}` and `unfilledtimeout: {entry, exit, unit}` (minutes
+→ bars, using the config's own timeframe).
+
+Fees: an order that RESTS (offset > 0) and later gets touched is a maker fill
+and pays `fee_maker`; a marketable order and every protective exit pay
+`fee_taker`. Stoploss / trailing / ROI / max-hold exits are never turned into
+resting orders (`cpu_engine::is_signal_exit` draws the line) — they already
+resolve to their own fill price, and making them "maybe fill" would leave
+positions open through the moves a stop exists to escape.
+
+Results carry `timedout_entry_orders` / `timedout_exit_orders` (plus
+`entry_orders_placed` / `exit_orders_placed`), matching freqtrade's stats keys.
+On the Python side the knobs come from the config's `limit_order_simulation`
+block (`entry_offset`, `exit_offset`, `entry_timeout_bars`, `exit_timeout_bars`,
+`fee_maker`), or from same-named strategy attributes, which win.
+
+#### Strategy-driven orders (`rust_backtest.py`)
+
+In the Python joint simulator a strategy places, tracks and cancels its own
+limit orders through the normal IStrategy callbacks — the config offsets above
+are only the fallback for strategies that don't:
+
+| Callback | Role |
+|---|---|
+| `custom_entry_price` / `custom_exit_price` | **Place** — names the limit price; a strategy-priced order ignores the config offset entirely |
+| `adjust_order_price` | **Track** — called every bar an order rests, with the real open `Order` on a real `LocalTrade`. Same rate = keep, different rate = cancel-and-replace (restarts the timeout clock, re-clamped into the candle), `None` = cancel |
+| `check_entry_timeout` / `check_exit_timeout` (via `trader_check_timed_out`) | **Cancel** — checked before repricing, alongside the config `unfilledtimeout` |
+| `order_filled` | Fired at the fill with that same order object, now closed |
+
+The entry `LocalTrade` + `Order` are registered at PLACEMENT (`amount=0` until
+filled), so callbacks that inspect open trades see the pending order the way
+freqtrade's do; a cancelled entry removes the trade and frees its slot and
+capital. Maker-vs-taker is decided per fill by where the order sat relative to
+the bar open (`fill_fee`), which covers strategy-priced orders too. The engine
+keeps its own trade accounting — `Order.close_bt_order`'s
+`recalc_trade_from_orders` is deliberately not used (see `_close_order_object`).
+
 ### Strategy authoring pattern
 
 - **Standard indicators** → pull from the bridge (identical to the engine, no

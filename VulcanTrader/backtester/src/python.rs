@@ -85,6 +85,13 @@ fn calculate_standard_indicators<'py>(
 /// match `UnifiedBacktestConfig`'s fields (missing keys use the Rust defaults).
 /// `direction` is "long" or "short".
 ///
+/// Limit orders: set `entry_order_type` / `exit_order_type` ("limit" or
+/// "market"), `entry_limit_offset` / `exit_limit_offset` (fraction of price
+/// the resting order sits on the favourable side of the bar open), and
+/// `entry_fill_timeout_bars` / `exit_fill_timeout_bars` (bars an unfilled
+/// order survives past its placement bar). A zero offset means every order is
+/// immediately marketable, i.e. the historical instant-fill behaviour.
+///
 /// Returns a JSON string with the per-trade arrays the caller turns into trade
 /// records: entry/exit bar indices, prices, profit ratio + $ pnl, durations
 /// (bars), leverages, and exit-reason labels.
@@ -147,6 +154,12 @@ fn run_backtest(
         "exit_reasons": exit_reasons,
         "final_equity": res.final_equity,
         "starting_balance": res.starting_balance,
+        // Limit-order simulation counters — all zero unless the config asked
+        // for resting orders (`entry_limit_offset` / `exit_limit_offset`).
+        "entry_orders_placed": res.entry_orders_placed,
+        "timedout_entry_orders": res.entry_orders_timedout,
+        "exit_orders_placed": res.exit_orders_placed,
+        "timedout_exit_orders": res.exit_orders_timedout,
     });
     Ok(out.to_string())
 }

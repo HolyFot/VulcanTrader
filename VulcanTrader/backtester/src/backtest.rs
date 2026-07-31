@@ -227,6 +227,12 @@ pub struct StrategyConfig {
     pub atr_stop_enabled: bool,
     pub atr_stop_multiplier: f32,
     pub entry_edge_filter: EntryEdgeFilter,
+    // Limit-order simulation (freqtrade's `order_types` + `unfilledtimeout`,
+    // plus the resting offset freqtrade has no backtest equivalent for since
+    // it prices limits off a live order book). Defaults are limit-at-open,
+    // i.e. behaviourally identical to a market fill — see OrderFillType.
+    pub entry_order: OrderSimConfig,
+    pub exit_order: OrderSimConfig,
 }
 
 /// Optional throttle on re-entry frequency, layered on top of the engine's
@@ -249,6 +255,135 @@ pub enum EntryEdgeFilter {
     /// case `Full` also blocks), but doesn't require the entire signal
     /// episode to reset before trying again.
     Cooldown(usize),
+}
+
+/// How an entry/exit order is placed, and therefore how it fills.
+///
+/// `Market` reproduces the engine's historical behaviour exactly: the fill
+/// happens on the signal bar at that bar's own open, paying the taker fee.
+///
+/// `Limit` places a resting order at `open * (1 -/+ offset)` (see
+/// `OrderSimConfig::entry_price` / `exit_price`) and fills it only on a bar
+/// whose own [low, high] range contains that price — freqtrade's
+/// `_get_order_filled` rule (`row[LOW] <= rate <= row[HIGH]`). An order that
+/// never gets touched within its timeout window is cancelled: an entry that
+/// never fills means the trade simply never happened, and an exit that never
+/// fills leaves the position open for a later exit condition to close.
+///
+/// Note that `Limit` with a ZERO offset is exactly equivalent to `Market`
+/// (the limit price IS the bar's open, which trivially satisfies
+/// `low <= open <= high`, so it always fills instantly on the placement bar
+/// at the same price and pays the same taker fee). That equivalence is
+/// deliberate: freqtrade's own default `order_types` is limit-for-everything,
+/// so `Limit`+0 is both the faithful default AND a no-op against every
+/// previously-recorded result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderFillType {
+    Market,
+    Limit,
+}
+
+impl Default for OrderFillType {
+    fn default() -> Self {
+        OrderFillType::Limit
+    }
+}
+
+impl OrderFillType {
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "market" => OrderFillType::Market,
+            // freqtrade's ORDERTYPE_POSSIBILITIES is ["limit", "market"]; any
+            // other spelling (including the stop-loss-only "stop_loss_limit")
+            // resolves to a plain resting limit rather than silently becoming
+            // a market order.
+            _ => OrderFillType::Limit,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OrderFillType::Market => "market",
+            OrderFillType::Limit => "limit",
+        }
+    }
+
+    pub fn is_limit(&self) -> bool {
+        matches!(self, OrderFillType::Limit)
+    }
+}
+
+/// Limit-order simulation settings for one side (entry or exit).
+///
+/// `offset` is a positive fraction of price, always applied in the side's
+/// FAVOURABLE direction: a long entry rests BELOW the bar's open, a long exit
+/// rests ABOVE it (and mirrored for shorts). It is the knob that turns limit
+/// simulation from a no-op into a real model — it is what makes a fill
+/// uncertain, and what makes the fill a maker fill.
+///
+/// `timeout_bars` is how many bars AFTER the placement bar the order may stay
+/// live: the bar-indexed form of freqtrade's `unfilledtimeout` (expressed in
+/// minutes; callers divide by the timeframe — see
+/// `cpu_engine::apply_overlay_to_ub_cfg`). Two values are special:
+///   * `usize::MAX` (the default) = never time out. This is freqtrade's own
+///     behaviour with no `unfilledtimeout` configured: `trader_check_timed_out`
+///     finds no timeout, `check_entry_timeout` defaults to False, and the
+///     order simply rests until it fills or the strategy cancels it.
+///   * `0` = fill-or-kill on the placement bar itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrderSimConfig {
+    pub order_type: OrderFillType,
+    pub offset: f32,
+    pub timeout_bars: usize,
+}
+
+impl Default for OrderSimConfig {
+    fn default() -> Self {
+        OrderSimConfig { order_type: OrderFillType::Limit, offset: 0.0, timeout_bars: usize::MAX }
+    }
+}
+
+impl OrderSimConfig {
+    /// True when the order rests away from the market and therefore adds
+    /// liquidity when it fills — the condition for paying the maker fee.
+    /// A zero-offset limit is marketable on placement, so it pays taker like
+    /// a market order does.
+    pub fn is_maker(&self) -> bool {
+        self.order_type.is_limit() && self.offset > 0.0
+    }
+
+    /// Whether this side needs the pending-order machinery at all. A market
+    /// order or a zero-offset limit always fills on its placement bar, so the
+    /// engine can take the cheaper instant-fill path.
+    pub fn can_rest(&self) -> bool {
+        self.order_type.is_limit() && self.offset > 0.0
+    }
+
+    /// Resting price for an ENTRY on `is_long`, anchored to the bar's open
+    /// (freqtrade's `propose_rate = row[OPEN_IDX]`).
+    pub fn entry_price(&self, open: f32, is_long: bool) -> f32 {
+        if !self.order_type.is_limit() {
+            return open;
+        }
+        if is_long { open * (1.0 - self.offset) } else { open * (1.0 + self.offset) }
+    }
+
+    /// Resting price for an EXIT of a position on `is_long`, anchored to the
+    /// bar's open (the price every non-stop/non-ROI exit already fills at).
+    pub fn exit_price(&self, open: f32, is_long: bool) -> f32 {
+        if !self.order_type.is_limit() {
+            return open;
+        }
+        if is_long { open * (1.0 + self.offset) } else { open * (1.0 - self.offset) }
+    }
+}
+
+/// freqtrade's `Backtesting._get_order_filled`: a resting order fills on any
+/// candle whose own range contains its price.
+#[inline]
+pub fn order_fills(price: f32, low: f32, high: f32) -> bool {
+    low <= price && price <= high
 }
 
 /// Leverage calculation mode
@@ -292,6 +427,8 @@ impl Default for StrategyConfig {
             atr_stop_enabled: false,
             atr_stop_multiplier: 2.3,
             entry_edge_filter: EntryEdgeFilter::None,
+            entry_order: OrderSimConfig::default(),
+            exit_order: OrderSimConfig::default(),
         }
     }
 }
@@ -366,6 +503,17 @@ impl StrategyConfig {
         self.fee_maker = maker;
         self.fee_taker = taker;
         self.fee_rate = taker;
+        self
+    }
+
+    /// Simulate resting limit orders on both sides: entries placed `offset`
+    /// below the bar open (above, for shorts), exits `offset` above it, each
+    /// living `timeout_bars` bars past placement before being cancelled.
+    pub fn with_limit_orders(mut self, offset: f32, timeout_bars: usize) -> Self {
+        self.entry_order = OrderSimConfig {
+            order_type: OrderFillType::Limit, offset, timeout_bars,
+        };
+        self.exit_order = self.entry_order;
         self
     }
 }
@@ -642,6 +790,34 @@ pub struct UnifiedBacktestConfig {
     pub atr_stop_enabled: bool,
     pub atr_stop_multiplier: f32,
 
+    // === Limit-order simulation ===
+    // Flat scalars rather than a nested OrderSimConfig so `config_json` stays
+    // a flat object (every other field here is a scalar, and the Python side
+    // builds it as one dict). `to_entry_order()` / `to_exit_order()` fold them
+    // back into the struct the engine loop actually uses.
+    //
+    // Order type per side: "limit" (default, freqtrade's own default) or
+    // "market". With a zero offset the two are equivalent — see OrderFillType.
+    pub entry_order_type: String,
+    pub exit_order_type: String,
+    /// Fraction of price a resting ENTRY limit sits below the bar open (above,
+    /// for shorts). > 0 makes the fill uncertain and the fill a maker fill.
+    pub entry_limit_offset: f32,
+    /// Same, for exits: rests ABOVE the bar open on a long, below on a short.
+    /// Applies only to signal-driven exits (exit signal / CCI / RSI / MACD /
+    /// custom); stoploss, trailing, ROI and max-hold exits are protective and
+    /// keep filling at their own resolved price with the taker fee.
+    pub exit_limit_offset: f32,
+    /// Bars an unfilled entry order stays live past its placement bar before
+    /// being cancelled. Bar-indexed form of freqtrade's
+    /// `unfilledtimeout.entry` minutes; `usize::MAX` (the default) means no
+    /// timeout at all and 0 means fill-or-kill — see `OrderSimConfig`.
+    pub entry_fill_timeout_bars: usize,
+    /// Same for exit orders. A timed-out exit leaves the position OPEN — the
+    /// exit has to be re-triggered by a later bar, exactly like freqtrade's
+    /// "Close exit order and retry exiting on next signal".
+    pub exit_fill_timeout_bars: usize,
+
     // === Optional per-strategy entry throttle — see EntryEdgeFilter ===
     // Not deserialized from Python (defaults to None); set in Rust if needed.
     #[serde(skip)]
@@ -739,6 +915,18 @@ impl Default for UnifiedBacktestConfig {
             atr_stop_enabled: false,
             atr_stop_multiplier: 2.3,
 
+            // Limit orders: freqtrade's default order_types (limit both sides)
+            // with no resting offset — instant fill at the bar open, exactly
+            // as this engine has always behaved.
+            entry_order_type: "limit".to_string(),
+            exit_order_type: "limit".to_string(),
+            entry_limit_offset: 0.0,
+            exit_limit_offset: 0.0,
+            // No timeout unless one is configured — freqtrade leaves an order
+            // resting until it fills or the strategy cancels it.
+            entry_fill_timeout_bars: usize::MAX,
+            exit_fill_timeout_bars: usize::MAX,
+
             entry_edge_filter: EntryEdgeFilter::None,
             eval_start_bar: 0,
 
@@ -803,6 +991,22 @@ impl UnifiedBacktestConfig {
             trigger: self.trailing_trigger,
             offset: self.trailing_offset,
             only_offset_reached: true,
+        }
+    }
+
+    pub fn to_entry_order(&self) -> OrderSimConfig {
+        OrderSimConfig {
+            order_type: OrderFillType::from_str(&self.entry_order_type),
+            offset: self.entry_limit_offset.max(0.0),
+            timeout_bars: self.entry_fill_timeout_bars,
+        }
+    }
+
+    pub fn to_exit_order(&self) -> OrderSimConfig {
+        OrderSimConfig {
+            order_type: OrderFillType::from_str(&self.exit_order_type),
+            offset: self.exit_limit_offset.max(0.0),
+            timeout_bars: self.exit_fill_timeout_bars,
         }
     }
 

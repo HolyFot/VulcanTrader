@@ -21,16 +21,44 @@ Every IStrategy callback the python engine can invoke is wired up here too —
 ``leverage``, ``custom_stake_amount``, ``custom_entry_price``,
 ``confirm_trade_entry``, ``bot_loop_start``, ``custom_stoploss`` (gated on
 ``use_custom_stoploss``), ``custom_exit``, ``custom_exit_price``,
-``confirm_trade_exit``, ``order_filled`` — with ONE deliberate exception:
-``adjust_order_price``. That callback exists to reprice a still-PENDING,
-partially-or-unfilled LIMIT order across multiple candles while it sits on the
-book. Both this engine and the default python engine's core loop model every
-entry/exit as an instant fill at a single resolved price on a single bar —
-neither has a pending-order object that persists and gets revisited candle
-after candle. Wiring `adjust_order_price` in would require building that
-multi-candle order lifecycle from scratch in both engines, which is a real
-architecture change, not a missing-callback gap — out of scope here and left
-unimplemented.
+``confirm_trade_exit``, ``order_filled``, ``adjust_order_price``,
+``check_entry_timeout`` / ``check_exit_timeout``.
+
+LIMIT ORDER SIMULATION
+----------------------
+Entries and signal-driven exits are modelled as real orders with a placement
+bar, a price, and a fill test — freqtrade's own ``_get_order_filled``
+(``low <= price <= high``). By default the price IS the candle's open, which
+always fills instantly, so the engine behaves exactly as it always has.
+
+A strategy drives its own orders through the standard IStrategy callbacks:
+
+* **place** — ``custom_entry_price`` / ``custom_exit_price`` name the limit
+  price. A strategy that prices its own order owns that price outright; the
+  config's ``limit_order_simulation`` offset (below) is only the default for
+  strategies that don't.
+* **track** — while an order rests unfilled, ``adjust_order_price`` is called
+  every bar with the real, still-open ``Order`` object attached to a real
+  ``LocalTrade``: return the same rate to leave it alone, a different rate to
+  cancel-and-replace it (which restarts its timeout clock), or ``None`` to
+  cancel it outright.
+* **cancel** — ``trader_check_timed_out`` runs first each bar, applying both
+  the config ``unfilledtimeout`` and the strategy's own
+  ``check_entry_timeout`` / ``check_exit_timeout``.
+
+Without a strategy pricing them, ``limit_order_simulation.entry_offset`` /
+``exit_offset`` (see ``_build_engine_config``) rest every order that far on
+the favourable side of the open. Either way a resting order fills only on a
+candle that trades through it and pays ``fee_maker`` when it does. A cancelled
+entry order means the trade never happened (its slot and capital are released);
+a cancelled exit order leaves the position open for a later exit condition.
+With no timeout configured at all an order rests until it fills or the
+strategy cancels it — freqtrade's own behaviour.
+
+Stoploss, trailing-stop, ROI and max-hold exits are deliberately NOT modelled
+as orders — they are protective exits that already resolve to their own fill
+price, and making them "maybe fill" would leave positions open through exactly
+the moves a stop exists to escape.
 """
 
 from __future__ import annotations
@@ -97,6 +125,62 @@ def _build_engine_config(strategy: Any, config: dict) -> dict:
     fee = float(config.get("fee", 0.0005) or 0.0005)
     trade_type = "spot" if str(config.get("trading_mode", "futures")) == "spot" else "futures"
 
+    # --- Limit-order simulation --------------------------------------------
+    # freqtrade supplies the order TYPE (`order_types`) and the unfilled
+    # TIMEOUT (`unfilledtimeout`), but not the resting OFFSET: live, a limit
+    # price comes off the order book via entry_pricing/exit_pricing, which a
+    # candle-level backtest has no access to. `limit_order_simulation` in the
+    # bot config supplies it (strategy attributes win, like every other
+    # IStrategy setting), and it is what turns this from a no-op into a real
+    # model — at offset 0 the limit price IS the bar's open, so every order
+    # fills instantly exactly as before.
+    lim = config.get("limit_order_simulation", {}) or {}
+
+    def _offset(cfg_key: str, attr: str) -> float:
+        raw = getattr(strategy, attr, None)
+        if raw is None:
+            raw = lim.get(cfg_key, 0.0)
+        try:
+            return max(float(getattr(raw, "value", raw)), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    unfilled = getattr(strategy, "unfilledtimeout", None) or config.get("unfilledtimeout", {}) or {}
+    _unit_div = 60.0 if str(unfilled.get("unit", "minutes")).lower() == "seconds" else 1.0
+
+    def _timeout_bars(side: str) -> int | None:
+        """Bars an unfilled order survives past its placement bar, or None for
+        no timeout at all. An explicit bar count wins; otherwise freqtrade's
+        own minute-based `unfilledtimeout` is converted with this timeframe.
+        Sub-bar timeouts floor to 0 — fill-or-kill on the placement bar, the
+        honest answer at candle resolution.
+
+        None (nothing configured) matches freqtrade: with no `unfilledtimeout`
+        its `trader_check_timed_out` finds no timeout and `check_entry_timeout`
+        defaults to False, so the order rests until it fills or the strategy
+        cancels it."""
+        if f"{side}_timeout_bars" in lim:
+            try:
+                return max(int(lim[f"{side}_timeout_bars"]), 0)
+            except (TypeError, ValueError):
+                return None
+        raw = unfilled.get(side)
+        if raw is None:
+            return None
+        try:
+            return max(int((float(raw) / _unit_div) // tf_min), 0)
+        except (TypeError, ValueError):
+            return None
+
+    # A resting order that gets touched is a maker fill. With no explicit maker
+    # rate the single `fee` is used for both, which keeps results unchanged
+    # from a pure-taker run.
+    fee_maker = lim.get("fee_maker", config.get("fee_maker"))
+    try:
+        fee_maker = float(fee_maker) if fee_maker is not None else fee
+    except (TypeError, ValueError):
+        fee_maker = fee
+
     # --- Stake sizing: mirror freqtrade's fixed stake_amount ----------------
     stake = config.get("stake_amount")
     wallet = float(config.get("dry_run_wallet", 10000.0) or 10000.0)
@@ -126,6 +210,11 @@ def _build_engine_config(strategy: Any, config: dict) -> dict:
         "atr_stop_enabled": atr_mult > 0.0,
         "atr_stop_multiplier": atr_mult,
         "fee_taker": fee,
+        "fee_maker": fee_maker,
+        "entry_limit_offset": _offset("entry_offset", "entry_limit_offset"),
+        "exit_limit_offset": _offset("exit_offset", "exit_limit_offset"),
+        "entry_fill_timeout_bars": _timeout_bars("entry"),
+        "exit_fill_timeout_bars": _timeout_bars("exit"),
         "roi_enabled": True,
         "roi_vals": roi_vals,
         "roi_periods": roi_periods,
@@ -302,7 +391,17 @@ class _PairState:
         "row_idx", "in_position", "is_short", "entry_price", "base_price",
         "entry_row", "trade_leverage", "stop_loss_price", "stop_is_trailing",
         "trailing_activated", "exchange_max_leverage", "precision", "trade_stake",
-        "trade_amount", "local_trade",
+        "trade_amount", "local_trade", "entry_fee",
+        # Resting-order state (all inert unless a limit offset is configured).
+        # An entry order holds its already-resolved stake/leverage/amount: those
+        # are fixed when the order is PLACED (that's when freqtrade calls
+        # leverage()/custom_stake_amount()/confirm_trade_entry()), not when it
+        # eventually fills.
+        "pending_entry", "pending_entry_price", "pending_entry_bar",
+        "pending_entry_short", "pending_entry_stake", "pending_entry_lev",
+        "pending_entry_amount", "pending_entry_order",
+        "pending_exit", "pending_exit_price", "pending_exit_bar",
+        "pending_exit_reason", "pending_exit_tag", "pending_exit_order",
     )
 
     def __init__(self, dates, openp, high, low, atr, el, xl, es, xs, exchange_max_leverage, precision):
@@ -331,7 +430,24 @@ class _PairState:
         self.trailing_activated = False
         self.trade_stake = 0.0
         self.trade_amount = 0.0
+        self.entry_fee = 0.0  # this trade's own entry fee (maker if it rested)
         self.local_trade = None  # the registered LocalTrade while a position is open
+        self.pending_entry = False
+        self.pending_entry_price = 0.0
+        self.pending_entry_bar = -1
+        self.pending_entry_short = False
+        self.pending_entry_stake = 0.0
+        self.pending_entry_lev = 1.0
+        self.pending_entry_amount = 0.0
+        # The real `Order` object handed to adjust_order_price() /
+        # check_*_timeout() while the order sits on the book.
+        self.pending_entry_order = None
+        self.pending_exit = False
+        self.pending_exit_price = 0.0
+        self.pending_exit_bar = -1
+        self.pending_exit_reason = None
+        self.pending_exit_tag = None
+        self.pending_exit_order = None
 
 
 def _joint_multi_pair_backtest(
@@ -352,9 +468,12 @@ def _joint_multi_pair_backtest(
     `use_custom_stoploss = True`, the flag freqtrade itself gates it on — see
     `IStrategy.stop_loss_reached`), and no strategy here defines `custom_exit`.
 
-    Returns (trades, rejected_count). Each trade dict carries raw fields (row
-    indices, base/fee-adjusted prices) that `run_rust_backtest` formats into
-    the standard trades DataFrame afterward.
+    Returns (trades, rejected_count, order_stats), where `order_stats` carries
+    the limit-order counters freqtrade reports as `timedout_entry_orders` /
+    `timedout_exit_orders` (both 0 unless resting limit orders are configured
+    — see `limit_order_simulation` in `_build_engine_config`). Each trade dict
+    carries raw fields (row indices, base/fee-adjusted prices) that
+    `run_rust_backtest` formats into the standard trades DataFrame afterward.
     """
     eng = _build_engine_config(strategy, config)
     can_short = bool(getattr(strategy, "can_short", False)) and \
@@ -374,6 +493,27 @@ def _joint_multi_pair_backtest(
     exit_tif = _tif.get("exit", "GTC")
 
     fee = eng["fee_taker"]
+    # --- Limit-order simulation -------------------------------------------
+    # An order RESTS only when its side is a limit order with a non-zero
+    # offset; otherwise the limit price is the bar's own open, which is
+    # trivially inside [low, high], so it fills on its placement bar at the
+    # same price and fee the engine has always used. Everything below is
+    # gated on these two flags so the default path is untouched.
+    entry_offset = float(eng.get("entry_limit_offset", 0.0) or 0.0)
+    exit_offset = float(eng.get("exit_limit_offset", 0.0) or 0.0)
+    entry_rests = entry_order_type == "limit" and entry_offset > 0.0
+    exit_rests = exit_order_type == "limit" and exit_offset > 0.0
+    # None = no engine-level timeout; the order rests until it fills, or until
+    # the strategy cancels it via check_*_timeout / adjust_order_price.
+    entry_timeout_bars = eng.get("entry_fill_timeout_bars")
+    exit_timeout_bars = eng.get("exit_fill_timeout_bars")
+    fee_maker = float(eng.get("fee_maker", fee) or fee)
+    timedout_entry_orders = 0
+    timedout_exit_orders = 0
+    canceled_entry_orders = 0
+    canceled_exit_orders = 0
+    replaced_entry_orders = 0
+    replaced_exit_orders = 0
     base_stoploss = eng["base_stoploss"]
     trailing_enabled = eng["trailing_enabled"]
     trailing_trigger = eng["trailing_trigger"]
@@ -646,28 +786,160 @@ def _joint_multi_pair_backtest(
 
     _order_id_counter = 0
 
-    def _notify_order_filled(pair: str, trade, side: str, order_type: str, amount: float,
-                             price: float, current_time) -> None:
-        """order_filled(): dormant callback (no current strategy overrides it),
-        called best-effort right after an entry/exit instant-fills — matches
-        `_try_close_open_order`'s call site, minus the pending-order lifecycle
-        neither engine's instant-fill core models (see `adjust_order_price`)."""
+    def _make_order(pair: str, trade, side: str, order_type: str, amount: float,
+                    price: float, current_time, is_open: bool, tag: str | None = None):
+        """Build a real `Order`. An OPEN one is what the strategy gets handed
+        by `adjust_order_price()` / `check_entry_timeout()` /
+        `check_exit_timeout()` while it rests on the book; a closed one is the
+        record `order_filled()` receives."""
         nonlocal _order_id_counter
+        _order_id_counter += 1
+        return Order(
+            id=_order_id_counter, order_id=str(_order_id_counter),
+            ft_trade_id=getattr(trade, "id", 0) or 0,
+            ft_order_side=side, ft_pair=pair, ft_amount=amount, ft_price=price,
+            ft_is_open=is_open, status="open" if is_open else "closed",
+            symbol=pair, order_type=order_type, side=side, price=price, average=price,
+            amount=amount, filled=0.0 if is_open else amount,
+            remaining=amount if is_open else 0.0, cost=amount * price,
+            order_date=current_time, order_update_date=current_time,
+            order_filled_date=None if is_open else current_time,
+            ft_order_tag=tag,
+        )
+
+    def _notify_order_filled(pair: str, trade, side: str, order_type: str, amount: float,
+                             price: float, current_time, order=None) -> None:
+        """order_filled(): called right after an entry/exit order fills, with
+        the now-closed order — `_try_close_open_order`'s own call site. For a
+        resting order this is the SAME object the strategy has been adjusting
+        on previous bars, marked filled, rather than a fresh stand-in."""
         if not _dp_wired or trade is None:
             return
-        _order_id_counter += 1
         try:
-            order = Order(
-                id=_order_id_counter, order_id=str(_order_id_counter), ft_trade_id=0,
-                ft_order_side=side, ft_pair=pair, ft_amount=amount, ft_price=price,
-                ft_is_open=False, status="closed", symbol=pair, order_type=order_type,
-                side=side, price=price, average=price, amount=amount, filled=amount,
-                remaining=0.0, cost=amount * price, order_date=current_time,
-                order_filled_date=current_time, order_update_date=current_time,
-            )
+            if order is None:
+                order = _make_order(pair, trade, side, order_type, amount, price,
+                                    current_time, is_open=False)
             strategy.order_filled(pair=pair, trade=trade, order=order, current_time=current_time)
         except Exception:
             logger.debug("strategy.order_filled(%s) raised", pair, exc_info=True)
+
+    def _close_order_object(order, price: float, current_time) -> None:
+        """Mark a resting order filled, mirroring `Order.close_bt_order`'s
+        field updates without its `recalc_trade_from_orders` side effects —
+        this engine does its own trade accounting (see `close_position`) and
+        must stay the single source of truth for it."""
+        if order is None:
+            return
+        order.ft_is_open = False
+        order.status = "closed"
+        order.price = price
+        order.ft_price = price
+        order.average = price
+        order.filled = order.amount
+        order.remaining = 0.0
+        order.order_filled_date = current_time
+
+    def _detach_order(trade, order) -> None:
+        if trade is None or order is None:
+            return
+        try:
+            if order in trade.orders:
+                trade.orders.remove(order)
+        except Exception:
+            logger.debug("detaching order failed", exc_info=True)
+
+    def manage_open_order(pair: str, p: _PairState, i: int, is_entry: bool) -> tuple[str, float]:
+        """freqtrade's `manage_open_orders` for one resting order: cancel it if
+        it timed out (`check_order_cancel` -> `trader_check_timed_out`, which
+        applies BOTH the config `unfilledtimeout` and the strategy's own
+        `check_entry_timeout` / `check_exit_timeout`), otherwise let the
+        strategy reprice it (`check_order_replace` -> `adjust_order_price`:
+        the same rate keeps the order, a different rate cancels-and-replaces
+        it, None cancels it outright).
+
+        Returns (action, price) with action in {"keep", "timeout", "cancel",
+        "replace"} — "timeout" and "cancel" both drop the order, but freqtrade
+        counts them separately (`timedout_*_orders` vs `canceled_*_orders`).
+        The engine's own bar-count timeout stays in force alongside the
+        callbacks — it is the only rule available when this run has no
+        DataProvider wired (and hence no LocalTrade/Order to hand over).
+        """
+        order = p.pending_entry_order if is_entry else p.pending_exit_order
+        trade = p.local_trade
+        price = p.pending_entry_price if is_entry else p.pending_exit_price
+        placed_bar = p.pending_entry_bar if is_entry else p.pending_exit_bar
+        timeout_bars = entry_timeout_bars if is_entry else exit_timeout_bars
+        current_time = pd.Timestamp(p.dates[i]).tz_localize("UTC")
+
+        if _dp_wired and trade is not None and order is not None:
+            try:
+                if strategy.trader_check_timed_out(trade, order, current_time):
+                    return "timeout", price
+            except Exception:
+                logger.debug("trader_check_timed_out(%s) raised", pair, exc_info=True)
+
+        if timeout_bars is not None and i - placed_bar > timeout_bars:
+            return "timeout", price
+
+        if _dp_wired and trade is not None and order is not None:
+            side = "short" if (p.pending_entry_short if is_entry else p.is_short) else "long"
+            try:
+                requested = strategy.adjust_order_price(
+                    trade=trade, order=order, pair=pair, current_time=current_time,
+                    proposed_rate=p.open[i], current_order_rate=price,
+                    entry_tag=None, side=side, is_entry=is_entry,
+                )
+            except Exception:
+                logger.debug("strategy.adjust_order_price(%s) raised", pair, exc_info=True)
+                return "keep", price
+            if requested is None:
+                return "cancel", price
+            try:
+                requested = float(requested)
+            except (TypeError, ValueError):
+                return "keep", price
+            if requested != price:
+                return "replace", requested
+
+        return "keep", price
+
+    def _reprice_order(p: _PairState, i: int, is_entry: bool, new_price: float) -> None:
+        """Cancel-and-replace at `new_price`. freqtrade places a brand-new
+        order, so its timeout clock restarts from this bar — and the new order
+        goes through the same "can't place it outside this candle" clamp as the
+        original (`get_valid_entry_price_and_stake` for entries,
+        `_get_exit_for_signal` for exits); an order beyond the candle's range
+        would be a stop-limit, which VulcanTrader doesn't support live."""
+        order = p.pending_entry_order if is_entry else p.pending_exit_order
+        current_time = pd.Timestamp(p.dates[i]).tz_localize("UTC")
+        is_short = p.pending_entry_short if is_entry else p.is_short
+        if is_entry:
+            new_price = max(new_price, p.low[i]) if is_short else min(new_price, p.high[i])
+        else:
+            new_price = min(new_price, p.high[i]) if is_short else max(new_price, p.low[i])
+        if order is not None:
+            order.price = new_price
+            order.ft_price = new_price
+            order.average = new_price
+            order.order_date = current_time
+            order.order_update_date = current_time
+        if is_entry:
+            p.pending_entry_price = new_price
+            p.pending_entry_bar = i
+            # Repricing can move the order across the market, so re-classify
+            # the fill it would now get.
+            p.entry_fee = fill_fee(new_price, p.open[i], is_buy=not p.pending_entry_short)
+            # The amount was sized off the original price; keep the stake
+            # constant (freqtrade re-derives the amount from the new rate).
+            if new_price > 0:
+                p.pending_entry_amount = p.pending_entry_stake * p.pending_entry_lev / new_price
+                if order is not None:
+                    order.amount = p.pending_entry_amount
+                    order.ft_amount = p.pending_entry_amount
+                    order.remaining = p.pending_entry_amount
+        else:
+            p.pending_exit_price = new_price
+            p.pending_exit_bar = i
 
     _orig_wallets = getattr(strategy, "wallets", None)
     if _dp_wired:
@@ -684,27 +956,47 @@ def _joint_multi_pair_backtest(
         return None
 
     def do_enter(pair: str, p: _PairState, i: int, direction: str, proposed_stake: float) -> bool:
-        """Returns True if a position was actually opened. Mirrors
-        `Backtesting._enter_trade` / `get_valid_entry_price_and_stake`'s exact
-        order: resolve leverage -> resolve stake (custom_stake_amount, given
-        that leverage) -> round amount to lot size -> back-calculate the real
-        stake from the rounded amount -> confirm_trade_entry with the FINAL
-        amount/rate -> only THEN commit any state or register a trade."""
+        """Place an entry order (and fill it, if this bar's range reaches it).
+
+        Returns True if an order was placed at all — with instant fills (the
+        default) that is the same thing as "a position was opened", but a
+        resting limit order can be placed here and fill on a later bar via
+        `process_pending_entry`.
+
+        Mirrors `Backtesting._enter_trade` / `get_valid_entry_price_and_stake`'s
+        exact order: resolve leverage -> resolve stake (custom_stake_amount,
+        given that leverage) -> round amount to lot size -> back-calculate the
+        real stake from the rounded amount -> confirm_trade_entry with the
+        FINAL amount/rate -> only THEN commit any state or register a trade.
+        All of that happens when the order is PLACED, exactly as in freqtrade,
+        where `_enter_trade` runs in full before the order can fill.
+        """
         nonlocal open_count, tied_up_capital, rejected
         is_short = direction == "short"
         current_time = pd.Timestamp(p.dates[i]).tz_localize("UTC")
         base_price = p.open[i]
 
+        strategy_priced = False
         if _dp_wired:
-            base_price = _resolve_entry_price(pair, current_time, base_price, direction)
+            resolved = _resolve_entry_price(pair, current_time, base_price, direction)
+            # A strategy that actually prices its own limit order OWNS that
+            # price: the config's blanket offset is a default for strategies
+            # that don't, never something layered on top of an explicit
+            # custom_entry_price.
+            strategy_priced = resolved != base_price
+            base_price = resolved
             # "We can't place orders higher than current high" / lower than
-            # current low (get_valid_entry_price_and_stake) — a no-op given
-            # custom_entry_price's own no-op default, kept for when it isn't.
+            # current low (get_valid_entry_price_and_stake).
             base_price = max(base_price, p.low[i]) if is_short else min(base_price, p.high[i])
             stake, lev = _resolve_stake_and_leverage(pair, p, i, direction, proposed_stake)
         else:
             stake, lev = proposed_stake, p.exchange_max_leverage
         lev = max(lev, 0.1)
+
+        # A resting entry sits `entry_offset` on the favourable side of the
+        # price above: below it for a long, above it for a short.
+        if entry_rests and not strategy_priced:
+            base_price = base_price * ((1.0 + entry_offset) if is_short else (1.0 - entry_offset))
 
         # Mirror `wallets.validate_stake_amount`: custom_stake_amount() can
         # inflate the proposed stake (e.g. ECS pressing size on a hot streak);
@@ -741,53 +1033,171 @@ def _joint_multi_pair_backtest(
             rejected += 1
             return False
 
+        # The order now exists. It reserves its slot and its capital from this
+        # moment on — in freqtrade the LocalTrade object is created here, at
+        # placement, and only removed again if the order times out unfilled.
+        open_count += 1
+        tied_up_capital += actual_stake
+        open_order.append(pair)
+
+        p.pending_entry = True
+        p.pending_entry_price = base_price
+        p.pending_entry_bar = i
+        p.pending_entry_short = is_short
+        p.pending_entry_stake = actual_stake
+        p.pending_entry_lev = lev
+        p.pending_entry_amount = amount
+        # Decided by where the order was PLACED relative to the market, so it
+        # is already correct for the LocalTrade registered below and for every
+        # profit calculation once the order fills.
+        p.entry_fee = fill_fee(base_price, p.open[i], is_buy=not is_short)
+
+        # Register the trade and its OPEN entry order now, at placement — the
+        # same point freqtrade's `_enter_trade` does, and what makes the order
+        # visible to `adjust_order_price()` / `check_entry_timeout()` on every
+        # bar it stays unfilled. `amount=0` until it fills, so the trade reads
+        # as "ordered, not yet in position" to any callback that inspects it.
+        if _dp_wired:
+            try:
+                trade = LocalTrade(
+                    pair=pair, is_short=is_short, amount=0.0, amount_requested=amount,
+                    open_rate=base_price, open_rate_requested=base_price,
+                    fee_open=p.entry_fee, fee_close=fee, leverage=lev,
+                    trading_mode=_TradingModeEnum.FUTURES if is_futures else _TradingModeEnum.SPOT,
+                    open_date=current_time, is_open=True,
+                    stake_amount=actual_stake, max_stake_amount=actual_stake,
+                    orders=[],
+                )
+                LocalTrade.add_bt_trade(trade)
+                p.local_trade = trade
+                order = _make_order(pair, trade, trade.entry_side, entry_order_type,
+                                    amount, base_price, current_time, is_open=True)
+                trade.orders.append(order)
+                p.pending_entry_order = order
+            except Exception:
+                logger.debug("LocalTrade registration failed for %s", pair, exc_info=True)
+                p.local_trade = None
+                p.pending_entry_order = None
+
+        # freqtrade fills the order it just created on this same candle when
+        # the price is reachable (backtest_loop step 3 runs right after step 2).
+        if order_filled_at(p, i, base_price):
+            fill_entry(pair, p, i, base_price, is_short, actual_stake, lev, amount)
+        return True
+
+    def order_filled_at(p: _PairState, i: int, price: float) -> bool:
+        """freqtrade's `_get_order_filled`: an order fills on any candle whose
+        own range contains its price. A marketable price (the bar's open, i.e.
+        every order when no offset is configured) always satisfies this."""
+        return p.low[i] <= price <= p.high[i]
+
+    def fill_fee(price: float, reference: float, is_buy: bool) -> float:
+        """A limit order priced on the favourable side of the market rests on
+        the book and ADDS liquidity when it is finally touched -> maker. One
+        priced at (or through) the market takes liquidity -> taker. Comparing
+        against the bar open covers config-driven offsets and strategy-priced
+        orders (custom_entry_price / custom_exit_price / adjust_order_price)
+        with a single rule."""
+        rests = price < reference if is_buy else price > reference
+        return fee_maker if rests else fee
+
+    def cancel_entry_order(pair: str, p: _PairState, reason: str) -> None:
+        """freqtrade's `check_order_cancel` for an entry with nothing filled:
+        the whole trade is deleted, releasing its slot and its capital."""
+        nonlocal open_count, tied_up_capital
+        p.pending_entry = False
+        _detach_order(p.local_trade, p.pending_entry_order)
+        p.pending_entry_order = None
+        if p.local_trade is not None:
+            try:
+                LocalTrade.remove_bt_trade(p.local_trade)
+            except Exception:
+                logger.debug("remove_bt_trade(%s) failed on %s", pair, reason, exc_info=True)
+            p.local_trade = None
+        open_count -= 1
+        tied_up_capital -= p.pending_entry_stake
+        if pair in open_order:
+            open_order.remove(pair)
+
+    def fill_entry(pair: str, p: _PairState, i: int, base_price: float, is_short: bool,
+                   actual_stake: float, lev: float, amount: float) -> None:
+        """Commit an entry order's fill: the position opens HERE, on the bar
+        the order was actually touched, so its stoploss anchor, ROI clock and
+        duration all start from this bar rather than from the placement bar."""
+        current_time = pd.Timestamp(p.dates[i]).tz_localize("UTC")
+        p.pending_entry = False
         p.in_position = True
         p.is_short = is_short
         p.base_price = base_price
-        p.entry_price = base_price * ((1.0 + fee) if not is_short else (1.0 - fee))
+        p.entry_price = base_price * ((1.0 + p.entry_fee) if not is_short else (1.0 - p.entry_fee))
         p.entry_row = i
         p.trade_leverage = lev
         p.trade_stake = actual_stake
         p.trade_amount = amount
         p.trailing_activated = False
         p.stop_is_trailing = False
+        p.pending_exit = False
         raw_stop = base_price * (1.0 + (base_stoploss / lev if not is_short else -base_stoploss / lev))
         p.stop_loss_price = _round_stop(raw_stop, p.precision[i], is_short)
-        open_count += 1
-        tied_up_capital += actual_stake
-        open_order.append(pair)
 
-        if _dp_wired:
+        # The trade and its order already exist (created at placement); the
+        # fill just completes them.
+        trade = p.local_trade
+        if trade is not None:
             try:
-                trade = LocalTrade(
-                    pair=pair, is_short=is_short, amount=amount, open_rate=base_price,
-                    fee_open=fee, fee_close=fee, leverage=lev,
-                    trading_mode=_TradingModeEnum.FUTURES if is_futures else _TradingModeEnum.SPOT,
-                    open_date=current_time, is_open=True,
-                    stake_amount=actual_stake, max_stake_amount=actual_stake,
-                )
-                LocalTrade.add_bt_trade(trade)
-                p.local_trade = trade
-                _notify_order_filled(
-                    pair, trade, "sell" if is_short else "buy", entry_order_type,
-                    amount, base_price, current_time,
-                )
+                trade.amount = amount
+                trade.open_rate = base_price
+                trade.open_date = current_time
+                trade.stake_amount = actual_stake
+                trade.max_stake_amount = actual_stake
+                trade.fee_open = p.entry_fee
             except Exception:
-                logger.debug("LocalTrade registration failed for %s", pair, exc_info=True)
-                p.local_trade = None
+                logger.debug("LocalTrade fill update failed for %s", pair, exc_info=True)
+            order = p.pending_entry_order
+            _close_order_object(order, base_price, current_time)
+            p.pending_entry_order = None
+            _notify_order_filled(
+                pair, trade, trade.entry_side, entry_order_type,
+                amount, base_price, current_time, order=order,
+            )
 
-        return True
+    def process_pending_entry(pair: str, p: _PairState, i: int) -> None:
+        """freqtrade's `backtest_loop` step 1 (`manage_open_orders`) followed by
+        step 3 (`_try_close_open_order`), for an entry order placed on an
+        earlier bar: let the strategy cancel or reprice it, then fill it if
+        this bar reaches its price."""
+        nonlocal timedout_entry_orders, canceled_entry_orders, replaced_entry_orders
+        if not p.pending_entry:
+            return
+        action, new_price = manage_open_order(pair, p, i, is_entry=True)
+        if action in ("timeout", "cancel"):
+            if action == "timeout":
+                timedout_entry_orders += 1
+            canceled_entry_orders += 1
+            cancel_entry_order(pair, p, action)
+            return
+        if action == "replace":
+            _reprice_order(p, i, True, new_price)
+            replaced_entry_orders += 1
+        if order_filled_at(p, i, p.pending_entry_price):
+            fill_entry(pair, p, i, p.pending_entry_price, p.pending_entry_short,
+                       p.pending_entry_stake, p.pending_entry_lev, p.pending_entry_amount)
 
     def do_exit_check(pair: str, p: _PairState, i: int) -> bool:
         """Full priority-ordered exit check + fill-price computation for the
         given already-open pair at bar i. Returns True if it closed."""
-        nonlocal open_count, running_balance, tied_up_capital
+        nonlocal open_count, running_balance, tied_up_capital, timedout_exit_orders
+        nonlocal canceled_exit_orders, replaced_exit_orders
         is_long = not p.is_short
         time_in_position = i - p.entry_row
         high_i, low_i, open_i = p.high[i], p.low[i], p.open[i]
         base_price, entry_price, lev = p.base_price, p.entry_price, p.trade_leverage
         amount = p.trade_amount
         bound = high_i if is_long else low_i
+        # This trade's OWN entry fee (maker if the entry rested). The close
+        # leg of every trigger check below stays on the taker rate: trailing
+        # activation and ROI are protective/market exits, which pay taker.
+        fee_open = p.entry_fee
 
         # freqtrade's `should_exit` calls `trade.adjust_min_max_rates(high or
         # current_rate, low or current_rate)` unconditionally, BEFORE any
@@ -823,11 +1233,11 @@ def _joint_multi_pair_backtest(
                 pd.Timestamp(p.dates[i]).tz_localize("UTC"),
             )
         if is_long:
-            open_value = amount * base_price * (1.0 + fee)
+            open_value = amount * base_price * (1.0 + fee_open)
             close_value_bound = amount * bound * (1.0 - fee) + funding_so_far
             leveraged_bound_return = ((close_value_bound / open_value) - 1.0) * lev if open_value else 0.0
         else:
-            open_value = amount * base_price * (1.0 - fee)
+            open_value = amount * base_price * (1.0 - fee_open)
             close_value_bound = amount * bound * (1.0 + fee) - funding_so_far
             leveraged_bound_return = (1.0 - (close_value_bound / open_value)) * lev if open_value else 0.0
 
@@ -904,11 +1314,11 @@ def _joint_multi_pair_backtest(
         if not signal_exit_triggered and _dp_wired and p.local_trade is not None:
             current_time_ce = pd.Timestamp(p.dates[i]).tz_localize("UTC")
             if is_long:
-                ov_ce = amount * base_price * (1.0 + fee)
+                ov_ce = amount * base_price * (1.0 + fee_open)
                 cv_ce = amount * open_i * (1.0 - fee) + funding_so_far
                 leveraged_open_return = ((cv_ce / ov_ce) - 1.0) * lev if ov_ce else 0.0
             else:
-                ov_ce = amount * base_price * (1.0 - fee)
+                ov_ce = amount * base_price * (1.0 - fee_open)
                 cv_ce = amount * open_i * (1.0 + fee) - funding_so_far
                 leveraged_open_return = (1.0 - (cv_ce / ov_ce)) * lev if ov_ce else 0.0
             try:
@@ -928,29 +1338,73 @@ def _joint_multi_pair_backtest(
         # veto from confirm_trade_exit (below) falls through to the NEXT
         # candidate in this same bar, exactly like `_check_trade_exit`'s
         # `for exit_ in exits: ... if t: return t` loop.
-        candidates: list[tuple[str, str | None]] = []
+        # Each candidate is (reason, custom_tag, resting_price). A non-None
+        # resting_price means "an exit order placed on an EARLIER bar, which
+        # this bar's range has now reached" — it fills at its own price, not
+        # at a price recomputed from this bar.
+        candidates: list[tuple[str, str | None, float | None]] = []
         if signal_exit_triggered:
-            candidates.append(("Signal", None))
+            candidates.append(("Signal", None, None))
         elif custom_exit_triggered:
-            candidates.append(("CustomExit", custom_exit_tag))
+            candidates.append(("CustomExit", custom_exit_tag, None))
         if stop_triggered and not stop_is_trailing:
-            candidates.append(("Stoploss", None))
+            candidates.append(("Stoploss", None, None))
         if roi_triggered:
-            candidates.append(("RoiTarget", None))
+            candidates.append(("RoiTarget", None, None))
         if stop_triggered and stop_is_trailing:
-            candidates.append(("TrailingStop", None))
+            candidates.append(("TrailingStop", None, None))
         if max_hold_triggered:
-            candidates.append(("MaxHoldPeriod", None))
+            candidates.append(("MaxHoldPeriod", None, None))
 
         p.stop_loss_price, p.stop_is_trailing, p.trailing_activated = \
             stop_loss_price, stop_is_trailing, trailing_activated
+
+        # A resting exit order from an earlier bar. freqtrade re-runs
+        # `_check_trade_exit` every bar and `handle_similar_order` cancels-and-
+        # replaces the resting order whenever this bar decides on a different
+        # price — so anything decided above supersedes it, and the resting
+        # order only gets its chance (appended LAST) if nothing else closes the
+        # trade. A protective exit therefore always wins over a stale limit.
+        if p.pending_exit:
+            action, new_price = manage_open_order(pair, p, i, is_entry=False)
+            if action in ("timeout", "cancel"):
+                # "Close exit order and retry exiting on next signal" — the
+                # POSITION stays open; only the order is cancelled.
+                p.pending_exit = False
+                _detach_order(p.local_trade, p.pending_exit_order)
+                p.pending_exit_order = None
+                if action == "timeout":
+                    timedout_exit_orders += 1
+                canceled_exit_orders += 1
+            else:
+                if action == "replace":
+                    _reprice_order(p, i, False, new_price)
+                    replaced_exit_orders += 1
+                if order_filled_at(p, i, p.pending_exit_price):
+                    candidates.append(
+                        (p.pending_exit_reason, p.pending_exit_tag, p.pending_exit_price)
+                    )
 
         if not candidates:
             return False
 
         current_time_exit = pd.Timestamp(p.dates[i]).tz_localize("UTC")
 
-        for exit_reason, custom_tag in candidates:
+        for exit_reason, custom_tag, resting_price in candidates:
+            # An already-resting order fills at its own price; none of the
+            # per-reason price resolution below applies to it a second time.
+            # confirm_trade_exit was already asked when the order was PLACED
+            # (freqtrade only calls it in `_get_exit_for_signal`, never again
+            # at fill time), so it is deliberately not re-asked here.
+            if resting_price is not None:
+                reason_tag = _EXIT_REASON_MAP.get(exit_reason, "exit_signal")
+                if exit_reason == "CustomExit" and custom_tag:
+                    reason_tag = custom_tag
+                close_position(pair, p, i, resting_price, exit_reason, reason_tag,
+                               current_time_exit, funding_so_far,
+                               fee_close=fill_fee(resting_price, open_i, not is_long))
+                return True
+
             # freqtrade parity: a trailing stop that arms-and-triggers within
             # the ENTRY candle is placed as an ORDER at the pessimistic price;
             # if that price is outside this candle's range the order can't
@@ -1015,97 +1469,169 @@ def _joint_multi_pair_backtest(
             if exit_reason == "CustomExit" and custom_tag:
                 reason_tag = custom_tag
 
+            strategy_priced_exit = False
             if exit_reason in ("Signal", "CustomExit") and _dp_wired and p.local_trade is not None:
                 # current_profit for custom_exit_price, computed at the
                 # already-resolved close rate (matches `_get_exit_for_signal`:
                 # `current_profit = trade.calc_profit_ratio(close_rate)`,
                 # evaluated BEFORE custom_exit_price is applied).
                 if is_long:
-                    ov_p = amount * base_price * (1.0 + fee)
+                    ov_p = amount * base_price * (1.0 + fee_open)
                     cv_p = amount * base_exit_price * (1.0 - fee) + funding_so_far
                     profit_at_close = ((cv_p / ov_p) - 1.0) * lev if ov_p else 0.0
                 else:
-                    ov_p = amount * base_price * (1.0 - fee)
+                    ov_p = amount * base_price * (1.0 - fee_open)
                     cv_p = amount * base_exit_price * (1.0 + fee) - funding_so_far
                     profit_at_close = (1.0 - (cv_p / ov_p)) * lev if ov_p else 0.0
-                base_exit_price = _resolve_exit_price(
+                resolved_exit = _resolve_exit_price(
                     pair, p.local_trade, current_time_exit, base_exit_price,
                     profit_at_close, reason_tag, precision_i,
                 )
+                # A strategy that prices its own exit limit OWNS that price —
+                # the config's blanket offset is only a default for strategies
+                # that don't (same rule as custom_entry_price on the way in).
+                strategy_priced_exit = resolved_exit != base_exit_price
+                base_exit_price = resolved_exit
                 # "We can't place orders lower than current low" (long) /
                 # "higher than current high" (short) — VulcanTrader doesn't
                 # support out-of-range limit exits in live either.
                 base_exit_price = max(base_exit_price, low_i) if is_long else min(base_exit_price, high_i)
 
+            # A signal-driven exit becomes an ORDER whenever the exit side is a
+            # limit order that rests: priced `exit_offset` on the favourable
+            # side of the rate resolved above (or exactly where the strategy
+            # asked, if it priced its own), it only closes the trade on a bar
+            # whose range reaches it. Protective exits (stoploss/trailing/ROI/
+            # max-hold) are deliberately left alone — see the Rust engine's
+            # `is_signal_exit` for why.
+            if (exit_rests or strategy_priced_exit) and exit_reason in ("Signal", "CustomExit"):
+                if exit_rests and not strategy_priced_exit:
+                    base_exit_price = base_exit_price * ((1.0 + exit_offset) if is_long
+                                                         else (1.0 - exit_offset))
+                    base_exit_price = max(base_exit_price, low_i) if is_long \
+                        else min(base_exit_price, high_i)
+                if not _confirm_exit(pair, p.local_trade, current_time_exit, amount,
+                                     base_exit_price, reason_tag):
+                    continue  # vetoed -> try the next candidate this same bar
+                # This order replaces whatever was resting (freqtrade's
+                # handle_similar_order), so nothing else can fill this bar.
+                if p.pending_exit and p.pending_exit_price != base_exit_price:
+                    _detach_order(p.local_trade, p.pending_exit_order)
+                    p.pending_exit_order = None
+                    canceled_exit_orders += 1
+                if not p.pending_exit or p.pending_exit_price != base_exit_price:
+                    p.pending_exit = True
+                    p.pending_exit_price = base_exit_price
+                    p.pending_exit_bar = i
+                    p.pending_exit_reason = exit_reason
+                    p.pending_exit_tag = custom_tag
+                    if _dp_wired and p.local_trade is not None and p.pending_exit_order is None:
+                        try:
+                            order = _make_order(
+                                pair, p.local_trade, p.local_trade.exit_side, exit_order_type,
+                                amount, base_exit_price, current_time_exit, is_open=True,
+                                tag=reason_tag,
+                            )
+                            p.local_trade.orders.append(order)
+                            p.pending_exit_order = order
+                        except Exception:
+                            logger.debug("exit order registration failed for %s", pair, exc_info=True)
+                            p.pending_exit_order = None
+                if not order_filled_at(p, i, base_exit_price):
+                    return False
+                close_position(pair, p, i, base_exit_price, exit_reason, reason_tag,
+                               current_time_exit, funding_so_far,
+                               fee_close=fill_fee(base_exit_price, open_i, not is_long))
+                return True
+
             if not _confirm_exit(pair, p.local_trade, current_time_exit, amount, base_exit_price, reason_tag):
                 continue  # vetoed -> try the next candidate this same bar
 
-            exit_price = base_exit_price * (1.0 - fee) if is_long else base_exit_price * (1.0 + fee)
-
-            # Use the stake fixed AT ENTRY, not one recomputed now — matters
-            # once `compounding_enabled` makes `current_stake()` time-varying.
-            stake = p.trade_stake
-
-            # freqtrade's REAL profit_abs/profit_ratio come from `Trade.
-            # calc_close_trade_value` / `_calc_open_trade_value`: amount*price
-            # trade VALUES, not stake*profit_ratio. profit_ratio's `amount`
-            # term cancels out of that ratio (this formula IS still exactly
-            # `raw_profit*leverage` when funding_fees==0 — verified
-            # algebraically and empirically), which is why the simpler
-            # stake-based version already matched profit_ratio exactly.
-            # profit_abs is a DIFFERENCE though, so `amount` does NOT cancel
-            # there, and for FUTURES trades `close_trade_value` also has
-            # accrued funding fees added in (subtracted for shorts) — both
-            # need the real amount-based formula. `funding_so_far` was
-            # already computed above (entry_row -> i, same range) for the
-            # bound_profit check — this bar's exit reuses it as-is.
-            funding_fees = funding_so_far
-
-            if is_long:
-                open_value = amount * base_price * (1.0 + fee)
-                close_value = amount * base_exit_price * (1.0 - fee) + funding_fees
-                pnl_amount = close_value - open_value
-                leveraged_profit = ((close_value / open_value) - 1.0) * lev if open_value else 0.0
-            else:
-                open_value = amount * base_price * (1.0 - fee)
-                close_value = amount * base_exit_price * (1.0 + fee) - funding_fees
-                pnl_amount = open_value - close_value
-                leveraged_profit = (1.0 - (close_value / open_value)) * lev if open_value else 0.0
-
-            running_balance += pnl_amount
-            tied_up_capital -= stake
-
-            trades.append({
-                "pair": pair, "is_short": p.is_short, "entry_row": p.entry_row, "exit_row": i,
-                "entry_price": entry_price, "base_exit_price": base_exit_price, "exit_price": exit_price,
-                "profit_ratio": leveraged_profit, "profit_abs": pnl_amount,
-                "leverage": lev, "exit_reason": exit_reason, "exit_reason_tag": reason_tag, "stake": stake,
-                "funding_fees": funding_fees,
-            })
-
-            p.in_position = False
-            open_count -= 1
-            if pair in open_order:
-                open_order.remove(pair)
-
-            if p.local_trade is not None:
-                trade = p.local_trade
-                trade.close_date = current_time_exit
-                trade.close_profit = leveraged_profit
-                trade.close_profit_abs = pnl_amount
-                trade.is_open = False
-                try:
-                    LocalTrade.close_bt_trade(trade)
-                except Exception:
-                    logger.debug("LocalTrade.close_bt_trade failed for %s", pair, exc_info=True)
-                _notify_order_filled(
-                    pair, trade, "sell" if is_long else "buy", exit_order_type,
-                    amount, base_exit_price, current_time_exit,
-                )
-                p.local_trade = None
+            close_position(pair, p, i, base_exit_price, exit_reason, reason_tag,
+                           current_time_exit, funding_so_far, fee_close=fee)
             return True
 
         return False  # every candidate this bar was vetoed by confirm_trade_exit
+
+    def close_position(pair: str, p: _PairState, i: int, base_exit_price: float,
+                       exit_reason: str, reason_tag: str, current_time_exit,
+                       funding_so_far: float, fee_close: float) -> None:
+        """Book the close of an open position at an already-resolved,
+        already-confirmed fill price, paying `fee_close` on the exit leg
+        (maker when the order rested — see `fill_fee`). Shared by the
+        immediate-fill path and by a resting exit order that a later bar
+        finally touched."""
+        nonlocal open_count, running_balance, tied_up_capital
+        is_long = not p.is_short
+        lev, amount = p.trade_leverage, p.trade_amount
+        base_price, entry_price = p.base_price, p.entry_price
+        fee_open = p.entry_fee
+
+        exit_price = base_exit_price * (1.0 - fee_close) if is_long else base_exit_price * (1.0 + fee_close)
+
+        # Use the stake fixed AT ENTRY, not one recomputed now — matters
+        # once `compounding_enabled` makes `current_stake()` time-varying.
+        stake = p.trade_stake
+
+        # freqtrade's REAL profit_abs/profit_ratio come from `Trade.
+        # calc_close_trade_value` / `_calc_open_trade_value`: amount*price
+        # trade VALUES, not stake*profit_ratio. profit_ratio's `amount`
+        # term cancels out of that ratio (this formula IS still exactly
+        # `raw_profit*leverage` when funding_fees==0 — verified
+        # algebraically and empirically), which is why the simpler
+        # stake-based version already matched profit_ratio exactly.
+        # profit_abs is a DIFFERENCE though, so `amount` does NOT cancel
+        # there, and for FUTURES trades `close_trade_value` also has
+        # accrued funding fees added in (subtracted for shorts) — both
+        # need the real amount-based formula. `funding_so_far` was
+        # already computed by the caller (entry_row -> i, same range) for the
+        # bound_profit check — this bar's exit reuses it as-is.
+        funding_fees = funding_so_far
+
+        if is_long:
+            open_value = amount * base_price * (1.0 + fee_open)
+            close_value = amount * base_exit_price * (1.0 - fee_close) + funding_fees
+            pnl_amount = close_value - open_value
+            leveraged_profit = ((close_value / open_value) - 1.0) * lev if open_value else 0.0
+        else:
+            open_value = amount * base_price * (1.0 - fee_open)
+            close_value = amount * base_exit_price * (1.0 + fee_close) - funding_fees
+            pnl_amount = open_value - close_value
+            leveraged_profit = (1.0 - (close_value / open_value)) * lev if open_value else 0.0
+
+        running_balance += pnl_amount
+        tied_up_capital -= stake
+
+        trades.append({
+            "pair": pair, "is_short": p.is_short, "entry_row": p.entry_row, "exit_row": i,
+            "entry_price": entry_price, "base_exit_price": base_exit_price, "exit_price": exit_price,
+            "base_entry_price": base_price, "fee_open": fee_open, "fee_close": fee_close,
+            "profit_ratio": leveraged_profit, "profit_abs": pnl_amount,
+            "leverage": lev, "exit_reason": exit_reason, "exit_reason_tag": reason_tag, "stake": stake,
+            "funding_fees": funding_fees,
+        })
+
+        p.in_position = False
+        p.pending_exit = False
+        open_count -= 1
+        if pair in open_order:
+            open_order.remove(pair)
+
+        if p.local_trade is not None:
+            trade = p.local_trade
+            trade.close_date = current_time_exit
+            trade.close_profit = leveraged_profit
+            trade.close_profit_abs = pnl_amount
+            trade.is_open = False
+            try:
+                LocalTrade.close_bt_trade(trade)
+            except Exception:
+                logger.debug("LocalTrade.close_bt_trade failed for %s", pair, exc_info=True)
+            _notify_order_filled(
+                pair, trade, "sell" if is_long else "buy", exit_order_type,
+                amount, base_exit_price, current_time_exit,
+            )
+            p.local_trade = None
 
     def process_pass(pair: str, p: _PairState, i: int, direction: str | None,
                      can_enter_bar: bool) -> str | None:
@@ -1113,6 +1639,15 @@ def _joint_multi_pair_backtest(
         direction (or None), used by the reversal-retry loop."""
         nonlocal open_count, rejected
         exiting_dir_before = ("short" if p.is_short else "long") if p.in_position else None
+
+        # freqtrade's backtest_loop step 1 (`manage_open_orders`, which deletes
+        # a trade whose entry order timed out) and step 3 (`_try_close_open_
+        # order`, which fills it if this candle reaches its price), for an
+        # order placed on an EARLIER bar. Orders placed on THIS bar get their
+        # own fill attempt inside `do_enter`, exactly as in freqtrade, where
+        # step 2 creates the order and step 3 immediately tries to close it.
+        # Inert unless a resting entry offset is configured.
+        process_pending_entry(pair, p, i)
 
         # No same-bar cooldown here: freqtrade's real entry guard is only
         # "currently flat" (`len(bt_trades_open_pp[pair])==0`). A same-candle
@@ -1125,7 +1660,10 @@ def _joint_multi_pair_backtest(
         # applies to anything still open) — without this, the engine opened
         # AND immediately force-closed a same-candle trade on the final bar
         # that real freqtrade never took at all.
-        if can_enter_bar and (not p.in_position) and direction is not None:
+        # A still-resting entry order already holds this pair's slot and its
+        # capital (freqtrade: "assumption: there can't be multiple open entry
+        # orders at any given time"), so no second one is placed on top of it.
+        if can_enter_bar and (not p.in_position) and (not p.pending_entry) and direction is not None:
             if max_open_trades <= 0 or open_count < max_open_trades:
                 stake = current_stake()
                 if stake > 0 and capital_available(stake):
@@ -1204,7 +1742,13 @@ def _joint_multi_pair_backtest(
     # Force-close anything still open at the end (handle_left_open).
     for pair, p in pair_states.items():
         if not p.in_position:
+            # An order still resting when the data runs out never filled;
+            # count it with the timeouts rather than dropping it silently.
+            if p.pending_entry:
+                timedout_entry_orders += 1
             continue
+        if p.pending_exit:
+            timedout_exit_orders += 1
         idx = p.n - 1
         is_long = not p.is_short
         open_i = p.open[idx]
@@ -1222,12 +1766,12 @@ def _joint_multi_pair_backtest(
             )
 
         if is_long:
-            open_value = amount * p.base_price * (1.0 + fee)
+            open_value = amount * p.base_price * (1.0 + p.entry_fee)
             close_value = amount * open_i * (1.0 - fee) + funding_fees
             pnl_amount = close_value - open_value
             leveraged_profit = ((close_value / open_value) - 1.0) * lev if open_value else 0.0
         else:
-            open_value = amount * p.base_price * (1.0 - fee)
+            open_value = amount * p.base_price * (1.0 - p.entry_fee)
             close_value = amount * open_i * (1.0 + fee) - funding_fees
             pnl_amount = open_value - close_value
             leveraged_profit = (1.0 - (close_value / open_value)) * lev if open_value else 0.0
@@ -1237,6 +1781,7 @@ def _joint_multi_pair_backtest(
         trades.append({
             "pair": pair, "is_short": p.is_short, "entry_row": p.entry_row, "exit_row": idx,
             "entry_price": p.entry_price, "base_exit_price": open_i, "exit_price": exit_price,
+            "base_entry_price": p.base_price, "fee_open": p.entry_fee, "fee_close": fee,
             "profit_ratio": leveraged_profit, "profit_abs": pnl_amount,
             "leverage": p.trade_leverage, "exit_reason": "ForceExit", "exit_reason_tag": "force_exit", "stake": stake,
             "funding_fees": funding_fees,
@@ -1267,7 +1812,14 @@ def _joint_multi_pair_backtest(
         # a silently-wrong number.)
         strategy.wallets = _orig_wallets
 
-    return trades, rejected
+    return trades, rejected, {
+        "timedout_entry_orders": timedout_entry_orders,
+        "timedout_exit_orders": timedout_exit_orders,
+        "canceled_entry_orders": canceled_entry_orders,
+        "canceled_exit_orders": canceled_exit_orders,
+        "replaced_entry_orders": replaced_entry_orders,
+        "replaced_exit_orders": replaced_exit_orders,
+    }
 
 
 def run_rust_backtest(processed: dict[str, pd.DataFrame], strategy: Any,
@@ -1313,29 +1865,29 @@ def run_rust_backtest(processed: dict[str, pd.DataFrame], strategy: Any,
     stoploss_ratio = float(getattr(strategy, "stoploss", -0.10) or -0.10)
 
     try:
-        raw_trades, rejected = _joint_multi_pair_backtest(
+        raw_trades, rejected, order_stats = _joint_multi_pair_backtest(
             processed, strategy, config, exchange,
             full_signals=full_signals, required_startup=required_startup,
             dataprovider=dataprovider,
         )
     except Exception:
         logger.exception("Rust-engine joint backtest failed")
-        raw_trades, rejected = [], 0
+        raw_trades, rejected, order_stats = [], 0, {}
 
     rows: list[dict] = []
     for t in raw_trades:
         dates = t["_dates"]
         ei, xi = t["entry_row"], t["exit_row"]
         is_short = t["is_short"]
-        # Undo the engine's fee-baked fill price (entry = open*(1+fee), exit =
-        # open*(1-fee) for longs) — freqtrade records the RAW fill price and
-        # carries fees in fee_open/fee_close separately.
-        if is_short:
-            open_rate = t["entry_price"] / (1.0 - fee) if fee else t["entry_price"]
-            close_rate = t["exit_price"] / (1.0 + fee) if fee else t["exit_price"]
-        else:
-            open_rate = t["entry_price"] / (1.0 + fee) if fee else t["entry_price"]
-            close_rate = t["exit_price"] / (1.0 - fee) if fee else t["exit_price"]
+        # freqtrade records the RAW fill price and carries fees in fee_open/
+        # fee_close separately, so use the raw prices the simulator already
+        # tracked rather than dividing the fee back out of the fee-baked ones
+        # (which silently assumes both sides paid the SAME fee — untrue as
+        # soon as one side fills as a resting maker order).
+        fee_open_t = t.get("fee_open", fee)
+        fee_close_t = t.get("fee_close", fee)
+        open_rate = t.get("base_entry_price") or t["entry_price"]
+        close_rate = t.get("base_exit_price") or t["exit_price"]
 
         profit_ratio = t["profit_ratio"]
         profit_abs = t["profit_abs"]
@@ -1358,8 +1910,8 @@ def run_rust_backtest(processed: dict[str, pd.DataFrame], strategy: Any,
             "close_date": close_date,
             "open_rate": open_rate,
             "close_rate": close_rate,
-            "fee_open": fee,
-            "fee_close": fee,
+            "fee_open": fee_open_t,
+            "fee_close": fee_close_t,
             "trade_duration": int(xi - ei) * tf_min,
             "profit_ratio": profit_ratio,
             "profit_abs": profit_abs,
@@ -1391,10 +1943,10 @@ def run_rust_backtest(processed: dict[str, pd.DataFrame], strategy: Any,
         "config": strategy.config,
         "locks": [],
         "rejected_signals": rejected,
-        "timedout_entry_orders": 0,
-        "timedout_exit_orders": 0,
-        "canceled_trade_entries": 0,
-        "canceled_entry_orders": 0,
-        "replaced_entry_orders": 0,
+        "timedout_entry_orders": order_stats.get("timedout_entry_orders", 0),
+        "timedout_exit_orders": order_stats.get("timedout_exit_orders", 0),
+        "canceled_trade_entries": order_stats.get("canceled_entry_orders", 0),
+        "canceled_entry_orders": order_stats.get("canceled_entry_orders", 0),
+        "replaced_entry_orders": order_stats.get("replaced_entry_orders", 0),
         "final_balance": final_bal,
     }
