@@ -74,6 +74,7 @@ import signal
 import sys
 import threading
 import time
+from concurrent import futures
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -241,31 +242,80 @@ def _load_configuration(args_dict: dict[str, Any], runmode: Any) -> dict[str, An
 #  Subcommand: backtest
 # ---------------------------------------------------------------------------
 
-async def _run_one_backtest(args_dict: dict[str, Any]) -> dict[str, Any]:
-    """Run a single Backtesting().start() in a worker thread."""
+def _run_backtest_sync(args_dict: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run one Backtesting().start() to completion in the calling process.
+
+    Module-level rather than a closure so it can also be dispatched to a
+    spawned worker process (a closure is not picklable).
+    """
     from VulcanTrader.backtesting import Backtesting  # type: ignore
     from VulcanTrader.enums import RunMode  # type: ignore
 
-    def _go() -> dict[str, Any]:
-        config = _load_configuration(args_dict, RunMode.BACKTEST)
-        # Backtest must ignore a config file's own "strategy" field (see
-        # config_schema.py's "strategy" entry) - Configuration otherwise
-        # inherits it whenever -s/--strategies wasn't passed, which would
-        # silently pin every backtest against this config to one strategy
-        # and defeat the multi-strategy fan-out in _cmd_backtest_async.
-        # args_dict["strategy"] (possibly absent/None) is the only
-        # authoritative source here.
-        config["strategy"] = args_dict.get("strategy")
-        if args_dict.get("engine"):
-            config["engine"] = args_dict["engine"]
-        bt = Backtesting(config)
-        bt.start()
-        return {
-            "strategies": [s.get_strategy_name() for s in bt.strategylist],
-            "results": bt.results,
-        }
+    config = _load_configuration(args_dict, RunMode.BACKTEST)
+    # Backtest must ignore a config file's own "strategy" field (see
+    # config_schema.py's "strategy" entry) - Configuration otherwise
+    # inherits it whenever -s/--strategies wasn't passed, which would
+    # silently pin every backtest against this config to one strategy
+    # and defeat the multi-strategy fan-out in _cmd_backtest_async.
+    # args_dict["strategy"] (possibly absent/None) is the only
+    # authoritative source here.
+    config["strategy"] = args_dict.get("strategy")
+    if args_dict.get("engine"):
+        config["engine"] = args_dict["engine"]
+    bt = Backtesting(config)
+    bt.start()
+    # Deliberately does NOT return bt.results: nothing consumes it (the caller
+    # only checks for failure, and the run has already written its own result
+    # JSON and printed its own summary), and it would otherwise have to be
+    # pickled back from a worker process.
+    return {"strategies": [s.get_strategy_name() for s in bt.strategylist]}
 
-    return await asyncio.to_thread(_go)
+
+def _backtest_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Process-pool entry point for one backtest.
+
+    A backtest keeps its per-run state in PROCESS-GLOBAL containers, not on the
+    Backtesting instance: LocalTrade.bt_trades / bt_trades_open /
+    bt_trades_open_pp / bt_open_open_trade_count / bt_total_profit
+    (persistence/trade_model.py), plus PairLocks and CustomDataWrapper. And
+    Backtesting.reset_backtest() clears all of them at the start of every run.
+    Two backtests sharing one interpreter therefore scribble over each other's
+    open-trade ledger - producing silently wrong trade counts and P&L, and
+    eventually "ValueError: list.remove(x): x not in list" out of
+    LocalTrade.close_bt_trade when one run retires a trade the other already
+    removed. Concurrency has to come from separate processes, so each run gets
+    its own copy of that state.
+
+    The worker sets up its own logging: it is a fresh interpreter that never
+    ran main().
+    """
+    _setup_logging(int(payload.get("verbose") or 0), payload.get("logfile"))
+    return _run_backtest_sync(payload["args"])
+
+
+async def _run_one_backtest(
+    args_dict: dict[str, Any],
+    executor: "futures.Executor | None" = None,
+    verbose: int = 0,
+    logfile: str | None = None,
+) -> dict[str, Any]:
+    """
+    Run a single backtest.
+
+    Without an ``executor`` the run happens in a worker thread of this process,
+    which is safe because nothing else is running concurrently. When several
+    backtests are in flight they are dispatched to ``executor`` (a process
+    pool) instead - see :func:`_backtest_worker` for why threads cannot be used
+    for that.
+    """
+    if executor is None:
+        return await asyncio.to_thread(_run_backtest_sync, args_dict)
+
+    loop = asyncio.get_running_loop()
+    payload = {"args": args_dict, "verbose": verbose, "logfile": logfile}
+    return await loop.run_in_executor(executor, _backtest_worker, payload)
 
 
 async def _cmd_backtest_async(args: argparse.Namespace) -> int:
@@ -280,22 +330,41 @@ async def _cmd_backtest_async(args: argparse.Namespace) -> int:
             d["strategy"] = strat
         job_specs.append(d)
 
-    sem = asyncio.Semaphore(max(1, args.jobs))
+    jobs = max(1, args.jobs)
+    # Only pay for process isolation when runs will actually overlap. A single
+    # run - or --jobs 1 - stays in-process, exactly as before.
+    parallel = min(jobs, len(job_specs))
+    sem = asyncio.Semaphore(jobs)
+    verbose = getattr(args, "verbose", 0)
+    logfile = getattr(args, "logfile", None)
 
-    async def _runner(spec: dict[str, Any]) -> Any:
+    async def _runner(spec: dict[str, Any], executor) -> Any:
         async with sem:
             label = spec.get("strategy", "<config-default>")
             logger.info("backtest start :: %s", label)
             t0 = time.perf_counter()
             try:
-                res = await _run_one_backtest(spec)
+                res = await _run_one_backtest(spec, executor, verbose, logfile)
                 logger.info("backtest done  :: %s (%.1fs)", label, time.perf_counter() - t0)
                 return res
             except Exception:
                 logger.exception("backtest FAILED :: %s", label)
                 return None
 
-    results = await asyncio.gather(*[_runner(s) for s in job_specs])
+    executor: futures.Executor | None = None
+    try:
+        if parallel > 1:
+            # Backtests keep per-run state in process globals - see
+            # _backtest_worker. Threads would corrupt each other's ledgers.
+            executor = futures.ProcessPoolExecutor(max_workers=parallel)
+            logger.info(
+                "running %d backtests across %d worker processes", len(job_specs), parallel
+            )
+        results = await asyncio.gather(*[_runner(s, executor) for s in job_specs])
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
+
     failures = sum(1 for r in results if r is None)
     return 1 if failures else 0
 

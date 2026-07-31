@@ -75,6 +75,7 @@ Usage
     )
 """
 
+import bisect
 import logging
 from collections import deque
 from datetime import datetime, timedelta
@@ -1787,6 +1788,14 @@ class BacktestRegimeAnalyzer:
     # any trade's own outcome or duration, unlike a max_rate/min_rate proxy.
     VOL_BUCKETS: List[str] = ["HIGH_VOL", "LOW_VOL"]
 
+    # Resamples used by the permutation test that gates the volatility-bias
+    # label, and the significance level it must clear.
+    VOL_BIAS_RESAMPLES: int = 10_000
+    VOL_BIAS_ALPHA: float = 0.05
+    # Minimum trades overall / in each bucket before any label is emitted.
+    VOL_BIAS_MIN_TRADES: int = 20
+    VOL_BIAS_MIN_PER_BUCKET: int = 10
+
     # Colors used by the frontend for chart backgrounds / labels
     REGIME_COLORS: Dict[str, Dict[str, str]] = {
         "EXTREME_BULL": {"solid": "#10b981", "text": "#10b981", "bg": "rgba(16,185,129,0.25)"},
@@ -1934,6 +1943,11 @@ class BacktestRegimeAnalyzer:
                        trailing history to form a baseline are left
                        unclassified (None).
 
+        Note that candle i's own high/low feed its own atr_pct, so a candle's
+        bucket is only known once that candle has CLOSED. Classifying a trade
+        by ambient volatility must therefore use the last candle that closed
+        at or before the entry - see :meth:`label_at_entry`.
+
         Returns
         -------
         Copy of df with extra columns: atr_pct, vol_baseline, vol_bucket.
@@ -1944,8 +1958,95 @@ class BacktestRegimeAnalyzer:
         baseline = df["atr_pct"].rolling(baseline_window, min_periods=min_periods).mean().shift(1)
         df["vol_baseline"] = baseline
         df["vol_bucket"] = np.where(df["atr_pct"] > baseline, "HIGH_VOL", "LOW_VOL")
-        df.loc[baseline.isna(), "vol_bucket"] = None
+        # `NaN > x` is False, which would silently bucket an unmeasurable
+        # candle (zero/missing close -> NaN atr_pct) as LOW_VOL. Both sides of
+        # the comparison have to be present for the label to mean anything.
+        df.loc[baseline.isna() | df["atr_pct"].isna(), "vol_bucket"] = None
         return df
+
+    # ------------------------------------------------------------------ entry alignment
+
+    @staticmethod
+    def candle_interval(dates: "List[datetime]") -> "timedelta | None":
+        """
+        Infer the candle interval from a sorted list of candle OPEN timestamps
+        as the most common gap between consecutive candles.
+
+        The mode rather than the mean/min: real OHLCV series carry occasional
+        exchange gaps (which inflate the mean) and, rarely, duplicate
+        timestamps (which would drive a min to zero). The modal spacing is the
+        timeframe in both cases.
+        """
+        if dates is None or len(dates) < 2:
+            return None
+        arr = np.asarray(pd.to_datetime(pd.Series(dates)).values, dtype="datetime64[ns]")
+        diffs = np.diff(arr.astype("int64"))
+        diffs = diffs[diffs > 0]
+        if diffs.size == 0:
+            return None
+        vals, counts = np.unique(diffs, return_counts=True)
+        return pd.Timedelta(int(vals[int(np.argmax(counts))]), unit="ns").to_pytimedelta()
+
+    @classmethod
+    def resolve_interval(
+        cls, timeframe: "str | None", dates: list
+    ) -> "timedelta | None":
+        """
+        Candle interval to use for entry alignment: the declared ``timeframe``
+        when it can be parsed, otherwise inferred from the candle timestamps.
+        """
+        if timeframe:
+            try:
+                from VulcanTrader.exchange.exchange_utils_timeframe import (
+                    timeframe_to_seconds,
+                )
+                secs = timeframe_to_seconds(str(timeframe))
+                if secs and secs > 0:
+                    return timedelta(seconds=int(secs))
+            except Exception:
+                pass
+        return cls.candle_interval(dates)
+
+    @staticmethod
+    def label_at_entry(
+        dates: list,
+        labels: list,
+        dt: "datetime",
+        interval: "timedelta | None",
+        default=None,
+    ):
+        """
+        Label of the last candle to have FULLY CLOSED at instant ``dt``.
+
+        ``dates`` are candle OPEN timestamps, so candle i covers
+        ``[dates[i], dates[i] + interval)`` and has closed at ``dt`` only when
+        ``dates[i] + interval <= dt``.
+
+        This matters because the backtester fills an entry at the OPEN of the
+        candle stamped ``open_date`` (backtesting.py shifts entry signals one
+        candle forward, then enters at ``row[OPEN_IDX]``). Indexing that
+        candle directly - ``bisect_right(dates, dt) - 1`` - would classify the
+        entry using the high/low of a candle that does not finish until after
+        the trade is already open, i.e. using the trade's own price path.
+
+        Returns ``default`` when no candle has closed yet, rather than
+        borrowing the first available label.
+        """
+        if not dates or not labels:
+            return default
+        if interval is None:
+            # Without an interval we cannot say when a candle closed; fall
+            # back to the strictly-earlier candle, which is never later than
+            # the correct one for on-boundary entries.
+            idx = bisect.bisect_left(dates, dt) - 1
+        else:
+            idx = bisect.bisect_right(dates, dt - interval) - 1
+        if idx < 0:
+            return default
+        if idx >= len(labels):
+            idx = len(labels) - 1
+        val = labels[idx]
+        return default if val is None or (isinstance(val, float) and np.isnan(val)) else val
 
     # ------------------------------------------------------------------ regime_periods
 
@@ -1997,6 +2098,7 @@ class BacktestRegimeAnalyzer:
                 "sharpe": 0.0, "expectancy_r": 0.0, "rr": 0.0,
                 "cagr": 0.0, "total_pnl": 0.0, "roi_pct": 0.0,
                 "max_drawdown_pct": 0.0,
+                "avg_profit_pct": 0.0, "per_trade_sharpe": 0.0,
             }
 
         def _pnl(t):
@@ -2005,6 +2107,21 @@ class BacktestRegimeAnalyzer:
                 return float(v)
             except (TypeError, ValueError):
                 return 0.0
+
+        def _ratio(t) -> float:
+            """Per-trade return as a fraction of the stake committed to it."""
+            for key in ("profit_ratio", "close_profit"):
+                v = t.get(key)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+            try:
+                stake = float(t.get("stake_amount") or 0.0)
+            except (TypeError, ValueError):
+                stake = 0.0
+            return _pnl(t) / stake if stake > 0 else 0.0
 
         pnls = [_pnl(t) for t in trades]
         wins   = [p for p in pnls if p > 0]
@@ -2089,6 +2206,22 @@ class BacktestRegimeAnalyzer:
                 if dd_pct > max_dd_pct:
                     max_dd_pct = dd_pct
 
+        # Per-trade return statistics. Unlike roi_pct / max_drawdown_pct -
+        # which are cumulative over however many trades the bucket happens to
+        # contain - these do not grow with bucket size, so they can be
+        # compared between two buckets of different length without the larger
+        # bucket being penalised (for a losing strategy) or flattered (for a
+        # winning one) purely for holding more trades.
+        ratios = [_ratio(t) for t in trades]
+        avg_profit_pct = sum(ratios) / n * 100.0
+        per_trade_sharpe = 0.0
+        if n >= 2:
+            mean_x = sum(ratios) / n
+            var_x = sum((x - mean_x) ** 2 for x in ratios) / (n - 1)
+            sd_x = math.sqrt(var_x)
+            if sd_x > 0:
+                per_trade_sharpe = mean_x / sd_x
+
         return {
             "trades":      n,
             "win_rate":    round(win_rate,  2),
@@ -2100,6 +2233,8 @@ class BacktestRegimeAnalyzer:
             "total_pnl":   round(total_pnl, 4),
             "roi_pct":     round(roi_pct,   2),
             "max_drawdown_pct": round(max_dd_pct, 2),
+            "avg_profit_pct":   round(avg_profit_pct, 4),
+            "per_trade_sharpe": round(per_trade_sharpe, 4),
         }
 
     # ------------------------------------------------------------------ main entry point
@@ -2111,9 +2246,13 @@ class BacktestRegimeAnalyzer:
         regime_df: "pd.DataFrame | None",
         starting_capital: float = 1000.0,
         trade_regimes: "list[str] | None" = None,
+        timeframe: "str | None" = None,
     ) -> Dict:
         """
         Group backtest trades by entry-time market regime and compute metrics.
+
+        A trade is attributed to the regime of the last candle that had fully
+        CLOSED when it was filled - see :meth:`label_at_entry`.
 
         Parameters
         ----------
@@ -2121,6 +2260,9 @@ class BacktestRegimeAnalyzer:
         regime_df        : DataFrame with ``date`` and ``regime`` columns
                            (output of :meth:`classify_regime`).
         starting_capital : Initial capital used for ROI/CAGR/Sharpe calculations.
+        timeframe        : Candle timeframe (e.g. "15m"). Used to decide when a
+                           candle has closed; inferred from ``regime_df`` when
+                           omitted.
 
         Returns
         -------
@@ -2148,20 +2290,17 @@ class BacktestRegimeAnalyzer:
                 raw_dates = raw_dates.dt.tz_localize(None)
             regime_dates  = raw_dates.to_list()
             regime_labels = regime_df["regime"].to_list()
+            interval = cls.resolve_interval(timeframe, regime_dates)
 
             def _lookup(dt_str: str) -> str:
                 s = str(dt_str)[:19].replace(" ", "T")
                 try:
-                    from datetime import datetime as _dt
-                    dt = _dt.fromisoformat(s)
+                    dt = datetime.fromisoformat(s)
                 except ValueError:
                     return "RANGING"
-                idx = bisect.bisect_right(regime_dates, dt) - 1
-                if idx < 0:
-                    return regime_labels[0] if regime_labels else "RANGING"
-                if idx >= len(regime_labels):
-                    return regime_labels[-1]
-                return regime_labels[idx]
+                return cls.label_at_entry(
+                    regime_dates, regime_labels, dt, interval, default="RANGING"
+                )
 
             trade_regimes = [_lookup(t.get("open_date") or "") for t in trades]
 
@@ -2218,19 +2357,42 @@ class BacktestRegimeAnalyzer:
         vol_df: "pd.DataFrame | None",
         starting_capital: float = 1000.0,
         trade_vol_buckets: "list[str] | None" = None,
+        timeframe: "str | None" = None,
     ) -> Dict:
         """
         Group backtest trades by the AMBIENT market volatility bucket
         (HIGH_VOL / LOW_VOL, see classify_volatility) in effect at each
-        trade's ENTRY, then compare win rate / profit factor / ROI / max
-        drawdown between the two groups - majority vote across all four
-        decides the "Volatility Bias" label.
+        trade's ENTRY, then compare the two groups.
 
-        Because vol_bucket is derived purely from prior candles relative to
-        their own trailing baseline, it carries no information about how the
-        trade itself played out (its duration, its MFE/MAE) - unlike a
-        max_rate/min_rate range computed over the trade's own holding
-        window, which is confounded with both.
+        Attribution
+        -----------
+        A trade is attributed to the bucket of the last candle that had fully
+        CLOSED when it was filled (:meth:`label_at_entry`). The entry candle
+        itself is excluded: the backtester fills at that candle's open, so its
+        high/low - which feed its own ATR - only exist after the trade is
+        already running, and for short trades largely describe the trade's own
+        price path.
+
+        Comparison metrics
+        ------------------
+        All four are per-trade quantities (win rate, profit factor, average
+        return per trade, per-trade Sharpe). Cumulative measures - total ROI
+        and max drawdown - are reported but deliberately NOT compared, because
+        they grow with the number of trades in a bucket: the two buckets are
+        never the same size (an "above its own trailing mean" split runs about
+        44/56 on real data), so a cumulative comparison systematically
+        penalises the busier bucket for a losing strategy and flatters it for
+        a winning one, independently of any real difference in edge.
+
+        Label
+        -----
+        The majority vote is reported for transparency but does NOT decide the
+        label on its own - four correlated metrics agreeing is weak evidence,
+        and a bare vote will happily call a coin flip. The direction is only
+        stated when the difference in mean per-trade return clears a two-sided
+        permutation test at VOL_BIAS_ALPHA; otherwise the label is
+        "Inconclusive". The test is seeded, so the same input always yields
+        the same answer.
 
         Parameters
         ----------
@@ -2241,13 +2403,15 @@ class BacktestRegimeAnalyzer:
         trade_vol_buckets: Optional precomputed per-trade bucket list (ALL
                            mode, where each trade is looked up against its
                            own pair's volatility series).
+        timeframe        : Candle timeframe (e.g. "15m"). Used to decide when a
+                           candle has closed; inferred from ``vol_df`` when
+                           omitted.
 
         Returns
         -------
-        dict with keys: per_bucket_metrics, label, high_points, low_points, n
+        dict with keys: per_bucket_metrics, label, high_points, low_points, n,
+        p_value, effect_size_pct, vote_metrics, significant
         """
-        import bisect
-
         no_data = (vol_df is None or len(vol_df) == 0) and trade_vol_buckets is None
         if no_data or not trades:
             return {
@@ -2256,6 +2420,10 @@ class BacktestRegimeAnalyzer:
                 "high_points": 0,
                 "low_points": 0,
                 "n": 0,
+                "p_value": None,
+                "effect_size_pct": None,
+                "significant": False,
+                "vote_metrics": [],
             }
 
         if trade_vol_buckets is None:
@@ -2264,20 +2432,15 @@ class BacktestRegimeAnalyzer:
                 raw_dates = raw_dates.dt.tz_localize(None)
             vol_dates = raw_dates.to_list()
             vol_labels = vol_df["vol_bucket"].to_list()
+            interval = cls.resolve_interval(timeframe, vol_dates)
 
             def _lookup(dt_str: str):
                 s = str(dt_str)[:19].replace(" ", "T")
                 try:
-                    from datetime import datetime as _dt
-                    dt = _dt.fromisoformat(s)
+                    dt = datetime.fromisoformat(s)
                 except ValueError:
                     return None
-                idx = bisect.bisect_right(vol_dates, dt) - 1
-                if idx < 0:
-                    return vol_labels[0] if vol_labels else None
-                if idx >= len(vol_labels):
-                    return vol_labels[-1]
-                return vol_labels[idx]
+                return cls.label_at_entry(vol_dates, vol_labels, dt, interval)
 
             trade_vol_buckets = [_lookup(t.get("open_date") or "") for t in trades]
 
@@ -2287,35 +2450,60 @@ class BacktestRegimeAnalyzer:
                 groups[b].append(t)
 
         per_bucket_metrics = {b: cls._metrics_for(groups[b], starting_capital) for b in cls.VOL_BUCKETS}
-        n = len(groups["HIGH_VOL"]) + len(groups["LOW_VOL"])
+        n_high = len(groups["HIGH_VOL"])
+        n_low = len(groups["LOW_VOL"])
+        n = n_high + n_low
         high = per_bucket_metrics["HIGH_VOL"]
         low = per_bucket_metrics["LOW_VOL"]
 
+        enough = (
+            n >= cls.VOL_BIAS_MIN_TRADES
+            and n_high >= cls.VOL_BIAS_MIN_PER_BUCKET
+            and n_low >= cls.VOL_BIAS_MIN_PER_BUCKET
+        )
+
+        # ── descriptive vote over count-invariant per-trade metrics ──────────
         high_points = 0
         low_points = 0
-        if n >= 20:
-            def _vote(hv, lv, higher_is_better: bool = True) -> None:
-                nonlocal high_points, low_points
-                if hv == lv:
-                    return
-                high_is_better = (hv > lv) if higher_is_better else (hv < lv)
-                if high_is_better:
+        vote_metrics: List[Dict] = []
+        if enough:
+            hpf = high["profit_factor"] if high["profit_factor"] is not None else float("inf")
+            lpf = low["profit_factor"] if low["profit_factor"] is not None else float("inf")
+            for key, hv, lv in (
+                ("win_rate",         high["win_rate"],         low["win_rate"]),
+                ("profit_factor",    hpf,                      lpf),
+                ("avg_profit_pct",   high["avg_profit_pct"],   low["avg_profit_pct"]),
+                ("per_trade_sharpe", high["per_trade_sharpe"], low["per_trade_sharpe"]),
+            ):
+                favours = None
+                if hv > lv:
                     high_points += 1
-                else:
+                    favours = "HIGH_VOL"
+                elif lv > hv:
                     low_points += 1
+                    favours = "LOW_VOL"
+                vote_metrics.append({
+                    "metric": key,
+                    "high": None if hv == float("inf") else hv,
+                    "low": None if lv == float("inf") else lv,
+                    "favours": favours,
+                })
 
-            hpf = high["profit_factor"] if high["profit_factor"] is not None else 1e9
-            lpf = low["profit_factor"] if low["profit_factor"] is not None else 1e9
-            _vote(high["win_rate"], low["win_rate"])
-            _vote(hpf, lpf)
-            _vote(high["roi_pct"], low["roi_pct"])
-            _vote(high["max_drawdown_pct"], low["max_drawdown_pct"], higher_is_better=False)
+        # ── permutation test on mean per-trade return ────────────────────────
+        p_value = None
+        effect = None
+        if enough:
+            p_value, effect = cls._permutation_test_mean_return(
+                groups["HIGH_VOL"], groups["LOW_VOL"]
+            )
 
-        if n < 20:
+        significant = p_value is not None and p_value < cls.VOL_BIAS_ALPHA
+
+        if not enough:
             label = "Not enough data"
-        elif high_points == low_points:
-            label = "Neutral"
-        elif high_points > low_points:
+        elif not significant:
+            label = "Inconclusive"
+        elif effect is not None and effect > 0:
             label = "Likes Volatility"
         else:
             label = "Dislike Volatility, prefers calm"
@@ -2326,4 +2514,73 @@ class BacktestRegimeAnalyzer:
             "high_points": high_points,
             "low_points": low_points,
             "n": n,
+            "p_value": None if p_value is None else round(float(p_value), 4),
+            "effect_size_pct": None if effect is None else round(float(effect), 4),
+            "significant": bool(significant),
+            "alpha": cls.VOL_BIAS_ALPHA,
+            "vote_metrics": vote_metrics,
         }
+
+    @classmethod
+    def _permutation_test_mean_return(
+        cls, high_trades: list, low_trades: list
+    ) -> "Tuple[float | None, float | None]":
+        """
+        Two-sided permutation test on the difference in MEAN PER-TRADE RETURN
+        between the two buckets (HIGH minus LOW, in percent).
+
+        Assumption-free by construction: it only asks how often reshuffling
+        which bucket each trade belongs to - holding both bucket sizes fixed -
+        reproduces a gap at least as large as the observed one. That makes it
+        robust to the fat tails and skew of trade-return distributions, where
+        a t-test's normality assumption does not hold.
+
+        Returns (p_value, observed_difference_pct), or (None, None) when either
+        bucket is empty.
+        """
+        def _ratios(trades: list) -> "np.ndarray":
+            out = []
+            for t in trades:
+                v = t.get("profit_ratio")
+                if v is None:
+                    v = t.get("close_profit")
+                if v is None:
+                    try:
+                        stake = float(t.get("stake_amount") or 0.0)
+                    except (TypeError, ValueError):
+                        stake = 0.0
+                    pnl = t.get("profit_abs") or t.get("close_profit_abs") or 0.0
+                    try:
+                        v = float(pnl) / stake if stake > 0 else 0.0
+                    except (TypeError, ValueError):
+                        v = 0.0
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    out.append(0.0)
+            return np.asarray(out, dtype=float)
+
+        hi = _ratios(high_trades)
+        lo = _ratios(low_trades)
+        if hi.size == 0 or lo.size == 0:
+            return None, None
+
+        observed = (hi.mean() - lo.mean()) * 100.0
+        pooled = np.concatenate([hi, lo])
+        k = hi.size
+        rng = np.random.default_rng(20240517)  # fixed: same input -> same answer
+        b = int(cls.VOL_BIAS_RESAMPLES)
+
+        total = pooled.sum()
+        n_all = pooled.size
+        count = 0
+        for _ in range(b):
+            perm = rng.permutation(pooled)
+            hs = perm[:k].sum()
+            diff = (hs / k - (total - hs) / (n_all - k)) * 100.0
+            if abs(diff) >= abs(observed) - 1e-15:
+                count += 1
+        # +1/+1 (Davison & Hinkley): never reports p = 0 off a finite number
+        # of resamples, which would overstate the evidence.
+        p_value = (count + 1) / (b + 1)
+        return p_value, observed

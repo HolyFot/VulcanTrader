@@ -3445,7 +3445,6 @@ class WebPortal:
         # Regime = market state at each trade's entry (from regime_analysis).
         chosen_regime_pair = "N/A"
         try:
-            import bisect as _bisect
             import pandas as pd
             from datetime import datetime as _dt
             from VulcanTrader.regime_analysis import BacktestRegimeAnalyzer
@@ -3479,24 +3478,26 @@ class WebPortal:
                             df["date"] = df["date"].dt.tz_localize(None)
                     return BacktestRegimeAnalyzer.classify_regime(df)
 
-                def _bisect_regime(dates, labels, dt_str: str) -> str:
+                def _bisect_regime(dates, labels, dt_str: str, interval) -> str:
+                    # Entry is filled at the OPEN of the `open_date` candle, so
+                    # that candle has not closed yet - classify from the last
+                    # one that had. See BacktestRegimeAnalyzer.label_at_entry.
                     try:
                         dt = _dt.fromisoformat(str(dt_str)[:19].replace(" ", "T"))
                     except ValueError:
                         return "RANGING"
-                    idx = _bisect.bisect_right(dates, dt) - 1
-                    if idx < 0:
-                        return labels[0] if labels else "RANGING"
-                    if idx >= len(labels):
-                        return labels[-1]
-                    return labels[idx]
+                    return BacktestRegimeAnalyzer.label_at_entry(
+                        dates, labels, dt, interval, default="RANGING"
+                    )
 
                 def _build_pc(df):
                     rdf = _norm_regime(df)
                     raw = pd.to_datetime(rdf["date"])
                     if hasattr(raw.dtype, "tz") and raw.dtype.tz is not None:
                         raw = raw.dt.tz_localize(None)
-                    return raw.to_list(), rdf["regime"].to_list()
+                    dates = raw.to_list()
+                    return (dates, rdf["regime"].to_list(),
+                            BacktestRegimeAnalyzer.resolve_interval(tf, dates))
 
                 traded_pairs = list(dict.fromkeys(r["pair"] for r in trade_rows if r["pair"]))
                 rp_lower = (regime_pair or "").lower()
@@ -3511,7 +3512,7 @@ class WebPortal:
                         for row in trade_rows:
                             pc = pair_cache.get(row["pair"])
                             if pc:
-                                row["regime"] = _bisect_regime(pc[0], pc[1], row["open_date"])
+                                row["regime"] = _bisect_regime(pc[0], pc[1], row["open_date"], pc[2])
                         chosen_regime_pair = "ALL"
                 else:
                     btc_cands = ["BTC/USDT", "BTC/USDT:USDT", "BTC/USD", "BTC/BUSD"]
@@ -3520,9 +3521,11 @@ class WebPortal:
                         df = _try_load_r(pair)
                         if df is None:
                             continue
-                        r_dates, r_labels = _build_pc(df)
+                        r_dates, r_labels, r_interval = _build_pc(df)
                         for row in trade_rows:
-                            row["regime"] = _bisect_regime(r_dates, r_labels, row["open_date"])
+                            row["regime"] = _bisect_regime(
+                                r_dates, r_labels, row["open_date"], r_interval
+                            )
                         chosen_regime_pair = pair
                         break
         except Exception as _re:
@@ -3967,7 +3970,6 @@ class WebPortal:
 
         # ── ALL mode: classify each trade by its own pair's regime ──────────
         if regime_pair.lower() in ("", "__all__", "all"):
-            import bisect as _bisect
             from datetime import datetime as _dt
 
             pair_regime_data: dict[str, tuple] = {}
@@ -3978,7 +3980,12 @@ class WebPortal:
                     raw = pd.to_datetime(rdf["date"])
                     if hasattr(raw.dtype, "tz") and raw.dtype.tz is not None:
                         raw = raw.dt.tz_localize(None)
-                    pair_regime_data[pair] = (raw.to_list(), rdf["regime"].to_list())
+                    _dates = raw.to_list()
+                    pair_regime_data[pair] = (
+                        _dates,
+                        rdf["regime"].to_list(),
+                        BacktestRegimeAnalyzer.resolve_interval(tf, _dates),
+                    )
 
             if not pair_regime_data:
                 raise HTTPException(
@@ -3990,17 +3997,14 @@ class WebPortal:
             def _lookup_per_pair(pair: str, dt_str: str) -> str:
                 if pair not in pair_regime_data:
                     return "RANGING"
-                dates, labels = pair_regime_data[pair]
+                dates, labels, interval = pair_regime_data[pair]
                 try:
                     dt = _dt.fromisoformat(str(dt_str)[:19].replace(" ", "T"))
                 except ValueError:
                     return "RANGING"
-                idx = _bisect.bisect_right(dates, dt) - 1
-                if idx < 0:
-                    return labels[0] if labels else "RANGING"
-                if idx >= len(labels):
-                    return labels[-1]
-                return labels[idx]
+                return BacktestRegimeAnalyzer.label_at_entry(
+                    dates, labels, dt, interval, default="RANGING"
+                )
 
             pre_regimes = [
                 _lookup_per_pair(t.get("pair", ""), t.get("open_date") or "")
@@ -4044,6 +4048,7 @@ class WebPortal:
             trades=trades,
             regime_df=regime_df,
             starting_capital=starting_capital,
+            timeframe=tf,
         )
         result["regime_pair"] = chosen_pair
         result["timeframe"] = tf
@@ -4122,7 +4127,6 @@ class WebPortal:
 
         # ── ALL mode: classify each trade by its own pair's volatility ──────
         if regime_pair.lower() in ("", "__all__", "all"):
-            import bisect as _bisect
             from datetime import datetime as _dt
 
             pair_vol_data: dict[str, tuple] = {}
@@ -4133,7 +4137,12 @@ class WebPortal:
                     raw = pd.to_datetime(vdf["date"])
                     if hasattr(raw.dtype, "tz") and raw.dtype.tz is not None:
                         raw = raw.dt.tz_localize(None)
-                    pair_vol_data[pair] = (raw.to_list(), vdf["vol_bucket"].to_list())
+                    _dates = raw.to_list()
+                    pair_vol_data[pair] = (
+                        _dates,
+                        vdf["vol_bucket"].to_list(),
+                        BacktestRegimeAnalyzer.resolve_interval(tf, _dates),
+                    )
 
             if not pair_vol_data:
                 raise HTTPException(
@@ -4145,17 +4154,12 @@ class WebPortal:
             def _lookup_per_pair(pair: str, dt_str: str):
                 if pair not in pair_vol_data:
                     return None
-                dates, labels = pair_vol_data[pair]
+                dates, labels, interval = pair_vol_data[pair]
                 try:
                     dt = _dt.fromisoformat(str(dt_str)[:19].replace(" ", "T"))
                 except ValueError:
                     return None
-                idx = _bisect.bisect_right(dates, dt) - 1
-                if idx < 0:
-                    return labels[0] if labels else None
-                if idx >= len(labels):
-                    return labels[-1]
-                return labels[idx]
+                return BacktestRegimeAnalyzer.label_at_entry(dates, labels, dt, interval)
 
             trade_vol_buckets = [
                 _lookup_per_pair(t.get("pair", ""), t.get("open_date") or "")
@@ -4167,6 +4171,7 @@ class WebPortal:
                 vol_df=None,
                 starting_capital=starting_capital,
                 trade_vol_buckets=trade_vol_buckets,
+                timeframe=tf,
             )
             result["vol_pair"] = "ALL"
             result["timeframe"] = tf
@@ -4199,6 +4204,7 @@ class WebPortal:
             trades=trades,
             vol_df=vol_df,
             starting_capital=starting_capital,
+            timeframe=tf,
         )
         result["vol_pair"] = chosen_pair
         result["timeframe"] = tf

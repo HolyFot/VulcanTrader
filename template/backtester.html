@@ -823,7 +823,7 @@
                      not by the trade's own max_rate/min_rate excursion, which
                      would confound the label with trade duration and outcome. -->
                 <div class="metric" style="margin-top:0.75rem; align-items:stretch; text-align:left;"
-                     title="Compares win rate, profit factor, ROI, and max drawdown between trades entered while ambient market volatility (ATR% vs its trailing baseline) was elevated vs calm - majority vote across all four decides the label.">
+                     title="Compares win rate, profit factor, average return per trade, and per-trade Sharpe between trades entered while ambient market volatility (ATR% vs its trailing baseline) was elevated vs calm. All four are per-trade, so neither bucket is favoured for simply containing more trades. The direction is only stated when the gap in mean per-trade return clears a two-sided permutation test; otherwise the verdict is Inconclusive.">
                     <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
                         <div class="metric-label" style="margin-bottom:0;">Volatility Bias</div>
                         <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
@@ -853,14 +853,26 @@
                     </template>
 
                     <template v-if="volatilityBias && !volBiasLoading">
-                        <div class="metric-value" :class="volatilityBias.high_points > volatilityBias.low_points ? 'pos' : (volatilityBias.high_points < volatilityBias.low_points ? 'neg' : '')">
+                        <div class="metric-value" :class="volBiasClass">
                             {{ volatilityBias.label }}
-                            <span v-if="volatilityBias.n >= 20" style="font-size:0.7rem; color:#a0aec0;">
-                                ({{ volatilityBias.high_points }}/4 metrics favor high-vol)
+                            <span v-if="volatilityBias.p_value != null" style="font-size:0.7rem; color:#a0aec0;">
+                                (p = {{ volatilityBias.p_value.toFixed(3) }},
+                                {{ volatilityBias.high_points }}/4 metrics favor high-vol,
+                                n = {{ volatilityBias.n }})
                             </span>
                         </div>
-                        <div v-if="volatilityBias.n >= 20" style="font-size:0.68rem; color:#8a92a0; margin-top:0.6rem;">High-vol entries vs calm entries:</div>
-                        <div v-if="volatilityBias.n >= 20" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-top:0.35rem;">
+                        <div v-if="volatilityBias.label === 'Inconclusive'"
+                             style="font-size:0.68rem; color:#8a92a0; margin-top:0.4rem;">
+                            The gap in mean return per trade
+                            ({{ volatilityBias.effect_size_pct > 0 ? '+' : '' }}{{ volatilityBias.effect_size_pct == null ? '–' : volatilityBias.effect_size_pct.toFixed(3) }}%
+                            high-vol vs calm) is not distinguishable from chance at
+                            p &lt; {{ volatilityBias.alpha }} — this strategy shows no
+                            reliable volatility preference on this sample.
+                        </div>
+                        <div v-if="volatilityBias.p_value != null" style="font-size:0.68rem; color:#8a92a0; margin-top:0.6rem;">
+                            High-vol entries vs calm entries (per-trade, so bucket size doesn't tilt the comparison):
+                        </div>
+                        <div v-if="volatilityBias.p_value != null" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-top:0.35rem;">
                             <div class="metric-mini">
                                 <div class="metric-mini-label">Win Rate</div>
                                 <div class="metric-mini-value">
@@ -874,17 +886,24 @@
                                 </div>
                             </div>
                             <div class="metric-mini">
-                                <div class="metric-mini-label">ROI</div>
+                                <div class="metric-mini-label" title="Mean return per trade. Replaces total ROI, which grew with the number of trades in each bucket.">Avg Return / Trade</div>
                                 <div class="metric-mini-value">
-                                    {{ volatilityBias.per_bucket_metrics.HIGH_VOL.roi_pct.toFixed(1) }}% vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.roi_pct.toFixed(1) }}%
+                                    {{ volatilityBias.per_bucket_metrics.HIGH_VOL.avg_profit_pct.toFixed(3) }}% vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.avg_profit_pct.toFixed(3) }}%
                                 </div>
                             </div>
                             <div class="metric-mini">
-                                <div class="metric-mini-label">Max Drawdown</div>
+                                <div class="metric-mini-label" title="Mean per-trade return divided by its standard deviation. Replaces max drawdown, which grew with the number of trades in each bucket.">Sharpe / Trade</div>
                                 <div class="metric-mini-value">
-                                    {{ volatilityBias.per_bucket_metrics.HIGH_VOL.max_drawdown_pct.toFixed(1) }}% vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.max_drawdown_pct.toFixed(1) }}%
+                                    {{ volatilityBias.per_bucket_metrics.HIGH_VOL.per_trade_sharpe.toFixed(3) }} vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.per_trade_sharpe.toFixed(3) }}
                                 </div>
                             </div>
+                        </div>
+                        <div v-if="volatilityBias.p_value != null" style="font-size:0.64rem; color:#6b7280; margin-top:0.5rem;">
+                            Cumulative over each bucket (shown for reference, not compared — these scale
+                            with trade count: {{ volatilityBias.per_bucket_metrics.HIGH_VOL.trades }} high-vol
+                            vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.trades }} calm):
+                            ROI {{ volatilityBias.per_bucket_metrics.HIGH_VOL.roi_pct.toFixed(1) }}% vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.roi_pct.toFixed(1) }}%,
+                            max drawdown {{ volatilityBias.per_bucket_metrics.HIGH_VOL.max_drawdown_pct.toFixed(1) }}% vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.max_drawdown_pct.toFixed(1) }}%.
                         </div>
                     </template>
                 </div>
@@ -1746,6 +1765,14 @@ createApp({
             const seen = new Set();
             this.enrichedTrades.forEach(t => { if (t.pair) seen.add(t.pair); });
             return [...seen].sort();
+        },
+        // Colour follows the emitted label, not the raw vote: the vote is
+        // descriptive, while the label is what survived the significance gate.
+        volBiasClass() {
+            if (!this.volatilityBias) return '';
+            if (this.volatilityBias.label === 'Likes Volatility') return 'pos';
+            if (this.volatilityBias.label === 'Dislike Volatility, prefers calm') return 'neg';
+            return '';
         },
         // --- MAE/MFE regime filter ---
         maeMfeRegimeOptions() {
