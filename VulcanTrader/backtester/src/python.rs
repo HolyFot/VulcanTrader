@@ -30,6 +30,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::fast_indicators::calculate_standard_indicators as calc_std;
+use crate::fast_indicators::{
+    calculate_adx_rust, calculate_atr_rust, calculate_bollinger_bands_rust, calculate_ema_rust,
+    calculate_rsi_rust, calculate_sma_rust,
+};
 
 /// Borrow a numpy f64 array and down-cast to the f32 the engine works in.
 /// One tight pass over a contiguous slice, versus PyO3's per-element extraction.
@@ -416,11 +420,94 @@ fn fill_missing_candles<'py>(
     ))
 }
 
+/// SMA over an arbitrary/hyperopt-tunable period.
+#[pyfunction]
+fn sma<'py>(
+    py: Python<'py>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> Bound<'py, numpy::PyArray1<f32>> {
+    calculate_sma_rust(&f32_from(&close), period).into_pyarray_bound(py)
+}
+
+/// EMA over an arbitrary/hyperopt-tunable period.
+#[pyfunction]
+fn ema<'py>(
+    py: Python<'py>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> Bound<'py, numpy::PyArray1<f32>> {
+    calculate_ema_rust(&f32_from(&close), period).into_pyarray_bound(py)
+}
+
+/// RSI over an arbitrary/hyperopt-tunable period.
+#[pyfunction]
+fn rsi<'py>(
+    py: Python<'py>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> Bound<'py, numpy::PyArray1<f32>> {
+    calculate_rsi_rust(&f32_from(&close), period).into_pyarray_bound(py)
+}
+
+/// ATR (Wilder's smoothing) over an arbitrary/hyperopt-tunable period.
+#[pyfunction]
+fn atr<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> Bound<'py, numpy::PyArray1<f32>> {
+    calculate_atr_rust(&f32_from(&high), &f32_from(&low), &f32_from(&close), period)
+        .into_pyarray_bound(py)
+}
+
+/// ADX over an arbitrary/hyperopt-tunable period.
+#[pyfunction]
+fn adx<'py>(
+    py: Python<'py>,
+    high: PyReadonlyArray1<'py, f64>,
+    low: PyReadonlyArray1<'py, f64>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+) -> Bound<'py, numpy::PyArray1<f32>> {
+    calculate_adx_rust(&f32_from(&high), &f32_from(&low), &f32_from(&close), period)
+        .into_pyarray_bound(py)
+}
+
+/// Bollinger Bands over an arbitrary/hyperopt-tunable period + std multiplier.
+/// Returns (upper, middle, lower) numpy arrays.
+#[pyfunction]
+fn bollinger_bands<'py>(
+    py: Python<'py>,
+    close: PyReadonlyArray1<'py, f64>,
+    period: usize,
+    std_mult: f32,
+) -> (
+    Bound<'py, numpy::PyArray1<f32>>,
+    Bound<'py, numpy::PyArray1<f32>>,
+    Bound<'py, numpy::PyArray1<f32>>,
+) {
+    let (upper, middle, lower) = calculate_bollinger_bands_rust(&f32_from(&close), period, std_mult);
+    (
+        upper.into_pyarray_bound(py),
+        middle.into_pyarray_bound(py),
+        lower.into_pyarray_bound(py),
+    )
+}
+
 #[pymodule]
 fn vulcan_rust_indicators(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fill_missing_candles, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_standard_indicators, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(compute_result_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(sma, m)?)?;
+    m.add_function(wrap_pyfunction!(ema, m)?)?;
+    m.add_function(wrap_pyfunction!(rsi, m)?)?;
+    m.add_function(wrap_pyfunction!(atr, m)?)?;
+    m.add_function(wrap_pyfunction!(adx, m)?)?;
+    m.add_function(wrap_pyfunction!(bollinger_bands, m)?)?;
     Ok(())
 }

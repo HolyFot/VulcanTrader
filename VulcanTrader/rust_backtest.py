@@ -694,6 +694,13 @@ def _joint_multi_pair_backtest(
         def get_available_stake_amount(self) -> float:
             return max(running_balance * tradable_ratio - tied_up_capital, 0.0)
 
+        def get_starting_balance(self) -> float:
+            """Mirrors the real `Wallets.get_starting_balance` — algebraically
+            `(available - realized_profit + open_stakes) * ratio` reduces to
+            the run's fixed initial capital scaled by ratio, i.e. this loop's
+            `starting_balance` (not the fluctuating `running_balance`)."""
+            return starting_balance * tradable_ratio
+
     def _resolve_stake_and_leverage(pair: str, p: "_PairState", i: int, direction: str,
                                     proposed_stake: float) -> tuple[float, float]:
         """leverage() then custom_stake_amount(), in that exact order — the
