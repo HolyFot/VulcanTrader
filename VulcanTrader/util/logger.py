@@ -272,24 +272,34 @@ class LoggingMixin:
         self.refresh_period = refresh_period
         self._log_cache: FtTTLCache = FtTTLCache(maxsize=1024, ttl=self.refresh_period)
 
-    def log_once(self, message: str, logmethod: Callable, force_show: bool = False) -> None:
+    def log_once(
+        self,
+        message: str,
+        logmethod: Callable,
+        force_show: bool = False,
+        key: str | None = None,
+    ) -> None:
         """
         Log ``message`` not more often than ``refresh_period`` to avoid spamming.
 
         :param message: String containing the message to be sent to the function.
         :param logmethod: Function that will be called. Typically ``logger.info``.
         :param force_show: If True, sends the message regardless of ``show_output``.
+        :param key: Optional cache key to throttle on instead of the literal message
+            text. Use this when ``message`` always contains a changing value (a retry
+            counter, a delay, a timestamp, ...) that would otherwise defeat the exact-text
+            dedup below - every distinct value gets logged once, forever un-throttled.
         """
 
         @cached(cache=self._log_cache)
-        def _log_once(message: str):
+        def _log_once(_cache_key: str):
             logmethod(message)
 
         # Log as debug first
         self.logger.debug(message)
 
         if self.show_output or force_show:
-            _log_once(message)
+            _log_once(key if key is not None else message)
 
 # --- MeasureTime ----------------------------------------------------
 import time as _time

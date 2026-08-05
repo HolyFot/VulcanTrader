@@ -6,7 +6,7 @@
 #  Use this to browse backtest results, inspect closed trades, and use
 #  the analysis tools when no bot session is running.
 #
-#  Dashboard: http://localhost:8080
+#  Dashboard: http://localhost:8060
 #  Default password: test
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -20,7 +20,7 @@ fi
 source .venv/bin/activate
 
 CONFIG="${CONFIG:-configHyper}"
-PORT="${PORT:-8080}"
+PORT="${PORT:-8060}"
 
 echo "[run-app] config=$CONFIG  port=$PORT"
 exec python -m VulcanTrader.bot webserver \

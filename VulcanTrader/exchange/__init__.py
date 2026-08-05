@@ -1,5 +1,9 @@
 # flake8: noqa: F401
 # isort: off
+from VulcanTrader.util import _ccxt_lazy
+
+_ccxt_lazy.install()  # idempotent - VulcanTrader.util normally installs this first already
+
 from VulcanTrader.exchange.common import MAP_EXCHANGE_CHILDCLASS
 from VulcanTrader.exchange.exchange import Exchange
 

@@ -1,8 +1,11 @@
 {
+    "auto_start_data_server": true,
+    "data_server_ip": "127.0.0.1",
+    "data_server_port": 8720,
     "api_server": {
         "enabled": true,
         "listen_ip_address": "127.0.0.1",
-        "listen_port": 8080,
+        "listen_port": 8060,
         "verbosity": "info",
         "enable_openapi": true,
         "jwt_secret_key": "somethingRandomSomethingRandom123",

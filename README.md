@@ -49,13 +49,13 @@ Linux / macOS:
 ```bash
 ./run-app.sh
 ```
-Then open **http://localhost:8080** in your browser (default password: `test`).
+Then open **http://localhost:8060** in your browser (default password: `test`).
 
 
 ### Use the web dashboard
 
 Once a `run-paper` / `run-live` session is up, the Web Portal is
-served on `http://localhost:8080` (port comes from
+served on `http://localhost:8060` (port comes from
 `config["api_server"]["listen_port"]`). Log in with the bearer password
 from `config["api_server"]["password"]` (default `VulcanTrader`).
 
@@ -140,6 +140,38 @@ pane — set them on a bot config's own `"data_server"` block instead (they're
 copied through on every bot startup, so editing this file by hand doesn't
 stick).
 
+### Running the data server master explicitly
+
+Normally you don't need to think about the `data_server` master at all — the
+first bot to start auto-launches one (`ensure_master_running`) and every
+later bot just connects to it. But that auto-launch is a probe-then-spawn
+race: if two independent fleet launches (e.g. `run-app` started twice, or
+under two different Python interpreters) both find nothing listening before
+the first one finishes binding, **both** spawn their own master, and you end
+up with two processes independently hammering the exchange for the same
+pairs — a real cause of chronic rate-limit errors and stale candles.
+
+`run-datamaster.bat` / `run-datamaster.sh` start the master as its own
+standalone, explicitly-managed process, refusing to start if something is
+already listening on its port. Run it once, before starting the fleet:
+
+Windows:
+
+```powershell
+.\run-datamaster.bat
+```
+
+Linux / macOS:
+
+```bash
+./run-datamaster.sh
+```
+
+Override `CONFIG` / `EXCHANGE` / `HOST` / `PORT` / `SUBSERVER_PORT` /
+`TIMEFRAMES` via environment variables if you're not running the default
+`hyperliquid`, 15m, `127.0.0.1:8720` setup. Pair it with `run-subserver.bat`
+/ `.sh` on a second machine to add collection capacity.
+
 ### Managing configs from the dashboard
 
 The Trading page has a **Configs** panel — every config in one table, with:
@@ -163,11 +195,11 @@ have a token. A `trade` instance's fills/entries/exits still reach Discord
 either way, via the plain webhook — no interactive client needed for that.
 
 ```powershell
-python -m VulcanTrader.bot webserver --port 8080
+python -m VulcanTrader.bot webserver --port 8060
 ```
 
 ```bash
-python -m VulcanTrader.bot webserver --port 8080
+python -m VulcanTrader.bot webserver --port 8060
 ```
 
 `!`-prefix commands — `!bots`, `!opentrades <bot>`, `!exit <bot> <pair>`,
@@ -344,7 +376,7 @@ user_data/data/<exchange>/futures/<PAIR>-<timeframe>-<candletype>.feather
 
 ### Data Manager dashboard
 
-`http://localhost:8080/datamanager` — per-exchange view of exactly what's
+`http://localhost:8060/datamanager` — per-exchange view of exactly what's
 cached: every pair/timeframe/candle-type combo with its date range, candle
 count, and file size, plus a form to launch `download-data` for a config
 (optionally overriding pairs/timeframes/exchange/date range) as a background
@@ -435,7 +467,7 @@ source .venv/bin/activate
 .venv\Scripts\python.exe -m VulcanTrader.bot trade -c live --strategy AlphaHunterV5 --dry-run
 
 # Web portal only (no bot)
-.venv\Scripts\python.exe -m VulcanTrader.bot webserver --port 8080
+.venv\Scripts\python.exe -m VulcanTrader.bot webserver --port 8060
 
 # Single backtest
 .venv\Scripts\python.exe -m VulcanTrader.bot backtest -c configs/configAlphaHunterV5_Paper.json -s AlphaHunterV5 --timerange 20250101- --datadir user_data/data/hyperliquid

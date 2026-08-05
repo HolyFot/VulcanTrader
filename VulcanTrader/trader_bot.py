@@ -310,9 +310,19 @@ class VulcanTraderBot(LoggingMixin):
 
             from VulcanTrader.data_server import DataServerClient, ensure_master_running
 
-            host = ds_config.get("host", "127.0.0.1")
-            port = int(ds_config.get("port", 8720))
+            # host/port/auto_start fall back to the shared system.json-wide
+            # defaults (auto_start_data_server/data_server_ip/data_server_port
+            # - see config_schema.py) before the hardcoded default, so a fleet
+            # can point every bot at one master (and forbid auto-launch fleet-
+            # wide) from a single shared file instead of repeating it per bot
+            # config. A bot's own data_server.{host,port,auto_start} still
+            # wins if explicitly set.
+            host = ds_config.get("host") or self.config.get("data_server_ip", "127.0.0.1")
+            port = int(ds_config.get("port") or self.config.get("data_server_port", 8720))
             subserver_port = int(ds_config.get("subserver_port", 8721))
+            auto_start = bool(
+                ds_config.get("auto_start", self.config.get("auto_start_data_server", True))
+            )
 
             config_path = self._write_data_server_config()
             # exchange/timeframe are deliberately NOT in the config file (see
@@ -323,12 +333,20 @@ class VulcanTraderBot(LoggingMixin):
             # exchange) ignores these; they only matter for the launch that
             # actually creates it.
             timeframe = self.config.get("timeframe") or getattr(self.strategy, "timeframe", "15m")
-            ensure_master_running(
+            master_up = ensure_master_running(
                 host, port, config_path, subserver_port=subserver_port,
                 extra_args=["--exchange", self.config["exchange"]["name"], "--timeframes", timeframe],
                 show_terminal=bool(ds_config.get("show_terminal", False)),
                 tmux=bool(ds_config.get("tmux", False)),
+                auto_start=auto_start,
             )
+            if not master_up:
+                logger.warning(
+                    "No data server master reachable at %s:%d (auto_start=%s) - "
+                    "continuing with direct exchange polling only.",
+                    host, port, auto_start,
+                )
+                return None
 
             client_id = f"{self.config.get('bot_name', 'trader_bot')}-{os.getpid()}"
             client = DataServerClient(host, port, self.config["exchange"]["name"], client_id)
@@ -430,10 +448,58 @@ class VulcanTraderBot(LoggingMixin):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "data_server.json"
         payload = json.dumps(minimal_config, indent=2)
-        tmp_path = out_dir / f".data_server.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
-        tmp_path.write_text(payload)
-        os.replace(tmp_path, out_path)
-        return str(out_path)
+
+        # Every bot in a multi-bot fleet writes this same shared file, with a
+        # byte-identical payload, within the same second of startup. On Windows
+        # os.replace() onto a path another process currently holds open raises
+        # PermissionError (WinError 5) - there's no replace-while-open the way
+        # POSIX has - so under a simultaneous launch some bots lost the race and
+        # blew up here. Because this call is the FIRST statement in
+        # _setup_data_server_client()'s try block, that aborted their entire
+        # data_server setup and dropped them to direct exchange polling:
+        # measured live, 3 of 6 bots orphaned, generating 2052 rate-limit
+        # rejections against the same IP versus 161 from the data_server itself
+        # - which then throttled the master and starved the bots that HAD
+        # connected. So: skip the write when the content is already correct
+        # (the overwhelmingly common case, and it removes the contention
+        # outright), retry briefly for genuine transients, and treat a
+        # persistent failure as non-fatal whenever a usable file already
+        # exists. Writing this file is a convenience, never a precondition for
+        # talking to the master.
+        try:
+            if out_path.read_text() == payload:
+                return str(out_path)
+        except OSError:
+            pass  # missing/unreadable - fall through and write it
+
+        last_err: OSError | None = None
+        for attempt in range(5):
+            tmp_path = out_dir / f".data_server.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+            try:
+                tmp_path.write_text(payload)
+                os.replace(tmp_path, out_path)
+                return str(out_path)
+            except OSError as e:
+                last_err = e
+                # Don't leave the temp file behind when the rename is what failed
+                # (orphaned .data_server.*.tmp files were the visible symptom).
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                # NB: `sleep` from the module-level `from time import sleep` -
+                # this module's `time` name is datetime.time, not the module.
+                sleep(0.1 * (attempt + 1))
+
+        if out_path.is_file():
+            logger.warning(
+                "Could not rewrite %s (%s) - another bot is most likely writing the same file "
+                "concurrently. Continuing with the existing one; data_server integration is "
+                "unaffected.",
+                out_path, last_err,
+            )
+            return str(out_path)
+        raise OSError(f"Could not write {out_path}: {last_err}")
 
     # ------------------------------------------------------------------
     # Discord force-exit scheduling (thread-safe)

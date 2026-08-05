@@ -559,13 +559,32 @@ class DataProvider:
         outdated_offset = self._config.get("exchange", {}).get("outdated_offset", 5)
         for pair_key in pairlist:
             pair, timeframe, candle_type = pair_key
+            max_age = timedelta(minutes=timeframe_to_minutes(timeframe) * 2 + outdated_offset)
+
+            # Already fresh locally? Then skip the round trip entirely. The
+            # master PUSHES every new candle to us the moment it lands (see
+            # _on_data_server_ohlcv_push), so in steady state our klines are
+            # already current and re-pulling them is pure waste - and far from
+            # free: the master answers each pull by serializing the pair's
+            # series to JSON on its own process, which with 44 pairs x 6 bots
+            # pulling every cycle measured at ~36s of master CPU per cycle,
+            # starving the collection thread sharing that GIL and making the
+            # very staleness this pull exists to fix worse. Pull only what push
+            # hasn't already given us (startup, reconnect, a missed push).
+            existing = self._exchange._klines.get(pair_key) if self._exchange else None
+            if existing is not None and not existing.empty:
+                try:
+                    if existing["date"].max().to_pydatetime() >= dt_now() - max_age:
+                        continue
+                except Exception:
+                    pass
+
             df = None
             try:
                 df = self._data_server_client.get_ohlcv(pair, timeframe, candle_type.value)
             except Exception:
                 logger.debug("data_server get_ohlcv failed for %s - falling back", pair_key, exc_info=True)
             if df is not None and not df.empty:
-                max_age = timedelta(minutes=timeframe_to_minutes(timeframe) * 2 + outdated_offset)
                 if df["date"].max().to_pydatetime() >= dt_now() - max_age:
                     self._inject_klines(pair_key, df)
                     continue

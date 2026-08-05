@@ -10,7 +10,12 @@ import ccxt
 
 from VulcanTrader.constants import BuySell
 from VulcanTrader.enums import CandleType, MarginMode, TradingMode
-from VulcanTrader.util.exceptions import ExchangeError, OperationalException, TemporaryError
+from VulcanTrader.util.exceptions import (
+    DDosProtection,
+    ExchangeError,
+    OperationalException,
+    TemporaryError,
+)
 from VulcanTrader.exchange import Exchange
 from VulcanTrader.exchange.exchange_types import CcxtOrder, OHLCVResponse, TraderHas
 from VulcanTrader.util.datetime_helpers import dt_from_ts, dt_ts
@@ -115,6 +120,146 @@ class Hyperliquid(Exchange):
         if new_markets:
             self._markets.update(new_markets)
             logger.info(f"Added {len(new_markets)} hip3 markets as futures pairs.")
+
+    def fetch_funding_rates(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        """Current funding rates for every pair, INCLUDING hip3 markets.
+
+        ccxt's own `fetchFundingRates` only covers hyperliquid's main perp dex.
+        The hip3 markets we synthesize in `_reclassify_hip3_markets` (XYZ-HOOD,
+        XYZ-GOLD, XYZ-NATGAS, ...) live on a separate builder-deployed dex and
+        are keyed by ccxt under names that never match our synthesized swap
+        symbols, so they came back simply MISSING from the bulk response.
+
+        That is not the same as the exchange having no funding rate for them -
+        it does, and it is returned by the very same `metaAndAssetCtxs` endpoint
+        when passed a `dex` parameter (one ~1.2s call covers all 104 xyz assets).
+        Treating "absent from ccxt's dict" as "unsupported" silently starved
+        every funding-rate-driven strategy of 13 of its 44 pairs.
+
+        Merges the two: ccxt's main-dex result, then the hip3 dexes on top.
+        Symbols are resolved by matching the raw `info["name"]` recorded on each
+        loaded market rather than by rebuilding the name transformation here, so
+        this stays correct regardless of how the dex prefix is rendered.
+        """
+        try:
+            rates: dict[str, Any] = dict(super().fetch_funding_rates(symbols))
+        except Exception:
+            # A main-dex failure must not also cost us the hip3 rates.
+            logger.warning("Main-dex funding-rate fetch failed - continuing with hip3 only")
+            rates = {}
+        try:
+            # Pass symbols through so only the dexes those pairs actually live
+            # on get queried - see _fetch_hip3_funding_rates.
+            rates.update(self._fetch_hip3_funding_rates(symbols))
+        except Exception:
+            logger.warning("hip3 funding-rate fetch failed - main-dex rates kept", exc_info=True)
+        # `is not None`, NOT truthiness: an EMPTY list means "no pairs wanted",
+        # and treating it as falsy made it mean "fetch everything" instead. The
+        # master starts with an empty pairlist before any client registers, so
+        # its very first tick queried all nine builder dexes and spent 180s in
+        # the funding sweep having fetched zero pairs (caught by collect_once's
+        # phase timing).
+        if symbols is not None:
+            wanted = set(symbols)
+            return {s: r for s, r in rates.items() if s in wanted}
+        return rates
+
+    @retrier
+    def _fetch_hip3_dex_ctxs(self, dex: str) -> Any:
+        """One dex's `metaAndAssetCtxs`. Retried at THIS granularity on purpose:
+        with the retrier on the multi-dex loop instead, a rate-limit rejection on
+        the last dex restarted the whole sweep from the first, re-issuing every
+        earlier dex's call again per attempt. Measured live at 284-449s per
+        funding sweep (vs ~1s), which starved OHLCV collection for minutes at a
+        time - the exact failure mode the bulk funding path existed to remove.
+
+        Raw ccxt errors are converted to the retrier's own exception types first,
+        since it only retries TemporaryError/DDosProtection."""
+        try:
+            return self._api.publicPostInfo({"type": "metaAndAssetCtxs", "dex": dex})
+        except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as e:
+            raise DDosProtection(e) from e
+        except (ccxt.OperationFailed, ccxt.ExchangeError) as e:
+            raise TemporaryError(
+                f"Could not get hip3 funding rates due to {e.__class__.__name__}. Message: {e}"
+            ) from e
+        except ccxt.BaseError as e:
+            raise OperationalException(e) from e
+
+    def _fetch_hip3_funding_rates(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        """`metaAndAssetCtxs` per hip3 dex, mapped onto our synthesized swap
+        symbols. Dex names come from the markets already loaded (the
+        `"<dex>:<ASSET>"` raw name form), so no discovery request is made.
+
+        Only the dexes the requested `symbols` actually live on are queried.
+        Hyperliquid currently exposes NINE builder dexes (xyz, flx, vntl, hyna,
+        km, abcd, cash, para, mkts); querying all of them cost nine sequential
+        round trips per funding sweep when a whitelist of XYZ-* pairs needs
+        exactly one. With no symbols given this still covers everything, so
+        callers that genuinely want the full picture are unaffected.
+
+        A dex that fails is skipped, not fatal: one unavailable builder dex must
+        not cost us the rates for all the others."""
+        # `is not None` for the same reason as in fetch_funding_rates above:
+        # an empty symbols list must scope this to nothing, not to every dex.
+        if symbols is not None and not symbols:
+            return {}
+        wanted = set(symbols) if symbols is not None else None
+        by_raw_name: dict[str, str] = {}
+        dexes: set[str] = set()
+        for symbol, market in self._markets.items():
+            if not market.get("swap"):
+                continue
+            if wanted is not None and symbol not in wanted:
+                continue
+            raw = str((market.get("info") or {}).get("name") or "")
+            if ":" not in raw:
+                continue
+            by_raw_name[raw] = symbol
+            dexes.add(raw.split(":", 1)[0])
+
+        out: dict[str, Any] = {}
+        now_ms = dt_ts()
+        for dex in sorted(dexes):
+            try:
+                resp = self._fetch_hip3_dex_ctxs(dex)
+            except Exception as e:
+                logger.warning("hip3 dex %r funding fetch failed - skipping it: %s", dex, e)
+                continue
+            if not isinstance(resp, list) or len(resp) < 2:
+                continue
+            universe = (resp[0] or {}).get("universe") or []
+            contexts = resp[1] or []
+            for market_meta, ctx in zip(universe, contexts):
+                raw = str((market_meta or {}).get("name") or "")
+                symbol = by_raw_name.get(raw)
+                if not symbol or not isinstance(ctx, dict):
+                    continue
+                funding = ctx.get("funding")
+                if funding is None:
+                    continue
+                out[symbol] = {
+                    "info": ctx,
+                    "symbol": symbol,
+                    "markPrice": self._api.safe_number(ctx, "markPx"),
+                    "indexPrice": self._api.safe_number(ctx, "oraclePx"),
+                    "interestRate": None,
+                    "estimatedSettlePrice": None,
+                    "timestamp": now_ms,
+                    "datetime": self._api.iso8601(now_ms),
+                    "fundingRate": self._api.safe_number(ctx, "funding"),
+                    "fundingTimestamp": None,
+                    "fundingDatetime": None,
+                    "nextFundingRate": None,
+                    "nextFundingTimestamp": None,
+                    "nextFundingDatetime": None,
+                    "previousFundingRate": None,
+                    "previousFundingTimestamp": None,
+                    "previousFundingDatetime": None,
+                }
+        if out:
+            logger.debug("Fetched hip3 funding rates for %d market(s)", len(out))
+        return out
 
     def _fix_inactive_markets(self) -> None:
         """

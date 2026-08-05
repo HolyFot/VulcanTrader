@@ -468,6 +468,30 @@ def _attach_portal(bot: Any, portal: Any) -> None:
     bot._emit = _emit  # type: ignore[assignment]
 
 
+def _fleet_stagger_s(config: dict, timeframe_s: float) -> float:
+    """Deterministic per-bot delay (0..timeframe_s) used to spread this bot's
+    direct-exchange calls apart from the rest of a fleet launched together.
+    Hash of this bot's own name/db_url (not random), so the offset is stable
+    across restarts and every fleet member spreads out independently without
+    needing to know how many other bots exist or coordinate with them."""
+    stagger_key = str(config.get("bot_name") or config.get("db_url") or "")
+    return (
+        int(hashlib.sha256(stagger_key.encode()).hexdigest(), 16) % 1000
+    ) / 1000.0 * timeframe_s
+
+
+def _stagger_wait(
+    stop_event: threading.Event, stagger_s: float, *, what: str
+) -> None:
+    if stagger_s > 0 and not stop_event.is_set():
+        logger.info(
+            "[trade] staggering %s by %.2fs so this bot's exchange calls "
+            "don't land in lockstep with the rest of the fleet",
+            what, stagger_s,
+        )
+        stop_event.wait(timeout=stagger_s)
+
+
 def cmd_trade(args: argparse.Namespace) -> int:
     from VulcanTrader.trader_bot import VulcanTraderBot  # type: ignore
     from VulcanTrader.web_portal import WebPortal  # type: ignore
@@ -678,6 +702,25 @@ def cmd_trade(args: argparse.Namespace) -> int:
     # webhook (util/discord_logger.py, through _dispatch_discord below) -
     # that part needs no interactive client at all.
 
+    timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
+    fleet_stagger_s = _fleet_stagger_s(config, timeframe_s)
+
+    # bot.startup() (below) runs update_all_liquidation_prices(),
+    # update_funding_fees(), and startup_update_open_orders() - each a DIRECT
+    # exchange call, bypassing data_server entirely (it only serves OHLCV/
+    # funding-rate/trades/on-demand tickers, not liquidation-price or
+    # funding-fee bookkeeping). _launch_autostart_configs starts every fleet
+    # bot within the same second, so without this wait all N bots' startup()
+    # calls landed in the same ~1-3s window - confirmed live as a 429 storm
+    # that caused several "Unable to exit/create trade" failures right at
+    # fleet launch (open positions briefly un-exitable). The existing stagger
+    # further down only delayed the recurring trade-loop cycle, which starts
+    # AFTER startup() - it never covered this one-time burst. Same
+    # deterministic offset as that one (this bot's own hash), just applied
+    # earlier too, so the one-time startup burst and the recurring per-cycle
+    # bursts are both spread out.
+    _stagger_wait(stop_event, fleet_stagger_s, what="startup")
+
     t2 = time.perf_counter()
     while not stop_event.is_set():
         try:
@@ -708,30 +751,15 @@ def cmd_trade(args: argparse.Namespace) -> int:
         pass
 
     try:
-        timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
-
         # Stagger this bot's cycle start within the throttle window so a fleet of
-        # several bots launched together (see _launch_autostart_configs - they all
-        # start within the same second) don't keep hitting the exchange in
+        # several bots launched together don't keep hitting the exchange in
         # lockstep forever after: every bot.process() call can fire its own direct
         # exchange requests OHLCV/data_server intentionally avoids sharing (ticker
         # fetches for entry/exit pricing - see Exchange.get_rate - market reloads,
         # etc.), so N bots on the same 5s period means N-way simultaneous bursts
-        # every single cycle, not just at startup. Deterministic (hash of this
-        # bot's own name/db_url, not random) so the offset is stable across
-        # restarts and every fleet member spreads out independently without
-        # needing to know how many other bots exist or coordinate with them.
-        stagger_key = str(config.get("bot_name") or config.get("db_url") or "")
-        stagger_s = (
-            int(hashlib.sha256(stagger_key.encode()).hexdigest(), 16) % 1000
-        ) / 1000.0 * timeframe_s
-        if stagger_s > 0 and not stop_event.is_set():
-            logger.info(
-                "[trade] staggering initial cycle by %.2fs so this bot's exchange "
-                "calls don't land in lockstep with the rest of the fleet",
-                stagger_s,
-            )
-            stop_event.wait(timeout=stagger_s)
+        # every single cycle, not just at startup (that one-time burst is now
+        # covered separately, above, before bot.startup()).
+        _stagger_wait(stop_event, fleet_stagger_s, what="initial cycle")
 
         logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
         while not stop_event.is_set():

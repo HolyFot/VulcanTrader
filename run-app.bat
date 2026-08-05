@@ -22,7 +22,7 @@ set "CONFIG=%CONFIG%"
 if "%CONFIG%"=="" set "CONFIG=configHyper"
 
 set "PORT=%PORT%"
-if "%PORT%"=="" set "PORT=8080"
+if "%PORT%"=="" set "PORT=8060"
 
 echo [run-app] config=%CONFIG%  port=%PORT%
 REM No "endlocal"/anything after this line, deliberately - cmd.exe only

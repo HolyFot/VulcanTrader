@@ -276,6 +276,17 @@ class DataCollector:
         # across a process restart (deliberately: an exchange could add support
         # for a pair later, or a genuine outage could resolve).
         self._funding_rate_unsupported: dict[str, int] = {}
+        # Whether this exchange exposes a BULK funding-rate endpoint. When it
+        # does, _collect_funding_rates_bulk replaces the per-pair sweep with one
+        # request covering every pair at once - vastly cheaper (one ~1.2s call vs
+        # N sequential calls) and immune to the per-pair NullResponse stall that
+        # _FUNDING_RATE_UNSUPPORTED_MARKERS exists to contain, since unsupported
+        # pairs are just absent from the bulk response instead of costing a
+        # doomed retried request each. Mirrors TickerFetcher's own bulk mode.
+        try:
+            self._funding_rate_bulk = bool(self.exchange.exchange_has("fetchFundingRates"))
+        except Exception:
+            self._funding_rate_bulk = False
 
         self.collect_trades = bool(config.get("exchange", {}).get("use_public_trades", False))
 
@@ -472,27 +483,85 @@ class DataCollector:
                 logger.exception("on_ohlcv hook failed for %s", pair_key)
         return True
 
+    def _is_due(self, pair_key: PairWithTimeframe) -> bool:
+        """Whether `refresh_latest_ohlcv()` would actually issue an API request for
+        this pair/timeframe, mirroring its own internal gate exactly (see
+        Exchange._build_ohlcv_dl_jobs: never-fetched entries always fetch, otherwise
+        `_now_is_time_to_refresh` decides). Anything else it serves from cache at
+        zero request cost."""
+        try:
+            if pair_key not in self.exchange._klines:
+                return True
+            return bool(self.exchange._now_is_time_to_refresh(*pair_key))
+        except Exception:
+            # Unknown -> assume due; a redundant fetch is far cheaper than
+            # silently never refreshing a pair.
+            return True
+
     def _next_batch_pairlist(
         self, pairlist: ListPairsWithTimeframes, pairs: list[str]
     ) -> ListPairsWithTimeframes:
-        """Return the slice of `pairlist` to fetch THIS tick, using the current
-        adaptively-ramped `_batch_cap` (see `_record_batch_outcome`), not the
-        static `max_pairs_per_batch` ceiling directly. When `pairs` fits within
-        `_batch_cap`, that's all of `pairlist` (no rotation needed). Otherwise,
-        advance a rotating window over `pairs` by `_batch_cap` each call - so
-        pair N always gets picked up again within `ceil(len(pairs) /
-        _batch_cap)` ticks, never left out indefinitely, while any single
-        `refresh_latest_ohlcv()` call this collector makes still never exceeds
-        its current (ramped) batch size."""
-        if not self._batch_cap or len(pairs) <= self._batch_cap:
-            self._rotation_offset = 0
-            return pairlist
-        n = len(pairs)
-        start = self._rotation_offset % n
-        end = start + self._batch_cap
-        batch_pairs = set(pairs[start:end]) if end <= n else set(pairs[start:] + pairs[: end - n])
-        self._rotation_offset = end % n
-        return [pair_key for pair_key in pairlist if pair_key[0] in batch_pairs]
+        """Return the entries to fetch THIS tick: the ones actually DUE for a
+        refresh, most-overdue first, capped at the current adaptively-ramped
+        `_batch_cap` (see `_record_batch_outcome`).
+
+        This used to be a blind round-robin over `pairs`, which was the direct
+        cause of chronic staleness. `refresh_latest_ohlcv()` already skips pairs
+        whose candle isn't due yet - those cost ZERO API requests - but the cap
+        was applied BEFORE that gate ever ran, so a tick's 10-20 slots were spent
+        on whatever the rotation happened to land on, needed or not, while pairs
+        with a freshly-closed candle waited several ticks for their turn. On a
+        15m timeframe with 44 pairs that meant a pair was typically refreshed
+        every 10-30 minutes, i.e. routinely past the `timeframe*2 + offset`
+        staleness limit every connected bot enforces (observed live: uniform
+        22-38 minute-old candles across the whole whitelist).
+
+        Filtering to due-only first fixes both halves of that:
+          - between candle closes nothing is due, so the tick issues no requests
+            at all and costs nothing (previously it still burned its whole cap
+            re-requesting pairs that had no new candle);
+          - at a candle close the entire cap goes to pairs that genuinely need
+            it, ordered by how overdue they are, so the pair closest to
+            breaching the staleness limit is always served first.
+
+        The cap still bounds real concurrent requests - which is what it existed
+        for (429 protection) - it just no longer wastes slots.
+        """
+        due = [pair_key for pair_key in pairlist if self._is_due(pair_key)]
+        # Recorded for collect_once()'s logging so it can report how many pairs
+        # genuinely needed a refresh but didn't get a slot - counting the
+        # not-due remainder as "deferred" would be alarming and meaningless.
+        self._last_due_pairs = len({pk[0] for pk in due})
+        if not due:
+            return []
+        if not self._batch_cap:
+            return due
+
+        # Most-overdue first, so the pair nearest the bots' staleness cutoff wins
+        # the slot. Never-fetched entries sort first (no cached candle at all).
+        def _last_candle_ts(pair_key: PairWithTimeframe) -> float:
+            df = self._cache.get(pair_key)
+            if df is None or df.empty:
+                return float("-inf")
+            try:
+                return df["date"].iloc[-1].value
+            except Exception:
+                return float("-inf")
+
+        due.sort(key=_last_candle_ts)
+
+        # Cap counts distinct PAIRS, not pair/timeframe combinations - same unit
+        # max_pairs_per_batch is expressed in, and the unit the exchange's
+        # concurrency limit actually applies to.
+        selected: ListPairsWithTimeframes = []
+        chosen: set[str] = set()
+        for pair_key in due:
+            if pair_key[0] not in chosen:
+                if len(chosen) >= self._batch_cap:
+                    continue
+                chosen.add(pair_key[0])
+            selected.append(pair_key)
+        return selected
 
     def _record_batch_outcome(self, *, rate_limited: bool) -> None:
         """Adjust `_batch_cap` after one OHLCV fetch: cut it back hard (and pause
@@ -557,37 +626,59 @@ class DataCollector:
             # often per pair).
             pairlist = [pk for pk in pairlist if pk[2] != CandleType.FUNDING_RATE]
 
+        self._pending_backlog = 0
+        _t_phase = time.time()
         batch_pairlist = self._next_batch_pairlist(pairlist, pairs)
-        if len(batch_pairlist) != len(pairlist):
-            logger.info(
-                "Rotating OHLCV batch: fetching %d/%d pair(s) this tick (offset=%d, cap=%s)",
-                len(batch_pairlist), len(pairlist), self._rotation_offset, self._batch_cap,
-            )
+        if not batch_pairlist:
+            # Nothing has a new candle due - skip the exchange call entirely
+            # rather than paying for a round trip that can only return cache.
+            logger.debug("No pair/timeframe due for refresh this tick - skipping OHLCV fetch")
+            results: dict[PairWithTimeframe, DataFrame] = {}
+        else:
+            fetching = len({pk[0] for pk in batch_pairlist})
+            deferred = getattr(self, "_last_due_pairs", fetching) - fetching
+            # Read by run_forever() to drain a backlog at _BACKLOG_POLL_INTERVAL_S
+            # instead of sitting out a full poll interval per batch.
+            self._pending_backlog = max(0, deferred)
+            if deferred > 0:
+                logger.info(
+                    "OHLCV batch: fetching %d of %d pair(s) due for refresh (cap=%s); %d "
+                    "most-overdue-last deferred to the next tick",
+                    fetching, fetching + deferred, self._batch_cap, deferred,
+                )
+            else:
+                logger.info(
+                    "OHLCV batch: fetching all %d pair(s) due for refresh this tick (cap=%s)",
+                    fetching, self._batch_cap,
+                )
 
-        rate_limit_cap = _RateLimitLogCapture(owner_thread=threading.get_ident())
-        exchange_logger = logging.getLogger("VulcanTrader.exchange")
-        exchange_logger.addHandler(rate_limit_cap)
-        try:
-            results = self.exchange.refresh_latest_ohlcv(batch_pairlist)
-            self._consecutive_failures = 0
-        except Exception:
-            self._consecutive_failures += 1
-            logger.exception(
-                "refresh_latest_ohlcv failed (%d/%d consecutive failures)",
-                self._consecutive_failures,
-                self.max_consecutive_failures,
-            )
-            results = {}
-            if self._consecutive_failures >= self.max_consecutive_failures:
-                now = time.time()
-                if now - self._last_reload_attempt >= self.reload_cooldown:
-                    self._last_reload_attempt = now
-                    self._reload_exchange()
-        finally:
-            exchange_logger.removeHandler(rate_limit_cap)
+            rate_limit_cap = _RateLimitLogCapture(owner_thread=threading.get_ident())
+            exchange_logger = logging.getLogger("VulcanTrader.exchange")
+            exchange_logger.addHandler(rate_limit_cap)
+            try:
+                results = self.exchange.refresh_latest_ohlcv(batch_pairlist)
+                self._consecutive_failures = 0
+            except Exception:
+                self._consecutive_failures += 1
+                logger.exception(
+                    "refresh_latest_ohlcv failed (%d/%d consecutive failures)",
+                    self._consecutive_failures,
+                    self.max_consecutive_failures,
+                )
+                results = {}
+                if self._consecutive_failures >= self.max_consecutive_failures:
+                    now = time.time()
+                    if now - self._last_reload_attempt >= self.reload_cooldown:
+                        self._last_reload_attempt = now
+                        self._reload_exchange()
+            finally:
+                exchange_logger.removeHandler(rate_limit_cap)
 
         if batch_pairlist:
             self._record_batch_outcome(rate_limited=rate_limit_cap.hit)
+
+        t_fetch = time.time() - _t_phase
+        _t_phase = time.time()
 
         for pair_key, df in results.items():
             try:
@@ -595,23 +686,56 @@ class DataCollector:
             except Exception:
                 logger.exception("Failed to persist %s", pair_key)
 
-        if self.collect_funding_rate:
+        t_persist = time.time() - _t_phase
+        _t_phase = time.time()
+
+        # `and pairs`: before any client registers, the master tracks nothing -
+        # there is no funding rate to collect, and asking anyway made the
+        # exchange layer interpret "no pairs" as "every pair on every dex".
+        if self.collect_funding_rate and pairs:
             now = time.time()
             if now - self._last_funding_fetch >= self.funding_rate_interval:
                 self._last_funding_fetch = now
-                funding_batch = self._next_funding_rate_batch(pairs)
-                if len(funding_batch) != len(pairs):
-                    logger.info(
-                        "Rotating live funding-rate batch: fetching %d/%d pair(s) this tick",
-                        len(funding_batch), len(pairs),
-                    )
-                self._collect_funding_rates(funding_batch)
+                if self._funding_rate_bulk:
+                    # One request covers every pair, so there's nothing to
+                    # rotate and no budget to enforce - see the method's
+                    # docstring for why this path exists.
+                    self._collect_funding_rates_bulk(pairs)
+                else:
+                    funding_batch = self._next_funding_rate_batch(pairs)
+                    if len(funding_batch) != len(pairs):
+                        logger.info(
+                            "Rotating live funding-rate batch: fetching %d/%d pair(s) this tick",
+                            len(funding_batch), len(pairs),
+                        )
+                    self._collect_funding_rates(funding_batch)
+
+        t_funding = time.time() - _t_phase
+        _t_phase = time.time()
 
         if self.collect_trades:
             try:
                 self._collect_trades(pairlist)
             except Exception:
                 logger.exception("Failed to collect trades/orderflow data")
+
+        t_trades = time.time() - _t_phase
+
+        # Permanent per-phase timing. Diagnosing where a tick's wall-clock went
+        # previously meant inferring it from the GAP between consecutive batch
+        # log lines, which repeatedly pointed at the wrong phase - the fetch
+        # looked slow when the time was actually being spent in the funding
+        # sweep, and later in the push broadcast inside _persist's hook. Logged
+        # only when a tick is slow enough to matter, so this stays quiet in
+        # normal operation.
+        total = t_fetch + t_persist + t_funding + t_trades
+        if total >= 10.0:
+            logger.info(
+                "Tick took %.1fs: fetch=%.1fs persist/push=%.1fs funding=%.1fs trades=%.1fs "
+                "(%d pair(s) fetched, backlog=%d)",
+                total, t_fetch, t_persist, t_funding, t_trades,
+                len({pk[0] for pk in batch_pairlist}), self._pending_backlog,
+            )
 
         return results
 
@@ -646,12 +770,103 @@ class DataCollector:
         self._funding_rate_rotation_offset = end % n
         return batch
 
-    def _collect_funding_rates(self, pairs: list[str]) -> None:
+    def _collect_funding_rates_bulk(self, pairs: list[str]) -> None:
+        """Fetch EVERY pair's current funding rate in a single request, on
+        exchanges that expose a bulk endpoint (see `_funding_rate_bulk`).
+
+        This is the fast path, and on hyperliquid it is also the only CORRECT
+        path: ccxt reports `has["fetchFundingRate"] is False` there, so the
+        per-pair fallback below runs against an emulated call that answers with
+        NullResponse forever for the exchange's synthetic `xyz:` markets - 13 of
+        them in a typical 44-pair whitelist, each burning 5 retried ~20s
+        requests before giving up. Because that sweep runs on the collector's
+        only thread, after OHLCV in the same tick, it stalled candle collection
+        for 8-17 minutes at a stretch and left every connected bot's history
+        38-57 minutes stale. One bulk call is ~1.2s for all pairs.
+
+        Pairs the exchange has no funding rate for are simply MISSING from the
+        response, which is a free and definitive "unsupported" signal - no
+        request is wasted discovering it, unlike the per-pair path.
+
+        NB "missing" means the EXCHANGE has no rate, not merely that ccxt didn't
+        map one. Hyperliquid's hip3 markets (XYZ-*) do have funding rates and
+        used to be absent here purely because ccxt keys them under names that
+        never match our synthesized swap symbols; Hyperliquid.fetch_funding_rates
+        now merges them in from the per-dex metaAndAssetCtxs endpoint. If a whole
+        family of pairs shows up in the "no funding rate published" log line,
+        suspect a mapping gap like that one before concluding it's unsupported.
+        """
+        try:
+            # Scope to the pairs we actually track: on hyperliquid this decides
+            # how many builder-dex round trips the call makes (see
+            # Hyperliquid._fetch_hip3_funding_rates - nine dexes exist, a typical
+            # whitelist needs one).
+            rates = self.exchange.fetch_funding_rates(pairs)
+        except Exception as e:
+            # Never fall through to the per-pair sweep here: on the exchanges
+            # that have a bulk endpoint at all, the per-pair call is the slow
+            # and/or broken one this method exists to avoid, so retrying 44 of
+            # them is strictly worse than simply waiting for the next tick.
+            logger.warning(
+                "Bulk funding-rate fetch failed - skipping this tick, will retry next: %s", e
+            )
+            return
+
+        missing: list[str] = []
         for pair in pairs:
+            rate = rates.get(pair)
+            if not rate:
+                missing.append(pair)
+                continue
+            if self.on_funding_rate is not None:
+                try:
+                    self.on_funding_rate(pair, rate)
+                except Exception:
+                    logger.exception("on_funding_rate hook failed for %s", pair)
+
+        if missing:
+            # Logged once per tick at INFO (not per pair, not WARNING): for
+            # hyperliquid's xyz: markets this is a permanent, expected property
+            # of the exchange, and it costs nothing now - it's only worth
+            # surfacing so the set stays visible if it ever changes.
+            logger.info(
+                "Bulk funding-rate fetch covered %d/%d pair(s); no funding rate published by "
+                "the exchange for: %s",
+                len(pairs) - len(missing), len(pairs), ", ".join(sorted(missing)),
+            )
+
+    def _collect_funding_rates(self, pairs: list[str]) -> None:
+        """Per-pair fallback for exchanges with no bulk endpoint - see
+        `_collect_funding_rates_bulk`, which supersedes this wherever available.
+
+        Bounded by `_FUNDING_RATE_SWEEP_BUDGET_S` because this runs on the same
+        thread as (and after) OHLCV collection: without a ceiling, one slow
+        sweep silently starves candle collection for the whole tick.
+        """
+        deadline = time.time() + _FUNDING_RATE_SWEEP_BUDGET_S
+        for idx, pair in enumerate(pairs):
             if self._funding_rate_unsupported.get(pair, 0) >= _FUNDING_RATE_MAX_FAILURES:
                 continue
+            if time.time() >= deadline:
+                # Not an error: the remaining pairs keep their place in the
+                # rotation and are picked up by the next tick.
+                logger.info(
+                    "Funding-rate sweep hit its %.0fs budget after %d/%d pair(s) - deferring the "
+                    "rest to the next tick so OHLCV collection isn't held up",
+                    _FUNDING_RATE_SWEEP_BUDGET_S, idx, len(pairs),
+                )
+                self._funding_rate_rotation_offset = (
+                    self._funding_rate_rotation_offset - (len(pairs) - idx)
+                ) % max(1, len(self.pairs))
+                break
             try:
-                rate = self.exchange.fetch_funding_rate(pair)
+                # count=0 -> exactly one attempt, no retries (see common.py's
+                # retrier). A funding rate is a cheap poll repeated every
+                # funding_rate_interval; retrying it 5x turns each permanently
+                # unsupported pair into ~100s of dead wall-clock time on the
+                # collection thread, which is precisely what stalled OHLCV.
+                # A transient miss simply resolves on the next poll.
+                rate = self.exchange.fetch_funding_rate(pair, count=0)
             except Exception as e:
                 # Distinguish "genuinely no funding-rate data for this pair" (e.g.
                 # Hyperliquid's synthetic stock-tracking markets returning
@@ -663,16 +878,35 @@ class DataCollector:
                 # relying on it) makes. A rate-limit failure still gets retried
                 # at the normal cadence next time - only a run of genuinely
                 # unrelated failures for the SAME pair backs off.
-                if not any(marker in str(e).lower() for marker in _RATE_LIMIT_LOG_MARKERS):
-                    n = self._funding_rate_unsupported.get(pair, 0) + 1
-                    self._funding_rate_unsupported[pair] = n
-                    if n >= _FUNDING_RATE_MAX_FAILURES:
+                err = str(e).lower()
+                if not any(marker in err for marker in _RATE_LIMIT_LOG_MARKERS):
+                    if any(marker in err for marker in _FUNDING_RATE_UNSUPPORTED_MARKERS):
+                        # Definitive "this pair has no funding rate" answer -
+                        # blacklist on the FIRST occurrence rather than waiting
+                        # for _FUNDING_RATE_MAX_FAILURES. The old counter never
+                        # actually reached its threshold in practice (measured:
+                        # 1-2 hits per pair per hour, zero activations over 75
+                        # minutes) because rotation plus funding_rate_interval
+                        # means a pair is only retried every 20-35 minutes - so
+                        # the backoff that was supposed to contain this never
+                        # engaged, and every sweep paid the full cost again.
+                        n = _FUNDING_RATE_MAX_FAILURES
+                        self._funding_rate_unsupported[pair] = n
                         logger.warning(
-                            "Funding rate for %s failed %d times with a non-rate-limit "
-                            "error - giving up on it (exchange likely doesn't support "
-                            "funding rate for this pair): %s",
-                            pair, n, e,
+                            "Exchange reports no funding rate for %s - not asking again this "
+                            "process's lifetime: %s",
+                            pair, e,
                         )
+                    else:
+                        n = self._funding_rate_unsupported.get(pair, 0) + 1
+                        self._funding_rate_unsupported[pair] = n
+                        if n >= _FUNDING_RATE_MAX_FAILURES:
+                            logger.warning(
+                                "Funding rate for %s failed %d times with a non-rate-limit "
+                                "error - giving up on it (exchange likely doesn't support "
+                                "funding rate for this pair): %s",
+                                pair, n, e,
+                            )
                 # A plain one-line warning, not logger.exception(): the exception's own
                 # message (e.g. "Could not get funding rate due to NullResponse.
                 # Message: ...") is already fully self-describing - the full traceback
@@ -768,8 +1002,17 @@ class DataCollector:
             except Exception:
                 logger.exception("Error while refreshing data")
 
-            # Account for however long collect_once() itself took.
-            sleep_for = max(1.0, poll_interval - (time.time() - t0))
+            # Account for however long collect_once() itself took. When the tick
+            # had to defer pairs that were genuinely due, come back promptly to
+            # drain the rest instead of sitting out a full interval per batch -
+            # see _BACKLOG_POLL_INTERVAL_S for why the full interval alone blew
+            # the staleness budget at every candle close.
+            interval = (
+                min(poll_interval, _BACKLOG_POLL_INTERVAL_S)
+                if getattr(self, "_pending_backlog", 0) > 0
+                else poll_interval
+            )
+            sleep_for = max(1.0, interval - (time.time() - t0))
             slept = 0.0
             while slept < sleep_for and not _should_stop():
                 step = min(1.0, sleep_for - slept)
@@ -1011,7 +1254,16 @@ class TickerFetcher:
         cache: DataCache,
         exchange_name: str,
         *,
-        max_age_s: float = 2.0,
+        # 2.0s meant this could re-fetch every ticker on the exchange up to 30x
+        # a minute, and measured live it was the single largest consumer of the
+        # process's rate-limit budget: 37 of 51 429s in one run, versus 7 from
+        # candle history. Those rejections don't cut the OHLCV ramp directly
+        # (_RateLimitLogCapture filters by thread) but they compete for the same
+        # server-side budget, which is what kept candle fetches failing and the
+        # batch cap pinned at its floor. 5.0s is still fresh enough for
+        # entry/exit pricing - Exchange.get_rate falls back to a direct
+        # fetch_ticker() whenever this returns nothing - at 40% of the requests.
+        max_age_s: float = 5.0,
         fetch_timeout_s: float = 5.0,
     ) -> None:
         self.exchange = exchange
@@ -1148,7 +1400,9 @@ def _handle_client_message(
             msg["pair"],
             msg["timeframe"],
             msg.get("candle_type", "spot"),
-            limit=msg.get("limit"),
+            # Bounded by default - see _SERVE_HISTORY_CANDLES. A client that
+            # explicitly asks for more still gets exactly what it asked for.
+            limit=msg.get("limit") or _SERVE_HISTORY_CANDLES,
         )
         if df is None:
             return {"type": "error", "message": "no data cached for this exchange/pair/timeframe"}
@@ -1202,21 +1456,76 @@ class _ClientConnection:
     def __init__(self, sock: socket.socket, client_id: str) -> None:
         self.sock = sock
         self.client_id = client_id
-        self._write_lock = threading.Lock()
+        # All writes to this socket go through a single outbound queue drained by
+        # one dedicated sender thread, so NO caller ever blocks on the socket.
+        #
+        # This used to be a direct `sendall()` under a lock, called straight from
+        # the collection thread via publish_ohlcv -> _broadcast. Two ways that
+        # stalled collection outright: the lock is shared with the handler thread
+        # answering this client's own get_* requests, and `sendall` itself blocks
+        # once the client stops draining its receive buffer. With 6 bots attached
+        # this was measured as a 3m22s gap between consecutive OHLCV ticks - all
+        # of it after the fetch had already returned, inside the push broadcast.
+        #
+        # Ordering is preserved (single queue, single sender), and a slow or
+        # wedged client can now only cost itself: its pushes get dropped and it
+        # falls back to pulling on its next cycle.
+        self._outbox: queue.Queue[dict | None] = queue.Queue(maxsize=_CLIENT_OUTBOX_MAXSIZE)
+        self._dropped = 0
+        self._closed = threading.Event()
+        self._sender = threading.Thread(
+            target=self._sender_loop, name=f"client-send-{client_id}", daemon=True
+        )
+        self._sender.start()
 
-    def send(self, msg: dict) -> bool:
-        with self._write_lock:
+    def _sender_loop(self) -> None:
+        while True:
+            msg = self._outbox.get()
+            if msg is None:  # close() sentinel
+                return
             try:
                 send_msg(self.sock, msg)
-                return True
             except OSError:
-                return False
+                return  # connection gone; handler's own recv loop will clean up
             except Exception:
-                # e.g. an unserializable payload - report "send failed" to the
-                # caller rather than propagate into whatever thread (collection
-                # thread, handler thread) happened to be sending.
+                # e.g. an unserializable payload - must not kill the sender
+                # thread, or every later message to this client is lost too.
                 logger.exception("Failed to serialize/send a message to client '%s'", self.client_id)
-                return False
+
+    def send(self, msg: dict, *, droppable: bool = False) -> bool:
+        """Queue `msg` for delivery. Returns False only when it could not be
+        queued at all.
+
+        `droppable` marks unsolicited pushes: if the client is too far behind to
+        accept more, dropping the push is harmless (it re-pulls what it's missing
+        on its next refresh), and is vastly preferable to blocking the collection
+        thread. Request RESPONSES are never droppable - the client is actively
+        waiting on one, and losing it would hang it until its own read timeout.
+        """
+        if self._closed.is_set():
+            return False
+        try:
+            if droppable:
+                self._outbox.put_nowait(msg)
+            else:
+                self._outbox.put(msg, timeout=_CLIENT_OUTBOX_PUT_TIMEOUT_S)
+            return True
+        except queue.Full:
+            self._dropped += 1
+            if self._dropped == 1 or self._dropped % 100 == 0:
+                logger.warning(
+                    "Client '%s' is not keeping up - dropped %d push(es); it will "
+                    "re-pull whatever it missed on its next refresh",
+                    self.client_id, self._dropped,
+                )
+            return False
+
+    def close(self) -> None:
+        self._closed.set()
+        try:
+            self._outbox.put_nowait(None)
+        except queue.Full:
+            pass
 
 
 class ClientInterestRegistry:
@@ -1266,13 +1575,47 @@ class ClientInterestRegistry:
         self._rebalance_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="registry-rebalance"
         )
+        # Latest union awaiting a rebalance, and whether a drain task is already
+        # running - see _submit_union_changed for why they coalesce.
+        self._pending_union: tuple[list[str], bool, bool] | None = None
+        self._pending_lock = threading.Lock()
+        self._rebalance_running = False
 
     def _submit_union_changed(self, union_pairs: list[str], union_ffr: bool, union_trades: bool) -> None:
+        """Queue a rebalance for the newest union, COALESCING with any already
+        queued.
+
+        Every registration used to submit its own task onto the single-worker
+        executor, and each rebalance calls _volume_sorted_pairs, which blocks up
+        to 10s waiting on get_tickers() before falling back to alphabetical
+        order. A fleet of six bots starting together therefore queued six
+        rebalances that drained serially at ~10s each - a full minute during
+        which the collector had no pairs assigned and fetched nothing at all,
+        measured directly on a cold master. They were also redundant: only the
+        final union matters, and every one of them re-requested the same
+        tickers.
+
+        Superseded unions are simply dropped. Ordering is preserved in the way
+        that matters - the last union submitted is always the last one applied.
+        """
+        with self._pending_lock:
+            self._pending_union = (union_pairs, union_ffr, union_trades)
+            if self._rebalance_running:
+                return
+            self._rebalance_running = True
+
         def _run() -> None:
-            try:
-                self._on_union_changed(union_pairs, union_ffr, union_trades)
-            except Exception:
-                logger.exception("on_union_changed callback failed")
+            while True:
+                with self._pending_lock:
+                    payload = self._pending_union
+                    self._pending_union = None
+                    if payload is None:
+                        self._rebalance_running = False
+                        return
+                try:
+                    self._on_union_changed(*payload)
+                except Exception:
+                    logger.exception("on_union_changed callback failed")
 
         self._rebalance_executor.submit(_run)
 
@@ -1346,7 +1689,9 @@ class ClientInterestRegistry:
         # never let a broken connection block or drop the push for anyone else.
         for conn in targets:
             try:
-                conn.send(msg)
+                # droppable: never let a lagging client stall the collection
+                # thread this runs on - see _ClientConnection.send.
+                conn.send(msg, droppable=True)
             except Exception:
                 logger.debug("Push to client '%s' failed", conn.client_id, exc_info=True)
 
@@ -1356,6 +1701,13 @@ class ClientInterestRegistry:
         targets = self._targets_for_pair(pair)
         if not targets or new_df is None or new_df.empty:
             return
+        # Tail only - broadcasting the full merged series to every client on
+        # every new candle was the single largest CPU cost on the master (see
+        # _SERVE_HISTORY_CANDLES). Clients replace their local klines wholesale
+        # with whatever lands here, so this must stay >= any strategy's
+        # startup_candle_count.
+        if len(new_df) > _SERVE_HISTORY_CANDLES:
+            new_df = new_df.tail(_SERVE_HISTORY_CANDLES)
         self._broadcast(targets, {
             "type": "ohlcv_push", "exchange": exchange, "pair": pair,
             "timeframe": timeframe, "candle_type": candle_type, **df_to_wire(new_df),
@@ -1461,6 +1813,10 @@ class _ClientHandler(socketserver.BaseRequestHandler):
         finally:
             if registry is not None and registered:
                 registry.unregister(client_id)
+            # Stop this connection's sender thread; without it every dropped
+            # client would leak one blocked-on-get() thread for the life of the
+            # process.
+            conn.close()
             if got_any_message:
                 logger.info("Client disconnected: %s", peer)
             else:
@@ -1570,6 +1926,77 @@ _RATE_LIMIT_LOG_MARKERS = (
 # for the SAME pair before giving up on ever fetching its funding rate again
 # this process's lifetime.
 _FUNDING_RATE_MAX_FAILURES = 3
+
+# Markers identifying a funding-rate failure as PERMANENT for that pair (the
+# exchange has no funding rate for it) rather than transient. These blacklist a
+# pair on the FIRST occurrence instead of after _FUNDING_RATE_MAX_FAILURES,
+# because retrying them never once succeeded and each attempt is expensive - see
+# _collect_funding_rates. Confirmed live on hyperliquid's synthetic `xyz:`
+# markets (XYZ-HOOD, XYZ-NATGAS, XYZ-SILVER, ...), which ccxt omits from
+# fetchFundingRates() entirely and answers with NullResponse per-pair.
+_FUNDING_RATE_UNSUPPORTED_MARKERS = (
+    "nullresponse",
+    "returned no data",
+    "does not support",
+    "not available",
+)
+
+# Hard wall-clock ceiling on the per-pair funding-rate fallback sweep within one
+# collect_once() tick. Funding rate is a low-urgency, every-5-minutes poll, but
+# it runs on the SAME thread as OHLCV collection and AFTER it, so without a
+# bound a slow sweep silently starves candle collection - observed live as
+# 8-17 minute gaps between consecutive OHLCV ticks, which pushed every connected
+# bot past its staleness limit. Whatever the budget cuts short is simply picked
+# up by the next tick's rotation; nothing is dropped permanently. Not applied to
+# the bulk path, which is a single ~1s request.
+_FUNDING_RATE_SWEEP_BUDGET_S = 20.0
+
+# Maximum candles the master ever serves (get_ohlcv) or broadcasts (ohlcv_push)
+# for a single pair/timeframe, when the client doesn't ask for a specific limit.
+#
+# Both paths used to hand over the ENTIRE merged history - ~52,000 rows per pair
+# here. df_to_wire() materializes that as a Python list-of-lists and json.dumps
+# turns it into a 3.5 MB payload, measured at 0.136s of master CPU per pair.
+# With 44 pairs x 6 connected bots pulling every refresh cycle that is ~36s of
+# pure serialization per cycle, all of it holding the GIL on the master and
+# therefore starving the collection thread that shares the process - the
+# collector's own ticks went from 4-18s standalone to 60-108s with the fleet
+# attached, which is what kept OHLCV chronically behind. The push path had the
+# same shape: a full merged series broadcast to every interested client on every
+# new candle.
+#
+# Nothing needs that history: it exists so strategies can compute indicators,
+# and the largest `startup_candle_count` in this repo is 1600 (the six strategies
+# actually running need 60-300). 2000 covers every one of them with margin at
+# ~0.13 MB and ~0.02s per pair - a ~27x reduction on both CPU and bandwidth.
+# Clients that genuinely need more can still pass an explicit larger `limit`.
+_SERVE_HISTORY_CANDLES = 2000
+
+# Per-client outbound queue depth (see _ClientConnection). Deep enough to absorb
+# a full push burst - one broadcast per pair at a candle close - without dropping
+# anything for a client that's merely busy, shallow enough that a genuinely
+# wedged one can't pin unbounded memory.
+_CLIENT_OUTBOX_MAXSIZE = 256
+# How long a non-droppable message (a request response) waits for queue space
+# before giving up. Only reachable when a client is already badly backed up.
+_CLIENT_OUTBOX_PUT_TIMEOUT_S = 5.0
+
+# Sleep between ticks when the PREVIOUS tick had to defer due pairs (i.e. more
+# pairs needed refreshing than _batch_cap allowed).
+#
+# The normal poll interval is 60s, which is right when there's nothing to do.
+# But at a candle close every pair goes due at once, and at a floor cap of 10 a
+# 44-pair whitelist needs 5 ticks to drain - 5 MINUTES at 60s each. The bots'
+# staleness limit is timeframe*2 + outdated_offset = 35 min for 15m, and a 15m
+# pair's newest complete candle is already 15-30 min old by open-timestamp, so
+# the whole budget for draining a close is ~5 minutes. Sleeping a full minute
+# between backlog ticks consumed all of it before any stall was even involved -
+# the arithmetic alone guaranteed the warnings.
+#
+# Draining at this cadence instead covers 44 pairs in ~50s. It only applies
+# while a backlog exists: due-only batching means ticks between closes fetch
+# nothing at all, so this costs no extra requests in steady state.
+_BACKLOG_POLL_INTERVAL_S = 10.0
 
 
 class _RateLimitLogCapture(logging.Handler):
@@ -2267,6 +2694,7 @@ def ensure_master_running(
     startup_timeout: float = 30.0,
     show_terminal: bool = False,
     tmux: bool = False,
+    auto_start: bool = True,
 ) -> bool:
     """Check whether a data_server master is already listening on (host, port); if
     not, launch one as a fully detached background process, so it outlives
@@ -2298,7 +2726,14 @@ def ensure_master_running(
     serializes the whole check-and-launch section so only the first caller to
     acquire it ever spawns a process; every other caller waits on the lock,
     then re-probes (the master it was racing against is now up) instead of
-    launching its own."""
+    launching its own.
+
+    ``auto_start=False`` skips everything below the initial probe: this
+    caller will connect to a master if one is already up, but will never
+    spawn one itself (see ``system.json``'s ``auto_start_data_server`` -
+    set false on every bot and start the master explicitly instead, via
+    ``run-datamaster.bat``/``.sh``, to rule out the launch race entirely
+    rather than just narrowing it)."""
     connect_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
 
     def _probe() -> bool:
@@ -2311,6 +2746,15 @@ def ensure_master_running(
     if _probe():
         logger.info("Data server master already running at %s:%d", connect_host, port)
         return True
+
+    if not auto_start:
+        logger.warning(
+            "No data server master found at %s:%d and auto_start_data_server is "
+            "false - not launching one. Start it explicitly (run-datamaster.bat/"
+            ".sh) or enable auto-start.",
+            connect_host, port,
+        )
+        return False
 
     lock_path = Path(tempfile.gettempdir()) / f"vulcantrader_dataserver_master_{port}.lock"
     # Wait comfortably longer than one full launch-and-confirm cycle: the
@@ -2882,7 +3326,21 @@ def _expand_minimal_config(minimal: dict[str, Any], args: Any) -> Config:
             "name": exchange_name,
             "key": "",
             "secret": "",
-            "ccxt_config": {"enableRateLimit": True, "rateLimit": 1000},
+            # 50ms is ccxt's OWN default for hyperliquid, the value every
+            # trading bot's config uses, and - critically - the value
+            # EXCHANGE_MAX_SAFE_PAIRS was probed under (see its comment: "under
+            # this repo's standard ccxt_config (enableRateLimit + rateLimit:
+            # 50ms)"). The master alone hardcoded 1000, throttling its SYNC ccxt
+            # client to one request per second: that client serves get_tickers
+            # (which every connected bot's pricing goes through), the funding
+            # sweep, and the hip3 dex calls, so those were being serialized 20x
+            # slower than the batch sizes around them were calibrated for -
+            # measured as 31.5s funding sweeps and repeated 10s get_tickers
+            # timeouts inside the rebalance path. The adaptive ramp
+            # (_record_batch_outcome) plus the retrier remain the safety net if
+            # this proves too fast, and OHLCV is unaffected either way: it runs
+            # on the async client, which already used the 50ms default.
+            "ccxt_config": {"enableRateLimit": True, "rateLimit": 50},
             "ccxt_async_config": {},
             "use_public_trades": bool(minimal.get("orderflow", False)),
             "pair_whitelist": starting_pairs,

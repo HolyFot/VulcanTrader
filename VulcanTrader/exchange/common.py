@@ -30,6 +30,28 @@ def _get_logging_mixin():
     return __logging_mixin
 
 
+__rate_limit_logging_mixin = None
+# Separate from _get_logging_mixin()'s kucoin-specific mixin (kept at its own
+# 1-hour default) - this one is tuned much shorter, for the retrier's own
+# rate-limit noise below: the backoff-delay line, the per-retry "returned
+# exception... retrying" warning, and the terminal "...Giving up." warning.
+# Under real congestion (a fleet of bots sharing one exchange IP) all three
+# fire once per retry PER CONCURRENT call, so a single 429 storm produces
+# dozens of near-identical lines within the same second - throttling by exact
+# message text collapses repeats from different concurrent callers while
+# still showing every distinct step of any one retry chain (the message text
+# includes the changing count/delay, so 1->2->5->10 or "4 times"->"3 times"
+# etc. never collide with each other).
+_RATE_LIMIT_LOG_PERIOD_S = 30
+
+
+def _get_rate_limit_logging_mixin():
+    global __rate_limit_logging_mixin
+    if not __rate_limit_logging_mixin:
+        __rate_limit_logging_mixin = LoggingMixin(logger, refresh_period=_RATE_LIMIT_LOG_PERIOD_S)
+    return __rate_limit_logging_mixin
+
+
 # Maximum default retry count.
 # Functions are always called RETRY_COUNT + 1 times (for the original call)
 API_RETRY_COUNT = 4
@@ -122,7 +144,8 @@ def calculate_backoff(retrycount, max_retries):
 def retrier_async(f):
     async def wrapper(*args, **kwargs):
         count = kwargs.pop("count", API_RETRY_COUNT)
-        kucoin = args[0].name == "KuCoin"  # Check if the exchange is KuCoin.
+        exchange_name = getattr(args[0], "name", "")
+        kucoin = exchange_name == "KuCoin"  # Check if the exchange is KuCoin.
         try:
             return await f(*args, **kwargs)
         except TemporaryError as ex:
@@ -139,18 +162,40 @@ def retrier_async(f):
                             f"Kucoin 429 error, avoid triggering DDosProtection backoff delay. "
                             f"{count} tries left before giving up",
                             logmethod=logger.warning,
+                            key=f"{exchange_name}:{f.__name__}:kucoin429",
                         )
                         # Reset msg to avoid logging too many times.
                         msg = ""
                     else:
                         backoff_delay = calculate_backoff(count + 1, API_RETRY_COUNT)
-                        logger.info(f"Applying DDosProtection backoff delay: {backoff_delay}")
+                        # See _get_rate_limit_logging_mixin's docstring for
+                        # why this (and the two warnings below) use log_once
+                        # instead of a plain logger call. The `key=` here (and
+                        # below) drops the changing count/delay from what's
+                        # deduped on - otherwise every distinct retry step (and
+                        # every concurrent caller currently sitting at a
+                        # different step) escapes the throttle and each logs
+                        # its own line, which is where the console spam comes
+                        # from during a sustained rate-limit storm.
+                        _get_rate_limit_logging_mixin().log_once(
+                            f"Applying DDosProtection backoff delay: {backoff_delay}",
+                            logmethod=logger.info,
+                            key=f"{exchange_name}:{f.__name__}:backoff",
+                        )
                         await asyncio.sleep(backoff_delay)
                 if msg:
-                    logger.warning(msg)
+                    _get_rate_limit_logging_mixin().log_once(
+                        msg,
+                        logmethod=logger.warning,
+                        key=f"{exchange_name}:{f.__name__}:retry:{type(ex).__name__}",
+                    )
                 return await wrapper(*args, **kwargs)
             else:
-                logger.warning(msg + "Giving up.")
+                _get_rate_limit_logging_mixin().log_once(
+                    msg + "Giving up.",
+                    logmethod=logger.warning,
+                    key=f"{exchange_name}:{f.__name__}:giveup:{type(ex).__name__}",
+                )
                 raise ex
 
     return wrapper
@@ -177,22 +222,42 @@ def retrier(_func: F | None = None, *, retries=API_RETRY_COUNT):
         @wraps(f)
         def wrapper(*args, **kwargs):
             count = kwargs.pop("count", retries)
+            exchange_name = getattr(args[0], "name", "") if args else ""
             try:
                 return f(*args, **kwargs)
             except (TemporaryError, RetryableOrderError) as ex:
                 msg = f'{f.__name__}() returned exception: "{ex}". '
                 if count > 0:
-                    logger.warning(msg + f"Retrying still for {count} times.")
+                    # See _get_rate_limit_logging_mixin's docstring (top of
+                    # this module) for why these use log_once. `key=` drops the
+                    # changing count/delay from the dedup key - otherwise every
+                    # distinct retry step (and every concurrent caller sitting
+                    # at a different step) escapes the throttle and logs its
+                    # own line, which is where console spam during a sustained
+                    # rate-limit storm comes from.
+                    _get_rate_limit_logging_mixin().log_once(
+                        msg + f"Retrying still for {count} times.",
+                        logmethod=logger.warning,
+                        key=f"{exchange_name}:{f.__name__}:retry:{type(ex).__name__}",
+                    )
                     count -= 1
                     kwargs.update({"count": count})
                     if isinstance(ex, DDosProtection | RetryableOrderError):
                         # increasing backoff
                         backoff_delay = calculate_backoff(count + 1, retries)
-                        logger.info(f"Applying DDosProtection backoff delay: {backoff_delay}")
+                        _get_rate_limit_logging_mixin().log_once(
+                            f"Applying DDosProtection backoff delay: {backoff_delay}",
+                            logmethod=logger.info,
+                            key=f"{exchange_name}:{f.__name__}:backoff",
+                        )
                         time.sleep(backoff_delay)
                     return wrapper(*args, **kwargs)
                 else:
-                    logger.warning(msg + "Giving up.")
+                    _get_rate_limit_logging_mixin().log_once(
+                        msg + "Giving up.",
+                        logmethod=logger.warning,
+                        key=f"{exchange_name}:{f.__name__}:giveup:{type(ex).__name__}",
+                    )
                     raise ex
 
         return cast(F, wrapper)

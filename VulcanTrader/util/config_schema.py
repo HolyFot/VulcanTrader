@@ -911,18 +911,59 @@ CONF_SCHEMA = {
             "required": ["enabled", "listen_ip_address", "listen_port", "username", "password"],
         },
         # end of RPC section
+        "auto_start_data_server": {
+            "description": "Shared, fleet-wide default (set in user_data/configs_system/"
+            "system.json, like api_server/discord/telegram) for whether a bot with no "
+            "reachable data_server master should launch one itself. False makes every "
+            "bot connect-only - it uses data_server_ip/data_server_port if reachable and "
+            "otherwise falls back to direct exchange polling, but never spawns a master. "
+            "Set false fleet-wide and start the master explicitly instead, via "
+            "run-datamaster.bat/.sh, to rule out two independent launches (e.g. two "
+            "Python interpreters, or a rerun before the first fully bound its port) each "
+            "spawning their own master and doubling the exchange request load - the exact "
+            "failure mode this setting exists to prevent. A bot config's own "
+            "`data_server.auto_start` still wins if explicitly set. Default true (the "
+            "original auto-launch-from-first-bot behavior) when unset.",
+            "type": "boolean",
+        },
+        "data_server_ip": {
+            "description": "Shared, fleet-wide default (system.json) for the host the "
+            "data_server master listens on / clients connect to. Overridden per-bot by "
+            "that config's own `data_server.host`, if explicitly set. Default "
+            "\"127.0.0.1\" when unset anywhere.",
+            "type": "string",
+        },
+        "data_server_port": {
+            "description": "Shared, fleet-wide default (system.json) for the port the "
+            "data_server master's client-request socket listens on. Overridden per-bot by "
+            "that config's own `data_server.port`, if explicitly set. Default 8720 when "
+            "unset anywhere.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+        },
         "data_server": {
             "description": "This bot's own use of the shared data_server master "
             "(VulcanTrader/data_server.py) - whether to use one at all, and the "
-            "ports it should be reachable on. The master/subserver process itself "
+            "ports it should be reachable on. Overrides the system.json-wide "
+            "auto_start_data_server/data_server_ip/data_server_port defaults above when "
+            "explicitly set. The master/subserver process itself "
             "reads its own separate, minimal config file (see data_server.py's "
             "`_load_minimal_config`), not this block - a trading bot never runs "
             "as a subserver, so master_host/master_port/name have no place here.",
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Auto-launch/use a shared data_server master instead of "
-                    "each bot polling the exchange independently.",
+                    "description": "Use the shared data_server system at all. False skips "
+                    "it entirely - this bot always polls the exchange directly, and never "
+                    "tries to reach or launch a master.",
+                    "type": "boolean",
+                },
+                "auto_start": {
+                    "description": "Per-bot override of the system.json-wide "
+                    "`auto_start_data_server` default (only meaningful when `enabled` above "
+                    "isn't false). False means this bot will connect to a master if one is "
+                    "already reachable, but will never spawn one itself.",
                     "type": "boolean",
                 },
                 "persist_to_disk": {

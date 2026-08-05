@@ -2378,6 +2378,55 @@ class Exchange:
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
 
+    @retrier
+    def fetch_funding_rates(self, symbols: list[str] | None = None) -> dict[str, FundingRate]:
+        """
+        Get current funding rates for MANY pairs in one request, on exchanges whose
+        API exposes a bulk endpoint for it (`exchange_has("fetchFundingRates")`).
+
+        Strongly preferred over looping `fetch_funding_rate()` per pair wherever a
+        caller needs more than a couple of pairs: on hyperliquid the bulk call is a
+        single ~1.2s request covering every asset, while the per-pair path is not
+        just N times slower but partly BROKEN - ccxt reports
+        `has["fetchFundingRate"] is False` there, and the emulated singular call
+        raises NullResponse forever for the exchange's synthetic `xyz:`-prefixed
+        markets. Under the retrier that cost 5 doomed attempts x ~20s per such pair,
+        which is what previously stalled data_server's collection loop for 8-17
+        minutes at a time (see DataCollector._collect_funding_rates_bulk).
+
+        Pairs the exchange has no funding rate for are simply ABSENT from the
+        returned dict rather than raising - callers should treat a missing key as
+        "unsupported for this pair", which is also the cheapest possible way to
+        discover that (no extra request per pair).
+
+        :param symbols: restrict to these pairs; None fetches everything the
+            exchange returns. Note most bulk endpoints return all assets either
+            way and filter client-side, so passing None is usually no more
+            expensive.
+        :return: dict of pair -> ccxt funding-rate dict (empty on non-futures
+            markets or when the exchange has no bulk endpoint).
+        """
+        if self.trading_mode != TradingMode.FUTURES:
+            return {}
+        if not self.exchange_has("fetchFundingRates"):
+            raise OperationalException(
+                f"Exchange {self._api.name} does not support fetching funding rates in bulk."
+            )
+        try:
+            return self._api.fetch_funding_rates(symbols)
+        except ccxt.NotSupported as e:
+            raise OperationalException(
+                f"Exchange {self._api.name} does not support fetching funding rates. Message: {e}"
+            ) from e
+        except (ccxt.DDoSProtection, ccxt.RateLimitExceeded) as e:
+            raise DDosProtection(e) from e
+        except (ccxt.OperationFailed, ccxt.ExchangeError) as e:
+            raise TemporaryError(
+                f"Could not get funding rates due to {e.__class__.__name__}. Message: {e}"
+            ) from e
+        except ccxt.BaseError as e:
+            raise OperationalException(e) from e
+
     @staticmethod
     def get_next_limit_in_list(
         limit: int,

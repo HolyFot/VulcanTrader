@@ -593,7 +593,7 @@ reasoning as `--no-discord-bot`). The port-picker in
 `_launch_autostart_configs()` does a real socket-bind probe per candidate
 port, not just "not already picked in this same batch" - the latter let an
 auto_start config with no explicit `api_server.listen_port` try to grab
-8080, the same port the calling webserver itself is normally already bound
+8060, the same port the calling webserver itself is normally already bound
 to (confirmed directly: the launched bot's own dashboard failed to bind
 while its trade loop kept running regardless - subtle enough to go
 unnoticed for a while).
@@ -856,7 +856,7 @@ Merges (in order):
 | `trading_mode` | str | `"spot"` / `"futures"` |
 | `margin_mode` | str | `"isolated"` / `"cross"` |
 | `db_url` | str | `json:///user_data/trades.live.json` — ignored by `bot.py autostart`/config-manager Start, which always derive `<config-name>_<dry_run\|live>.json` instead |
-| `api_server.listen_port` | int | Web portal port (default 8080) — normally set once in `configs_system/system.json`, per-instance `--port` CLI override still wins |
+| `api_server.listen_port` | int | Web portal port (default 8060) — normally set once in `configs_system/system.json`, per-instance `--port` CLI override still wins |
 | `api_server.password` | str | Bearer token password |
 | `discord.webhook_url` | str | Trade notification webhook (usually shared via `configs_system/system.json`; messages tagged `[bot_name]`) |
 | `discord.bot_token` | str | `!`-prefix command bot token — see "Multi-bot fleet control"; only one bot in a fleet should actually run the client |

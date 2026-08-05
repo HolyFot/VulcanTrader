@@ -1,4 +1,5 @@
 # ruff: noqa
+from __future__ import annotations
 
 import asyncio
 import gc
@@ -10,12 +11,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from math import isnan
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import aiohttp
 import pandas as pd
-import polars as pl
 from pandas import DataFrame
+
+if TYPE_CHECKING:
+    # polars is only actually needed by the Drift-specific historical trade
+    # archive download path below (download_single_date / _load_all_temp_data,
+    # imported lazily there) - it's a heavy dependency (~30-50MB resident) that
+    # every other exchange's bot process would otherwise pay for just because
+    # VulcanTrader.exchange's package __init__ imports every exchange subclass
+    # eagerly.
+    import polars as pl
 
 from VulcanTrader.constants import DEFAULT_DATAFRAME_COLUMNS, DEFAULT_TRADES_COLUMNS
 from VulcanTrader.data.converter import (
@@ -132,6 +141,8 @@ class AsyncHTTPDownloader:
         Returns:
             tuple: (date, DataFrame or None, status_message)
         """
+        import polars as pl
+
         async with semaphore:
             # Add minimal delay to spread out requests slightly
             # 500ms to slow down requests significantly
@@ -379,6 +390,8 @@ class AsyncHTTPDownloader:
 
     def _load_all_temp_data(self) -> List[pl.DataFrame]:
         """Load all temporary data files and return list of DataFrames"""
+        import polars as pl
+
         dataframes = []
         for temp_file in self.temp_files:
             try:

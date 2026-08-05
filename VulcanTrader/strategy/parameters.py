@@ -6,21 +6,10 @@ This module defines a base class for auto-hyperoptable strategies.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from contextlib import suppress
 from typing import Any, Union
 
 from VulcanTrader.enums import HyperoptState
 from VulcanTrader.util.hyperopt_tools import HyperoptStateContainer
-
-
-with suppress(ImportError):
-    from VulcanTrader.optimize.space import (
-        Categorical,
-        Integer,
-        Real,
-        SKDecimal,
-    )
-
 from VulcanTrader.util.exceptions import OperationalException
 
 
@@ -173,6 +162,8 @@ class IntParameter(NumericParameter):
         Create optuna distribution space.
         :param name: A name of parameter field.
         """
+        from VulcanTrader.optimize.space import Integer
+
         return Integer(low=self.low, high=self.high, name=name, **self._space_params)
 
     @property
@@ -227,6 +218,8 @@ class RealParameter(NumericParameter):
         Create optimization space.
         :param name: A name of parameter field.
         """
+        from VulcanTrader.optimize.space import Real
+
         return Real(low=self.low, high=self.high, name=name, **self._space_params)
 
 
@@ -279,6 +272,8 @@ class DecimalParameter(NumericParameter):
         Create optimization space.
         :param name: A name of parameter field.
         """
+        from VulcanTrader.optimize.space import SKDecimal
+
         return SKDecimal(
             low=self.low, high=self.high, decimals=self.decimals, name=name, **self._space_params
         )
@@ -339,6 +334,8 @@ class CategoricalParameter(BaseParameter):
         Create optuna distribution space.
         :param name: A name of parameter field.
         """
+        from VulcanTrader.optimize.space import Categorical
+
         return Categorical(self.opt_range, name=name)
 
     @property

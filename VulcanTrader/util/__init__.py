@@ -1,3 +1,9 @@
+# isort: off
+from VulcanTrader.util import _ccxt_lazy
+
+_ccxt_lazy.install()
+
+# isort: on
 from VulcanTrader.util.datetime_helpers import (
     dt_floor_day,
     dt_from_ts,
