@@ -1276,11 +1276,17 @@ function tradingApp() {
         async refreshDashboard(silent) {
             if (!silent) this.loading = true;
             this.error = null;
+            // Captured up front: if the user switches bots (or the auto-
+            // refresh timer overlaps a manual click) while this fetch is in
+            // flight, a slower response for the PREVIOUS bot can otherwise
+            // land after a newer one and overwrite it with the wrong data.
+            const requestedBot = this.viewingBot;
             try {
-                const url = this.viewingBot
-                    ? '/api/dashboard?bot=' + encodeURIComponent(this.viewingBot)
+                const url = requestedBot
+                    ? '/api/dashboard?bot=' + encodeURIComponent(requestedBot)
                     : '/api/dashboard';
                 const d = await this.authedFetch(url);
+                if (this.viewingBot !== requestedBot) return; // stale response - discard
                 if (d.status) this.status = d.status;
                 this.openTrades = d.open_trades || [];
                 this.closedTrades = d.closed_trades || [];
@@ -1290,9 +1296,9 @@ function tradingApp() {
                     this.startingCapital = +this.status.starting_capital;
                 }
             } catch (e) {
-                this.error = e.message;
+                if (this.viewingBot === requestedBot) this.error = e.message;
             } finally {
-                this.loading = false;
+                if (this.viewingBot === requestedBot) this.loading = false;
             }
         },
         async refreshAll(silent) { return this.refreshDashboard(silent); },

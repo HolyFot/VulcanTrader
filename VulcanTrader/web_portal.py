@@ -386,6 +386,12 @@ class WebPortal:
         # but still tracks the market closely between auto-refresh polls.
         self._ticker_cache: dict[str, tuple[float, float]] = {}
         self.TICKER_CACHE_TTL: float = 5.0
+        # Hard wall-clock cap on any single public ticker fetch (see
+        # _get_ccxt_public_client/_run_with_deadline) - a slow or rate-
+        # limited exchange must never make "click a bot to view it" wait
+        # longer than this; past it we give up and serve without a live
+        # price rather than block the dashboard request.
+        self.TICKER_FETCH_TIMEOUT_S: float = 3.0
         # Plain public (no API key) ccxt clients, one per exchange id, used
         # only to price ANOTHER bot's open trades from its account JSON
         # snapshot (see _account_dashboard) - this project's own Exchange
@@ -715,6 +721,9 @@ class WebPortal:
                     "last_process": _json_safe(getattr(self.bot, "last_process", None)),
                     "bot_name": self.config.get("bot_name"),
                     "strategy": strat.__class__.__name__ if strat is not None else None,
+                    "starting_capital": self._starting_capital_from_config(
+                        self.config, bool(self.config.get("dry_run"))
+                    ),
                 }
             except Exception as exc:
                 logger.exception("status endpoint failure")
@@ -1343,6 +1352,39 @@ class WebPortal:
                       "and executes it on its next processing cycle.",
         }
 
+    @staticmethod
+    def _starting_capital_from_config(cfg: dict, dry_run: bool) -> float:
+        """`dry_run_wallet` for a paper account, `available_capital` for a
+        live one - falls back to 1000.0 (the frontend's own hardcoded
+        default) if neither is set, matching the backtest-results path's
+        existing fallback (see the "Starting capital" block above)."""
+        val = cfg.get("dry_run_wallet") if dry_run else cfg.get("available_capital")
+        try:
+            return float(val) if val is not None else 1000.0
+        except (TypeError, ValueError):
+            return 1000.0
+
+    def _starting_capital_for_account(self, name: str, dry_run: bool) -> float:
+        """Starting capital for a CROSS-account dashboard view: read from
+        THAT bot's own config file, not `self.config` (which - if this
+        portal is itself attached to a bot - belongs to a different one).
+        Account names are always "<config-stem>_dry_run"/"<config-stem>_live"
+        (see _list_configs), so the config stem is recovered by stripping
+        that suffix back off."""
+        stem = name
+        for suffix in ("_dry_run", "_live"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        try:
+            cfg_path = self._config_path(stem)
+            if not cfg_path.is_file():
+                return 1000.0
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 1000.0
+        return self._starting_capital_from_config(cfg, dry_run)
+
     def _account_dashboard(self, name: str, closed_limit: int) -> dict:
         """Dashboard payload built entirely from another bot's account DB."""
         path = self._find_account_db(name)
@@ -1371,10 +1413,20 @@ class WebPortal:
             "started_at": info["started_at"],
             "uptime_secs": info["uptime_secs"],
             "last_heartbeat": info["last_heartbeat"],
+            "starting_capital": self._starting_capital_for_account(name, info["mode"] != "live"),
         }
+        open_trade_list = [t for t in trades if t.get("is_open")]
+        by_exchange: dict[str, list[str]] = {}
+        for t in open_trade_list:
+            exch = t.get("exchange")
+            if exch and t.get("pair"):
+                by_exchange.setdefault(exch, []).append(t["pair"])
+        for exch, pairs in by_exchange.items():
+            self._prefetch_tickers_ccxt_public(exch, pairs)
+
         return {
             "status": status,
-            "open_trades": [self._attach_live_pnl(_json_safe(t)) for t in trades if t.get("is_open")],
+            "open_trades": [self._attach_live_pnl(_json_safe(t)) for t in open_trade_list],
             "closed_trades": [_json_safe(t) for t in trades if not t.get("is_open")][-closed_limit:],
             # Another process's notifications/log stream isn't visible from here.
             "messages": [],
@@ -1993,6 +2045,41 @@ class WebPortal:
             self._proc_stat_cache.pop(proc.pid, None)
             return {"cpu_percent": None, "memory_mb": None}
 
+    def _get_ccxt_public_client(self, exchange_name: str) -> Any | None:
+        """Pooled, keyless ccxt client for read-only public ticker lookups
+        (see _current_price_ccxt_public/_prefetch_tickers_ccxt_public).
+        `timeout` is set explicitly (ccxt's own default is 10s) - it's the
+        first line of defence against a slow/degraded exchange stalling a
+        dashboard request; `_run_with_deadline` below is the second, tighter
+        one, since a hung DNS lookup or the rate-limiter's own pre-request
+        sleep aren't always covered by ccxt's HTTP-level timeout."""
+        client = self._ccxt_public_pool.get(exchange_name)
+        if client is not None:
+            return client
+        import ccxt
+        exchange_class = getattr(ccxt, exchange_name, None)
+        if exchange_class is None:
+            return None
+        client = exchange_class({"enableRateLimit": True, "timeout": 5000})
+        self._ccxt_public_pool[exchange_name] = client
+        return client
+
+    def _run_with_deadline(self, func, *args):
+        """Run `func(*args)` on a worker thread and wait at most
+        TICKER_FETCH_TIMEOUT_S for it. Raises on timeout/failure - callers
+        catch broadly and fall back to cached/no price, same as any other
+        fetch failure. Deliberately does NOT wait for the worker on timeout
+        (`shutdown(wait=False)`): a slow call is left to finish on its own
+        and just warms the cache for next time, rather than making THIS
+        request pay for however long it actually takes."""
+        import concurrent.futures as cf
+        executor = cf.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(func, *args)
+            return future.result(timeout=self.TICKER_FETCH_TIMEOUT_S)
+        finally:
+            executor.shutdown(wait=False)
+
     def _current_price_ccxt_public(self, exchange_name: str, pair: str) -> float | None:
         """Cached, keyless ticker read via a plain ccxt client - used only
         for pricing another bot's open trades (see _account_dashboard),
@@ -2005,15 +2092,10 @@ class WebPortal:
         if cached is not None and now - cached[0] < self.TICKER_CACHE_TTL:
             return cached[1]
         try:
-            import ccxt
-            client = self._ccxt_public_pool.get(exchange_name)
+            client = self._get_ccxt_public_client(exchange_name)
             if client is None:
-                exchange_class = getattr(ccxt, exchange_name, None)
-                if exchange_class is None:
-                    return cached[1] if cached else None
-                client = exchange_class({"enableRateLimit": True})
-                self._ccxt_public_pool[exchange_name] = client
-            ticker = client.fetch_ticker(pair)
+                return cached[1] if cached else None
+            ticker = self._run_with_deadline(client.fetch_ticker, pair)
             price = ticker.get("last") or ticker.get("close") or ticker.get("bid")
             if price is None:
                 return cached[1] if cached else None
@@ -2023,6 +2105,35 @@ class WebPortal:
         except Exception:
             logger.debug("public ticker fetch failed for %s:%s", exchange_name, pair, exc_info=True)
             return cached[1] if cached else None
+
+    def _prefetch_tickers_ccxt_public(self, exchange_name: str, pairs: list[str]) -> None:
+        """Warm the ticker cache for every pair in one batched round trip,
+        instead of leaving `_current_price_ccxt_public` to do it one pair at a
+        time. Without this, viewing a bot with several open trades in
+        different pairs (see _account_dashboard) paid for that many serial
+        network calls - each with its own exchange latency/rate-limit risk -
+        before the dashboard had anything to show. A no-op for pairs already
+        warm within TICKER_CACHE_TTL, and silently skipped if the exchange
+        doesn't support batch tickers (falls back to the existing per-pair path)."""
+        now = time.time()
+        stale = [
+            p for p in dict.fromkeys(pairs)  # de-dup, keep order
+            if (c := self._ticker_cache.get(f"{exchange_name}:{p}")) is None
+            or now - c[0] >= self.TICKER_CACHE_TTL
+        ]
+        if not stale:
+            return
+        try:
+            client = self._get_ccxt_public_client(exchange_name)
+            if client is None or not client.has.get("fetchTickers"):
+                return
+            tickers = self._run_with_deadline(client.fetch_tickers, stale)
+            for pair, ticker in tickers.items():
+                price = ticker.get("last") or ticker.get("close") or ticker.get("bid")
+                if price is not None:
+                    self._ticker_cache[f"{exchange_name}:{pair}"] = (now, float(price))
+        except Exception:
+            logger.debug("batch ticker prefetch failed for %s", exchange_name, exc_info=True)
 
     def _current_price(self, pair: str, exchange_name: str | None) -> float | None:
         """Best-effort current price for ``pair``: reuses the attached bot's
