@@ -2,9 +2,14 @@
 JSON-backed persistence bootstrap.
 
 ``init_db(db_url)`` parses a ``json:///path/to/file.json`` URL, loads any
-existing trades/orders/locks/custom-data/key-value entries into the in-memory
-class-level lists, and registers a save callback so every ``Model.session.commit()``
-atomically rewrites the JSON file on disk.
+existing trades/orders/locks/custom-data/key-value entries into a
+:class:`~VulcanTrader.persistence.base.PersistenceContext` bound to the
+calling thread's contextvars context (see persistence/base.py), and sets
+that context's save callback so every ``Model.session.commit()``
+atomically rewrites its own JSON file on disk. Contextvar-scoped (rather
+than the single set of process-global lists this used to be) so several
+bots can share one process (``single_process_mode``) without one bot's
+``init_db()`` clobbering another's trade ledger.
 
 Legacy ``sqlite://`` URLs are accepted for backwards compatibility -- they
 are silently rewritten to a sibling ``.json`` file in the same directory.
@@ -18,12 +23,13 @@ import logging
 import os
 import sys
 import threading
+import time
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-from VulcanTrader.persistence.base import ModelBase, _set_save_callback
+from VulcanTrader.persistence.base import ModelBase, PersistenceContext, _current_db
 from VulcanTrader.util.exceptions import OperationalException
 from VulcanTrader.persistence.custom_data import _CustomData
 from VulcanTrader.persistence.key_value_store import _KeyValueStoreModel
@@ -95,44 +101,31 @@ _REGISTRY: list[tuple[str, type[ModelBase]]] = [
     ("KeyValueStore", _KeyValueStoreModel),
 ]
 
-_save_lock = threading.Lock()
-_active_path: Path | None = None
-# OS-level single-writer lock (see _acquire_writer_lock): file descriptor of the
-# held ``<db>.lock`` file, kept open for the life of the process. The OS releases
-# it automatically on ANY process exit, including crashes and hard kills.
-_writer_lock_fd: int | None = None
-_writer_lock_path: Path | None = None
 
-
-def _acquire_writer_lock(path: Path) -> None:
+def _acquire_writer_lock(ctx: PersistenceContext, path: Path) -> None:
     """Enforce exactly ONE writing process per persistence file, via an
     OS-level exclusive lock on a sibling ``<name>.lock`` file. Atomic
     write-then-rename protects against crashes *within* one process, but two
-    processes pointed at the same db_url (the same bot accidentally launched
-    twice, a stray duplicate in a batch script) would still race each other:
-    interleaved writes and last-replace-wins can only be truly prevented by
-    refusing the second writer outright, so that's what this does - the second
-    process gets a clear OperationalException at startup instead of the two
-    silently taking turns clobbering each other's snapshots forever.
+    processes (or, now that a process can host several bots at once via
+    single_process_mode, two DIFFERENT bots) pointed at the same db_url would
+    still race each other: interleaved writes and last-replace-wins can only
+    be truly prevented by refusing the second writer outright, so that's what
+    this does - the second one gets a clear OperationalException at startup
+    instead of the two silently taking turns clobbering each other's
+    snapshots forever.
 
     The lock is advisory-exclusive at the OS level (msvcrt.locking on Windows,
-    fcntl.flock elsewhere), held for the entire process lifetime, and released
-    by the OS itself on any kind of exit - no stale-lock cleanup needed: a
-    leftover .lock FILE from a dead process is lockable again immediately.
-    Re-initialising the same path in the same process (tests, restarts of the
-    bot loop) reuses the already-held lock."""
-    global _writer_lock_fd, _writer_lock_path
+    fcntl.flock elsewhere), held on ``ctx`` (this bot's own
+    :class:`PersistenceContext`, see persistence/base.py) for its whole
+    lifetime. A crashed or killed PROCESS releases it automatically (a
+    leftover .lock FILE from a dead process is lockable again immediately)
+    - but a single bot's own graceful shutdown within a still-alive process
+    (single_process_mode, several bots sharing one interpreter) does NOT
+    release it by itself, since fds are process- not thread-scoped; see
+    release_writer_lock(), called from bot.py's run_bot_lifecycle after
+    cleanup. Re-initialising the same path from the same context (tests,
+    restarts of the bot loop) reuses the already-held lock - see init_db()."""
     lock_path = path.with_name(path.name + ".lock")
-    if _writer_lock_fd is not None:
-        if _writer_lock_path == lock_path:
-            return  # same file re-initialised in-process: keep the held lock
-        try:
-            os.close(_writer_lock_fd)
-        except OSError:
-            pass
-        _writer_lock_fd = None
-        _writer_lock_path = None
-
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
         if sys.platform == "win32":
@@ -151,12 +144,42 @@ def _acquire_writer_lock(path: Path) -> None:
             "trade database would corrupt it - use a distinct --db-url for each "
             "bot instance."
         ) from None
-    _writer_lock_fd = fd
-    _writer_lock_path = lock_path
+    ctx.writer_lock_fd = fd
+    ctx.writer_lock_path = lock_path
+
+
+def release_writer_lock() -> None:
+    """Release THIS thread's ambient PersistenceContext's OS-level writer
+    lock (see _acquire_writer_lock), if any, and clear the context's save
+    callback so a stray post-shutdown commit() becomes a silent no-op
+    instead of writing through a closed fd.
+
+    A single bot-per-process (``trade`` subcommand) never needed this - the
+    OS releases every fd a process holds on exit, automatically, the moment
+    that process dies. But under single_process_mode several bots' contexts
+    all live in the SAME process, so a bot's own graceful shutdown finishing
+    does NOT close its fd by itself (fds are process-scoped, not
+    thread-scoped) - confirmed live: without this, a stopped bot's account
+    kept reporting "running" via the lock-probe (_probe_db_lock /
+    in_process_bot_running) for the rest of the shared process's lifetime,
+    even though its account JSON's own is_running flag had correctly
+    flipped to 0. Called from bot.py's run_bot_lifecycle after
+    bot.cleanup()/portal.cleanup() finish. A no-op (nothing to release) when
+    called from a subprocess-per-bot context, or twice."""
+    ctx = _current_db.get()
+    if ctx is None or ctx.writer_lock_fd is None:
+        return
+    try:
+        os.close(ctx.writer_lock_fd)
+    except OSError:
+        pass
+    ctx.writer_lock_fd = None
+    ctx.writer_lock_path = None
+    ctx.save_callback = None
 
 
 def _sync_trade_orders() -> None:
-    """Register every Order attached to a live Trade into ``Order._instances``
+    """Register every Order attached to a live Trade into ``Order._instances()``
     before snapshotting. With SQLAlchemy this was free: appending to a
     relationship-mapped ``trade.orders`` staged the child for the next commit
     via the relationship cascade. Here ``trade.orders`` is a plain list, and
@@ -168,9 +191,10 @@ def _sync_trade_orders() -> None:
     back with no order history. Doing it at the snapshot choke point instead
     of patching each call site covers current and future append-then-commit
     paths alike. ``_add_instance`` is idempotent, and ``Trade.delete()``
-    removes a deleted trade's orders from ``_instances`` itself, so this
-    never resurrects them."""
-    for trade in Trade._instances:
+    removes a deleted trade's orders from ``_instances()`` itself, so this
+    never resurrects them. Runs against whichever context is ambient (see
+    _save_snapshot) - only ever called from that bot's own commit path."""
+    for trade in Trade._instances():
         for order in getattr(trade, "orders", None) or ():
             order.ft_trade_id = trade.id
             Order._add_instance(order)
@@ -179,22 +203,61 @@ def _sync_trade_orders() -> None:
 def _snapshot() -> dict[str, list[dict[str, Any]]]:
     _sync_trade_orders()
     return {
-        name: [obj.to_dict() for obj in cls._instances]
+        name: [obj.to_dict() for obj in cls._instances()]
         for name, cls in _REGISTRY
     }
 
 
-def _save_snapshot() -> None:
-    if _active_path is None or _active_path == Path(os.devnull):
+_REPLACE_RETRY_ATTEMPTS = 25
+_REPLACE_RETRY_BASE_DELAY_S = 0.01
+
+
+def _replace_with_retry(tmp: Path, dest: Path) -> None:
+    """``os.replace()``, retrying a transient Windows sharing violation.
+
+    Windows refuses to replace a file that's currently open elsewhere
+    without FILE_SHARE_DELETE, and a concurrent READER of THIS SAME
+    account file is a real, reachable scenario: web_portal.py's fleet
+    account scan (``_account_bot_info``, behind ``/api/livebots``) opens
+    every account JSON directly via ``path.read_text()``, including an
+    in-process bot's own file while that bot's trade loop is mid-commit -
+    confirmed live via a concurrent-readers stress test, which reproduced
+    ``PermissionError: [WinError 5]`` on ``os.replace()`` reliably under
+    load. POSIX ``rename()`` has no such restriction. The reader's
+    ``open()`` here is always a single short-lived ``read_text()`` call,
+    so a short bounded retry clears it without risking a stuck write -
+    exponential backoff capped at ~1s total worst case, negligible next to
+    the multi-second bot cycle time this runs on."""
+    delay = _REPLACE_RETRY_BASE_DELAY_S
+    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(tmp, dest)
+            return
+        except OSError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+
+def _save_snapshot(ctx: PersistenceContext) -> None:
+    """Write ``ctx``'s own trade store to its own ``active_path``. Bound as
+    ``ctx.save_callback`` by init_db() and invoked by _FakeSession.commit()
+    -- always from that bot's own thread, so the ambient contextvar used by
+    _snapshot()/Trade._instances() etc. above already resolves to this same
+    ``ctx`` by the time this runs; ``ctx`` is still taken explicitly here
+    (rather than re-derived) so the disk-write path for real trade records
+    never depends on ambient state being correct at call time."""
+    if ctx.active_path is None or ctx.active_path == Path(os.devnull):
         return
-    with _save_lock:
+    with ctx.save_lock:
         tmp: Path | None = None
         try:
-            _active_path.parent.mkdir(parents=True, exist_ok=True)
+            ctx.active_path.parent.mkdir(parents=True, exist_ok=True)
             # Per-PID tmp name: even in the (already lock-prevented, see
-            # _acquire_writer_lock) scenario of two processes on one db file,
+            # _acquire_writer_lock) scenario of two writers on one db file,
             # they can never interleave writes inside one tmp file.
-            tmp = _active_path.with_name(f"{_active_path.name}.{os.getpid()}.tmp")
+            tmp = ctx.active_path.with_name(f"{ctx.active_path.name}.{os.getpid()}.tmp")
             # write -> flush -> fsync -> VERIFY -> atomic replace: os.replace
             # alone is atomic in the filesystem NAMESPACE, but without fsync
             # the data itself may still be sitting in OS write-back cache when
@@ -213,9 +276,9 @@ def _save_snapshot() -> None:
             # byte stream can never become the live file.
             with open(tmp, encoding="utf-8") as fh:
                 json.loads(fh.read())
-            os.replace(tmp, _active_path)
+            _replace_with_retry(tmp, ctx.active_path)
         except Exception:
-            logger.exception("Failed to persist DB snapshot to %s", _active_path)
+            logger.exception("Failed to persist DB snapshot to %s", ctx.active_path)
             # Leave no unverified garbage behind; the live file is untouched.
             if tmp is not None:
                 try:
@@ -224,8 +287,11 @@ def _save_snapshot() -> None:
                     pass
 
 
-def _load_snapshot(path: Path) -> None:
-    # Reset everything so re-initialisation in tests doesn't accumulate state.
+def _load_snapshot(path: Path, ctx: PersistenceContext) -> None:
+    # Reset everything so re-initialisation (tests, or the same bot
+    # re-running init_db for the same path) doesn't accumulate state. Must
+    # run with ``ctx`` already the ambient context (see init_db) since
+    # _reset_instances() resolves it that way.
     for _, cls in _REGISTRY:
         cls._reset_instances()
 
@@ -325,26 +391,41 @@ def _load_snapshot(path: Path) -> None:
 
 
 def init_db(db_url: str) -> None:
-    """Initialise JSON-backed persistence for the given URL."""
-    global _active_path
+    """Initialise JSON-backed persistence for the given URL, bound to a
+    :class:`PersistenceContext` on THIS thread's contextvars context (see
+    persistence/base.py). A thread that never called init_db() (or wasn't
+    started via util/ctx_thread.py::start_thread_with_context from one that
+    did) sees no Trade/Order/PairLock data at all - this is the isolation
+    that lets several bots share one process (single_process_mode) without
+    their trade ledgers clobbering each other."""
     path = _path_from_db_url(db_url)
-    if path != Path(os.devnull):
-        # Refuse to start at all if another process is already writing this
-        # file - the only way two writers can't corrupt each other is for the
-        # second one to never get going (see _acquire_writer_lock).
-        _acquire_writer_lock(path)
-        # Sweep stale per-PID tmp files left by crashed processes (never the
-        # live file itself; a tmp only becomes live via a verified os.replace).
-        for stale in path.parent.glob(f"{path.name}.*.tmp"):
-            try:
-                stale.unlink()
-                logger.info("Removed stale persistence tmp file %s", stale)
-            except OSError:
-                pass
-    _active_path = path
+    existing = _current_db.get()
+    if existing is not None and existing.active_path == path:
+        # Same bot re-initialising the same path (tests, RELOAD_CONFIG) -
+        # keep its already-held writer lock and in-memory state's identity;
+        # _load_snapshot below still resets+repopulates it from disk.
+        ctx = existing
+    else:
+        ctx = PersistenceContext()
+        if path != Path(os.devnull):
+            # Refuse to start at all if another writer already owns this file
+            # - the only way two writers can't corrupt each other is for the
+            # second one to never get going (see _acquire_writer_lock).
+            _acquire_writer_lock(ctx, path)
+            # Sweep stale per-PID tmp files left by crashed processes (never
+            # the live file itself; a tmp only becomes live via a verified
+            # os.replace).
+            for stale in path.parent.glob(f"{path.name}.*.tmp"):
+                try:
+                    stale.unlink()
+                    logger.info("Removed stale persistence tmp file %s", stale)
+                except OSError:
+                    pass
+        ctx.active_path = path
+    _current_db.set(ctx)
     logger.info("Using JSON-backed persistence: %s", path)
-    _load_snapshot(path)
-    _set_save_callback(_save_snapshot)
+    _load_snapshot(path, ctx)
+    ctx.save_callback = functools.partial(_save_snapshot, ctx)
 
 
 def custom_data_rpc_wrapper(func):

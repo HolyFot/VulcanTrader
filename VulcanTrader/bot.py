@@ -492,30 +492,47 @@ def _stagger_wait(
         stop_event.wait(timeout=stagger_s)
 
 
-def cmd_trade(args: argparse.Namespace) -> int:
+def run_bot_lifecycle(
+    config: dict[str, Any], stop_event: threading.Event, *, no_web: bool = False
+) -> None:
+    """Construct a VulcanTraderBot from ``config``, attach a WebPortal
+    (unless ``no_web``), and run its trade loop until ``stop_event`` is set
+    - by a signal handler, a cross-process stop-file, or an in-process
+    caller (see ``launch_bot_in_process``). This is the one shared bot
+    lifecycle: identical whether it's the only thing running in this OS
+    process (``cmd_trade``, one bot per process - today's default) or one
+    of several sharing a process (``single_process_mode`` - see
+    ``launch_bot_in_process`` below). The only difference between those two
+    callers is how the process/thread that owns ``stop_event`` decides to
+    set it; everything from persistence isolation (see
+    persistence/base.py's PersistenceContext) to cleanup happens the same
+    way either way.
+
+    IMPORTANT: must run on a thread that either calls ``init_db()`` itself
+    (which ``VulcanTraderBot.__init__`` does) or was started via
+    ``util/ctx_thread.py::start_thread_with_context`` from one that already
+    has - a plain new thread has no persistence context bound and every
+    Trade/Order/PairLock call would raise.
+    """
     from VulcanTrader.trader_bot import VulcanTraderBot  # type: ignore
     from VulcanTrader.web_portal import WebPortal  # type: ignore
-    from VulcanTrader.enums import RunMode, State  # type: ignore
+    from VulcanTrader.enums import State  # type: ignore
+    from VulcanTrader.util.ctx_thread import start_thread_with_context
+    from VulcanTrader.persistence.models import release_writer_lock
 
-    configs = _resolve_configs(args.config or [], args)
-    configs = _with_system_config(configs, args)
-    args_dict = _build_args_dict(args, configs)
-    if args.dry_run:
-        args_dict["dry_run"] = True
-
-    config = _load_configuration(args_dict, RunMode.DRY_RUN if args.dry_run else RunMode.LIVE)
-
-    # Per-instance overrides so several concurrent trade instances can share
-    # one base config file - vary these flags per invocation instead of
-    # maintaining a separate config file per port (see run-paper.bat/.sh).
-    if args.port or args.host:
-        api_cfg = config.setdefault("api_server", {})
-        if args.port:
-            api_cfg["listen_port"] = int(args.port)
-        if args.host:
-            api_cfg["listen_ip_address"] = args.host
-    if args.bot_name:
-        config["bot_name"] = args.bot_name
+    def _cleanup(bot: Any, portal: Any) -> None:
+        """bot.cleanup() + portal.cleanup(), then release this bot's OS
+        writer lock - see release_writer_lock's docstring for why that last
+        step matters under single_process_mode specifically (a plain
+        subprocess-per-bot process exit would release it for free)."""
+        try:
+            bot.cleanup()
+        finally:
+            try:
+                if portal:
+                    portal.cleanup()
+            finally:
+                release_writer_lock()
 
     # Cross-process stop requests: the web portal (or anything else) creates
     # ``<db>.json.stop`` next to the persistence file; the loop below notices
@@ -544,6 +561,181 @@ def cmd_trade(args: argparse.Namespace) -> int:
         logger.debug("stop-file setup failed", exc_info=True)
         stop_file = None
         forceexit_file = None
+
+    # Started early (before the bot even exists) so a dashboard/Discord Stop
+    # can interrupt a bot that's stuck retrying initialisation below, not
+    # just a local Ctrl+C. ``bot`` is captured by the closures via late
+    # binding - it's still None until construction below succeeds. Both
+    # watchers run via start_thread_with_context since they're spawned from
+    # this (the bot's own) thread and the forceexit watcher touches trades.
+    bot = None
+    if stop_file is not None:
+        def _stop_file_watcher(sf: Path = stop_file) -> None:
+            while not stop_event.wait(2.0):
+                if sf.exists():
+                    logger.info("stop file %s detected — shutting down gracefully", sf)
+                    try:
+                        sf.unlink()
+                    except OSError:
+                        pass
+                    stop_event.set()
+                    return
+
+        start_thread_with_context(_stop_file_watcher, name="StopFileWatcher", daemon=True)
+
+    if forceexit_file is not None:
+        def _forceexit_file_watcher(fe: Path = forceexit_file) -> None:
+            while not stop_event.wait(2.0):
+                if not fe.exists():
+                    continue
+                try:
+                    pairs = json.loads(fe.read_text(encoding="utf-8") or "[]")
+                    fe.unlink()
+                except (OSError, ValueError):
+                    continue
+                if bot is None:
+                    continue  # nothing to force-exit before the bot exists
+                for pair in pairs:
+                    logger.info("forceexit file requested exit for %s", pair)
+                    bot._schedule_force_exit_pair(str(pair))
+
+        start_thread_with_context(_forceexit_file_watcher, name="ForceExitFileWatcher", daemon=True)
+
+    # Per-phase timing so slow startups are easy to diagnose. Initialisation
+    # (exchange market loading, initial balance/position fetch) can hit
+    # transient errors - rate limits, a temporary 5xx/451 from the exchange,
+    # a network blip - that have nothing to do with the strategy itself. A
+    # fleet bot dying on one of these means a silent, permanently-stopped bot
+    # until someone notices and restarts it by hand, so instead of letting
+    # the exception escape and kill the process, log it and keep retrying
+    # here: the console window/tmux pane/dashboard/Discord all stay live and
+    # show the error, and the bot comes up on its own once the issue clears.
+    # A stop request (Ctrl+C, or a stop file once bots are running elsewhere)
+    # still breaks out of the retry loop instead of retrying forever.
+    logger.info("[trade] initialising bot ...")
+    t0 = time.perf_counter()
+    init_retry_s = 30.0
+    while bot is None and not stop_event.is_set():
+        try:
+            bot = VulcanTraderBot(config)
+        except Exception:
+            logger.exception(
+                "[trade] bot initialisation failed - retrying in %.0fs "
+                "(process stays up; stop this bot from the dashboard/Discord "
+                "if you need to abort)", init_retry_s,
+            )
+            stop_event.wait(init_retry_s)
+    if bot is None:
+        logger.info("[trade] stop requested during initialisation - exiting")
+        return
+    logger.info("[trade] bot constructed in %.2fs", time.perf_counter() - t0)
+
+    portal = WebPortal(bot) if not no_web else None
+    if portal:
+        _attach_portal(bot, portal)
+        t1 = time.perf_counter()
+        portal.start(blocking=False)
+        logger.info("[trade] web portal started in %.2fs", time.perf_counter() - t1)
+
+    # The interactive Discord (!) command client runs from `cmd_webserver()`
+    # instead of here - it's a control-plane concern belonging to the one
+    # persistent orchestrating process, not something tied to any individual
+    # trade subprocess's lifecycle (see "Multi-bot fleet control" in
+    # AGENTS.md). This process's trade events still reach Discord via the
+    # webhook (util/discord_logger.py, through _dispatch_discord below) -
+    # that part needs no interactive client at all.
+
+    timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
+    fleet_stagger_s = _fleet_stagger_s(config, timeframe_s)
+
+    # bot.startup() (below) runs update_all_liquidation_prices(),
+    # update_funding_fees(), and startup_update_open_orders() - each a DIRECT
+    # exchange call, bypassing data_server entirely (it only serves OHLCV/
+    # funding-rate/trades/on-demand tickers, not liquidation-price or
+    # funding-fee bookkeeping). _launch_autostart_configs starts every fleet
+    # bot within the same second, so without this wait all N bots' startup()
+    # calls landed in the same ~1-3s window - confirmed live as a 429 storm
+    # that caused several "Unable to exit/create trade" failures right at
+    # fleet launch (open positions briefly un-exitable). The existing stagger
+    # further down only delayed the recurring trade-loop cycle, which starts
+    # AFTER startup() - it never covered this one-time burst. Same
+    # deterministic offset as that one (this bot's own hash), just applied
+    # earlier too, so the one-time startup burst and the recurring per-cycle
+    # bursts are both spread out.
+    _stagger_wait(stop_event, fleet_stagger_s, what="startup")
+
+    t2 = time.perf_counter()
+    while not stop_event.is_set():
+        try:
+            bot.startup()
+            break
+        except Exception:
+            logger.exception(
+                "[trade] bot.startup() failed - retrying in %.0fs "
+                "(process stays up; stop this bot from the dashboard/Discord "
+                "if you need to abort)", init_retry_s,
+            )
+            stop_event.wait(init_retry_s)
+    if stop_event.is_set():
+        logger.info("[trade] stop requested during startup - exiting")
+        _cleanup(bot, portal)
+        return
+    logger.info("[trade] bot.startup() in %.2fs", time.perf_counter() - t2)
+    logger.info("[trade] total init %.2fs — entering trade loop", time.perf_counter() - t0)
+
+    # Allow the bot to start running immediately rather than sitting in STOPPED.
+    try:
+        bot.state = State.RUNNING
+    except Exception:
+        pass
+
+    try:
+        # Stagger this bot's cycle start within the throttle window so a fleet of
+        # several bots launched together don't keep hitting the exchange in
+        # lockstep forever after: every bot.process() call can fire its own direct
+        # exchange requests OHLCV/data_server intentionally avoids sharing (ticker
+        # fetches for entry/exit pricing - see Exchange.get_rate - market reloads,
+        # etc.), so N bots on the same 5s period means N-way simultaneous bursts
+        # every single cycle, not just at startup (that one-time burst is now
+        # covered separately, above, before bot.startup()).
+        _stagger_wait(stop_event, fleet_stagger_s, what="initial cycle")
+
+        logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
+        while not stop_event.is_set():
+            t0 = time.perf_counter()
+            try:
+                bot.process()
+            except Exception:
+                logger.exception("bot.process() raised")
+            elapsed = time.perf_counter() - t0
+            # Interruptible sleep — wakes immediately when stop_event is set.
+            stop_event.wait(timeout=max(0.0, timeframe_s - elapsed))
+    finally:
+        _cleanup(bot, portal)
+
+
+def cmd_trade(args: argparse.Namespace) -> int:
+    from VulcanTrader.enums import RunMode  # type: ignore
+
+    configs = _resolve_configs(args.config or [], args)
+    configs = _with_system_config(configs, args)
+    args_dict = _build_args_dict(args, configs)
+    if args.dry_run:
+        args_dict["dry_run"] = True
+
+    config = _load_configuration(args_dict, RunMode.DRY_RUN if args.dry_run else RunMode.LIVE)
+
+    # Per-instance overrides so several concurrent trade instances can share
+    # one base config file - vary these flags per invocation instead of
+    # maintaining a separate config file per port (see run-paper.bat/.sh).
+    if args.port or args.host:
+        api_cfg = config.setdefault("api_server", {})
+        if args.port:
+            api_cfg["listen_port"] = int(args.port)
+        if args.host:
+            api_cfg["listen_ip_address"] = args.host
+    if args.bot_name:
+        config["bot_name"] = args.bot_name
 
     stop_event = threading.Event()
     _watchdog: list = [None]
@@ -617,168 +809,143 @@ def cmd_trade(args: argparse.Namespace) -> int:
         except Exception:
             logger.debug("Could not register Windows console-close handler", exc_info=True)
 
-    # Started early (before the bot even exists) so a dashboard/Discord Stop
-    # can interrupt a bot that's stuck retrying initialisation below, not
-    # just a local Ctrl+C. ``bot`` is captured by the closures via late
-    # binding - it's still None until construction below succeeds.
-    bot = None
-    if stop_file is not None:
-        def _stop_file_watcher(sf: Path = stop_file) -> None:
-            while not stop_event.wait(2.0):
-                if sf.exists():
-                    logger.info("stop file %s detected — shutting down gracefully", sf)
-                    try:
-                        sf.unlink()
-                    except OSError:
-                        pass
-                    stop_event.set()
-                    return
-
-        threading.Thread(
-            target=_stop_file_watcher, name="StopFileWatcher", daemon=True
-        ).start()
-
-    if forceexit_file is not None:
-        def _forceexit_file_watcher(fe: Path = forceexit_file) -> None:
-            while not stop_event.wait(2.0):
-                if not fe.exists():
-                    continue
-                try:
-                    pairs = json.loads(fe.read_text(encoding="utf-8") or "[]")
-                    fe.unlink()
-                except (OSError, ValueError):
-                    continue
-                if bot is None:
-                    continue  # nothing to force-exit before the bot exists
-                for pair in pairs:
-                    logger.info("forceexit file requested exit for %s", pair)
-                    bot._schedule_force_exit_pair(str(pair))
-
-        threading.Thread(
-            target=_forceexit_file_watcher, name="ForceExitFileWatcher", daemon=True
-        ).start()
-
-    # Per-phase timing so slow startups are easy to diagnose. Initialisation
-    # (exchange market loading, initial balance/position fetch) can hit
-    # transient errors - rate limits, a temporary 5xx/451 from the exchange,
-    # a network blip - that have nothing to do with the strategy itself. A
-    # fleet bot dying on one of these means a silent, permanently-stopped bot
-    # until someone notices and restarts it by hand, so instead of letting
-    # the exception escape and kill the process, log it and keep retrying
-    # here: the console window/tmux pane/dashboard/Discord all stay live and
-    # show the error, and the bot comes up on its own once the issue clears.
-    # A stop request (Ctrl+C, or a stop file once bots are running elsewhere)
-    # still breaks out of the retry loop instead of retrying forever.
-    logger.info("[trade] initialising bot ...")
-    t0 = time.perf_counter()
-    init_retry_s = 30.0
-    while bot is None and not stop_event.is_set():
-        try:
-            bot = VulcanTraderBot(config)
-        except Exception:
-            logger.exception(
-                "[trade] bot initialisation failed - retrying in %.0fs "
-                "(process stays up; stop this bot from the dashboard/Discord "
-                "if you need to abort)", init_retry_s,
-            )
-            stop_event.wait(init_retry_s)
-    if bot is None:
-        logger.info("[trade] stop requested during initialisation - exiting")
-        return 0
-    logger.info("[trade] bot constructed in %.2fs", time.perf_counter() - t0)
-
-    portal = WebPortal(bot) if not args.no_web else None
-    if portal:
-        _attach_portal(bot, portal)
-        t1 = time.perf_counter()
-        portal.start(blocking=False)
-        logger.info("[trade] web portal started in %.2fs", time.perf_counter() - t1)
-
-    # The interactive Discord (!) command client runs from `cmd_webserver()`
-    # instead of here - it's a control-plane concern belonging to the one
-    # persistent orchestrating process, not something tied to any individual
-    # trade subprocess's lifecycle (see "Multi-bot fleet control" in
-    # AGENTS.md). This process's trade events still reach Discord via the
-    # webhook (util/discord_logger.py, through _dispatch_discord below) -
-    # that part needs no interactive client at all.
-
-    timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
-    fleet_stagger_s = _fleet_stagger_s(config, timeframe_s)
-
-    # bot.startup() (below) runs update_all_liquidation_prices(),
-    # update_funding_fees(), and startup_update_open_orders() - each a DIRECT
-    # exchange call, bypassing data_server entirely (it only serves OHLCV/
-    # funding-rate/trades/on-demand tickers, not liquidation-price or
-    # funding-fee bookkeeping). _launch_autostart_configs starts every fleet
-    # bot within the same second, so without this wait all N bots' startup()
-    # calls landed in the same ~1-3s window - confirmed live as a 429 storm
-    # that caused several "Unable to exit/create trade" failures right at
-    # fleet launch (open positions briefly un-exitable). The existing stagger
-    # further down only delayed the recurring trade-loop cycle, which starts
-    # AFTER startup() - it never covered this one-time burst. Same
-    # deterministic offset as that one (this bot's own hash), just applied
-    # earlier too, so the one-time startup burst and the recurring per-cycle
-    # bursts are both spread out.
-    _stagger_wait(stop_event, fleet_stagger_s, what="startup")
-
-    t2 = time.perf_counter()
-    while not stop_event.is_set():
-        try:
-            bot.startup()
-            break
-        except Exception:
-            logger.exception(
-                "[trade] bot.startup() failed - retrying in %.0fs "
-                "(process stays up; stop this bot from the dashboard/Discord "
-                "if you need to abort)", init_retry_s,
-            )
-            stop_event.wait(init_retry_s)
-    if stop_event.is_set():
-        logger.info("[trade] stop requested during startup - exiting")
-        try:
-            bot.cleanup()
-        finally:
-            if portal:
-                portal.cleanup()
-        return 0
-    logger.info("[trade] bot.startup() in %.2fs", time.perf_counter() - t2)
-    logger.info("[trade] total init %.2fs — entering trade loop", time.perf_counter() - t0)
-
-    # Allow the bot to start running immediately rather than sitting in STOPPED.
     try:
-        bot.state = State.RUNNING
-    except Exception:
-        pass
-
-    try:
-        # Stagger this bot's cycle start within the throttle window so a fleet of
-        # several bots launched together don't keep hitting the exchange in
-        # lockstep forever after: every bot.process() call can fire its own direct
-        # exchange requests OHLCV/data_server intentionally avoids sharing (ticker
-        # fetches for entry/exit pricing - see Exchange.get_rate - market reloads,
-        # etc.), so N bots on the same 5s period means N-way simultaneous bursts
-        # every single cycle, not just at startup (that one-time burst is now
-        # covered separately, above, before bot.startup()).
-        _stagger_wait(stop_event, fleet_stagger_s, what="initial cycle")
-
-        logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
-        while not stop_event.is_set():
-            t0 = time.perf_counter()
-            try:
-                bot.process()
-            except Exception:
-                logger.exception("bot.process() raised")
-            elapsed = time.perf_counter() - t0
-            # Interruptible sleep — wakes immediately when stop_event is set.
-            stop_event.wait(timeout=max(0.0, timeframe_s - elapsed))
+        run_bot_lifecycle(config, stop_event, no_web=args.no_web)
     finally:
         _cancel_watchdog()
-        try:
-            bot.cleanup()
-        finally:
-            if portal:
-                portal.cleanup()
     return 0
+
+
+# ---------------------------------------------------------------------------
+#  single_process_mode: in-process bot launcher
+#
+#  The single_process_mode equivalent of util/proc_launch.py::launch_detached()
+#  - runs a bot's full lifecycle (run_bot_lifecycle) as a daemon thread in
+#  THIS process instead of spawning `python -m VulcanTrader.bot trade` as a
+#  separate OS process. Used by _launch_autostart_configs() below and by
+#  web_portal.py's config-manager Start button when single_process_mode is
+#  true (see config_schema.py). Each launched bot's persistence stays
+#  isolated via persistence/base.py's contextvar-scoped PersistenceContext -
+#  see run_bot_lifecycle's docstring.
+# ---------------------------------------------------------------------------
+
+_IN_PROCESS_BOTS: dict[str, dict[str, Any]] = {}  # account_name -> {"stop_event", "thread"}
+_IN_PROCESS_LOCK = threading.Lock()
+
+
+def _read_single_process_mode(user_data_dir: Path) -> bool:
+    """Cheap raw read of configs_system/system.json's single_process_mode -
+    same lightweight-scan style as _scan_autostart_configs() (deliberately
+    not the full Configuration loader, since this may run on every fleet
+    scan)."""
+    sys_cfg = user_data_dir / DEFAULT_SYSTEM_CONFIG_SUBDIR / SYSTEM_CONFIG_NAME
+    if not sys_cfg.is_file():
+        return False
+    try:
+        raw = json.loads(sys_cfg.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(raw.get("single_process_mode", False)) if isinstance(raw, dict) else False
+
+
+def launch_bot_in_process(
+    spec: dict[str, Any], user_data_dir: Path, port: int | None = None, *, no_web: bool = False
+) -> dict[str, Any]:
+    """Resolve ``spec`` (same shape _scan_autostart_configs() produces -
+    config_name/strategy/dry_run/bot_name) into a full bot config exactly
+    like `trade` would (config file(s) + system.json + strategy/dry-run/
+    db-url/port/bot-name overrides), then run its lifecycle as a daemon
+    thread in THIS process. Everything downstream - persistence file/lock,
+    stop/forceexit files, heartbeat, its own portal on its own port -
+    behaves identically to the subprocess path launch_detached() takes;
+    only the OS-process boundary is gone."""
+    from argparse import Namespace
+    from VulcanTrader.enums import RunMode  # type: ignore
+
+    config_name = spec["config_name"]
+    strategy = spec["strategy"]
+    dry_run = bool(spec.get("dry_run", True))
+    bot_name = spec.get("bot_name") or strategy
+    mode = "dry_run" if dry_run else "live"
+    account_name = f"{config_name}_{mode}"
+    db_url = f"json:///user_data/accounts/{account_name}.json"
+
+    fake_args = Namespace(
+        config=[config_name],
+        user_data_dir=str(user_data_dir),
+        verbose=0,
+        strategy=strategy,
+        dry_run=dry_run,
+        db_url=db_url,
+    )
+    configs = _resolve_configs([config_name], fake_args)
+    configs = _with_system_config(configs, fake_args)
+    args_dict = _build_args_dict(fake_args, configs)
+    args_dict["dry_run"] = dry_run
+    config = _load_configuration(args_dict, RunMode.DRY_RUN if dry_run else RunMode.LIVE)
+    if port is not None:
+        config.setdefault("api_server", {})["listen_port"] = int(port)
+    config["bot_name"] = bot_name
+
+    stop_event = threading.Event()
+
+    def _run() -> None:
+        try:
+            run_bot_lifecycle(config, stop_event, no_web=no_web)
+        except Exception:
+            logger.exception("single_process_mode: in-process bot %s crashed", account_name)
+        finally:
+            with _IN_PROCESS_LOCK:
+                _IN_PROCESS_BOTS.pop(account_name, None)
+
+    thread = threading.Thread(target=_run, name=f"Bot-{account_name}", daemon=True)
+    with _IN_PROCESS_LOCK:
+        _IN_PROCESS_BOTS[account_name] = {"stop_event": stop_event, "thread": thread}
+    thread.start()
+    logger.info(
+        "single_process_mode: launched %s in-process (strategy=%s, port=%s, db=%s)",
+        config_name, strategy, port, db_url,
+    )
+    return {"account_name": account_name, "db_url": db_url, "port": port}
+
+
+def stop_in_process_bot(account_name: str) -> bool:
+    """Instant stop for an in-process bot (vs. the ~2s stop-file poll used
+    for subprocess-spawned bots). Returns False if no in-process bot is
+    registered under this account name in THIS process."""
+    with _IN_PROCESS_LOCK:
+        handle = _IN_PROCESS_BOTS.get(account_name)
+    if handle is None:
+        return False
+    handle["stop_event"].set()
+    return True
+
+
+def in_process_bot_running(account_name: str) -> bool | None:
+    """True/False if this account was launched in-process in THIS process,
+    else None (unknown - subprocess-spawned, or never launched here at
+    all). Preferred over WebPortal._probe_db_lock for in-process accounts:
+    fcntl advisory locks (persistence/models.py) are scoped per-PROCESS on
+    POSIX, not per-file-handle, so a lock probe issued from the very
+    process that already holds the lock always reports "free" there - the
+    probe only reliably detects OTHER processes. (Windows' msvcrt locking
+    is per-handle and doesn't have this gap, but this keeps behavior
+    uniform across platforms.)"""
+    with _IN_PROCESS_LOCK:
+        handle = _IN_PROCESS_BOTS.get(account_name)
+    return None if handle is None else handle["thread"].is_alive()
+
+
+def stop_all_in_process_bots() -> None:
+    """Best-effort fleet-wide shutdown hook: set every in-process bot's
+    stop_event so its own thread runs its normal cleanup path. Wired into
+    WebPortal's Ctrl+C handler (see cmd_webserver's on_shutdown=) - a plain
+    SIGINT only stops the portal's own uvicorn server by default, it has no
+    idea any bot threads exist."""
+    with _IN_PROCESS_LOCK:
+        handles = list(_IN_PROCESS_BOTS.values())
+    for h in handles:
+        h["stop_event"].set()
 
 
 # ---------------------------------------------------------------------------
@@ -880,7 +1047,12 @@ def cmd_webserver(args: argparse.Namespace) -> int:
         def __init__(self, cfg: dict) -> None:
             self.config = cfg
 
-    portal = WebPortal(_Stub(config) if config else None)
+    # on_shutdown lets WebPortal's own Ctrl+C handler also stop any bots this
+    # process is hosting in-process (single_process_mode) - a plain SIGINT
+    # only knows to stop the portal's own uvicorn server, it has no idea any
+    # bot threads exist otherwise. A no-op registry when single_process_mode
+    # is off (or unused) - see stop_all_in_process_bots.
+    portal = WebPortal(_Stub(config) if config else None, on_shutdown=stop_all_in_process_bots)
 
     # The interactive Discord (!) command client belongs here, not in
     # cmd_trade() - it's a control-plane concern for the one persistent
@@ -1000,6 +1172,12 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
     ``cmd_webserver()`` (so starting the fleet-control process itself brings
     up every auto_start:true config, instead of requiring a separate manual
     ``autostart`` invocation every time - see ``--no-autostart``).
+
+    When ``configs_system/system.json``'s ``single_process_mode`` is true
+    (see config_schema.py), each spec is launched via
+    ``launch_bot_in_process()`` instead - a thread in THIS process rather
+    than a ``trade`` subprocess. Everything else (port picking, the
+    already-running guard, db_url derivation) is identical either way.
     """
     from VulcanTrader.util.proc_launch import launch_detached
 
@@ -1007,6 +1185,8 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
     if not specs:
         logger.info("autostart: no config has auto_start=true - nothing to launch.")
         return 0
+
+    single_process_mode = _read_single_process_mode(user_data_dir)
 
     import socket
 
@@ -1048,13 +1228,19 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
         # (`_probe_db_lock`) - reused here (via a lazy import to avoid a
         # module-load-time circular import with web_portal.py) rather than
         # reimplemented, since Windows vs POSIX file-locking differs.
-        try:
-            from VulcanTrader.persistence.models import _path_from_db_url
-            from VulcanTrader.web_portal import WebPortal
-            already_running = bool(WebPortal._probe_db_lock(_path_from_db_url(db_url)))
-        except Exception:
-            logger.debug("autostart: running-check failed for %s", spec["config_name"], exc_info=True)
-            already_running = False
+        account_name = f"{spec['config_name']}_{mode}"
+        # Checked first: authoritative for a bot THIS process itself already
+        # launched in-process (see in_process_bot_running's docstring for
+        # why the lock-probe below can't be trusted for that case on POSIX).
+        already_running = bool(in_process_bot_running(account_name))
+        if not already_running:
+            try:
+                from VulcanTrader.persistence.models import _path_from_db_url
+                from VulcanTrader.web_portal import WebPortal
+                already_running = bool(WebPortal._probe_db_lock(_path_from_db_url(db_url)))
+            except Exception:
+                logger.debug("autostart: running-check failed for %s", spec["config_name"], exc_info=True)
+                already_running = False
         if already_running:
             logger.info(
                 "autostart: %s's bot is already running (db=%s) - skipping",
@@ -1062,23 +1248,26 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
             )
             continue
 
-        cmd = [
-            sys.executable, "-m", "VulcanTrader.bot", "trade",
-            "-v",
-            "-c", spec["config_name"],
-            "--strategy", spec["strategy"],
-            "--db-url", db_url,
-            "--port", str(port),
-            "--bot-name", spec["bot_name"],
-        ]
-        if spec["dry_run"]:
-            cmd.append("--dry-run")
+        if single_process_mode:
+            launch_bot_in_process(spec, user_data_dir, port)
+        else:
+            cmd = [
+                sys.executable, "-m", "VulcanTrader.bot", "trade",
+                "-v",
+                "-c", spec["config_name"],
+                "--strategy", spec["strategy"],
+                "--db-url", db_url,
+                "--port", str(port),
+                "--bot-name", spec["bot_name"],
+            ]
+            if spec["dry_run"]:
+                cmd.append("--dry-run")
 
-        logger.info(
-            "autostart: launching %s (strategy=%s, port=%d, db=%s)",
-            spec["config_name"], spec["strategy"], port, db_url,
-        )
-        launch_detached(cmd, spec)
+            logger.info(
+                "autostart: launching %s (strategy=%s, port=%d, db=%s)",
+                spec["config_name"], spec["strategy"], port, db_url,
+            )
+            launch_detached(cmd, spec)
         launched += 1
 
     logger.info("autostart: launched %d bot(s).", launched)

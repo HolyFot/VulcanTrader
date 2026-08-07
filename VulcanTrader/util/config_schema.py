@@ -911,6 +911,20 @@ CONF_SCHEMA = {
             "required": ["enabled", "listen_ip_address", "listen_port", "username", "password"],
         },
         # end of RPC section
+        "single_process_mode": {
+            "description": "Fleet-wide setting (user_data/configs_system/system.json). "
+            "When true, `bot.py webserver`/`autostart` (and the root `main.py`, and the "
+            "web portal's config-manager Start button) run every auto_start / "
+            "manually-started bot as a background thread inside THIS process instead of "
+            "spawning `python -m VulcanTrader.bot trade` as its own OS process. Each bot "
+            "still gets its own VulcanTraderBot instance, its own embedded WebPortal on "
+            "its own port, and its own isolated trade ledger/lock file (see "
+            "persistence/base.py's PersistenceContext, contextvar-scoped per bot precisely "
+            "so this is safe) - only the OS-process boundary is gone, trading N processes' "
+            "worth of interpreter/import overhead for shared memory. Default false (spawn "
+            "subprocesses, the original behavior) when unset.",
+            "type": "boolean",
+        },
         "auto_start_data_server": {
             "description": "Shared, fleet-wide default (set in user_data/configs_system/"
             "system.json, like api_server/discord/telegram) for whether a bot with no "

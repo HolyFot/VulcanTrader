@@ -81,7 +81,7 @@ class _CustomData(ModelBase):
         cls, key: str | None = None, trade_id: int | None = None
     ) -> Sequence["_CustomData"]:
         result: list[_CustomData] = []
-        for cd in cls._instances:
+        for cd in cls._instances():
             if trade_id is not None and cd.ft_trade_id != trade_id:
                 continue
             if key is not None and cd.cd_key.casefold() != key.casefold():
@@ -118,7 +118,7 @@ class CustomDataWrapper:
 
     @staticmethod
     def delete_custom_data(trade_id: int) -> None:
-        to_remove = [cd for cd in _CustomData._instances if cd.ft_trade_id == trade_id]
+        to_remove = [cd for cd in _CustomData._instances() if cd.ft_trade_id == trade_id]
         for cd in to_remove:
             _CustomData._delete_instance(cd)
         if to_remove:
@@ -127,7 +127,7 @@ class CustomDataWrapper:
     @staticmethod
     def get_custom_data(*, trade_id: int, key: str | None = None) -> list[_CustomData]:
         if CustomDataWrapper.use_db:
-            filtered = [cd for cd in _CustomData._instances if cd.ft_trade_id == trade_id]
+            filtered = [cd for cd in _CustomData._instances() if cd.ft_trade_id == trade_id]
             if key is not None:
                 filtered = [cd for cd in filtered if cd.cd_key.casefold() == key.casefold()]
         else:

@@ -7,6 +7,11 @@ Comprehensive codebase guide for AI coding assistants. Read this before editing 
 ## Repository layout
 
 ```
+main.py                     ← Thin root-level entry point: `python main.py` == `python -m
+                               VulcanTrader.bot webserver` (see "single_process_mode" below)
+tests/                       ← stdlib unittest suite (no pytest) - persistence isolation +
+                               in-process launcher mechanics, see "Testing" below
+
 VulcanTrader/               ← Python package root
   bot.py                    ← CLI entry-point (all subcommands)
   trader_bot.py             ← Live / dry-run trading engine
@@ -62,14 +67,16 @@ static/                     ← Static assets (JS, CSS)
 
 ## bot.py — CLI orchestrator
 
-**Entry-point:** `python -m VulcanTrader.bot <subcommand>`
+**Entry-point:** `python -m VulcanTrader.bot <subcommand>`. Root-level
+`main.py` is a thin alias for `python -m VulcanTrader.bot webserver` — see
+"single_process_mode" under "Multi-bot fleet control" below.
 
 ### Subcommands
 
 | Subcommand | Handler | Purpose |
 |---|---|---|
 | `trade` | `cmd_trade()` | Launch live / dry-run bot |
-| `autostart` | `cmd_autostart()` | Scan `user_data/configs/*.json` for `auto_start: true`, launch each as its own detached `trade` subprocess (thin wrapper around `_launch_autostart_configs()`) |
+| `autostart` | `cmd_autostart()` | Scan `user_data/configs/*.json` for `auto_start: true`, launch each - as its own detached `trade` subprocess, or as a thread in THIS process if `single_process_mode` is set (thin wrapper around `_launch_autostart_configs()`) |
 | `backtest` | `cmd_backtest()` | Run one or many strategy backtests (async fan-out) |
 | `download-data` | `cmd_download_data()` | Fetch OHLCV history |
 | `webserver` | `cmd_webserver()` | Web portal + Discord bot; also calls `_launch_autostart_configs()` itself on startup (opt out with `--no-autostart`) - see "Multi-bot fleet control" |
@@ -131,6 +138,19 @@ while not stop_event.is_set():
 
 bot.cleanup()
 ```
+
+Everything from the stop-file/forceexit-file watcher setup through this final
+`bot.cleanup()` lives in one shared function, `bot.py::run_bot_lifecycle(config,
+stop_event, *, no_web=False)` — `cmd_trade()` is now a thin wrapper that
+resolves `config` from argparse, installs signal handlers (SIGINT/SIGTERM,
+Windows console-close) around its own `stop_event`, and calls it. This is the
+same function `launch_bot_in_process()` runs as a daemon thread when
+`single_process_mode` is set — see "single_process_mode" under "Multi-bot
+fleet control" below. Signal/console-handler installation deliberately stayed
+in `cmd_trade()` rather than moving into `run_bot_lifecycle()`: `signal.signal()`
+only works on the main thread, and under `single_process_mode` several bots'
+worth of this function run as background threads in one process, so only the
+process's own top-level entry point may touch OS signal handlers.
 
 Cross-process force-exit works the same way: `<db>.json.forceexit` (a JSON list
 of pair strings), polled every ~2s, drained into `_pending_force_exit_pairs` →
@@ -500,7 +520,7 @@ keeps its own trade accounting — `Order.close_bt_order`'s
 
 1. **Notification sink** — `send_msg(msg)` buffers up to 500 `RPCMessageType`-keyed dicts in a `deque`.
 2. **Read-only REST API** — exposes live bot state, trades, wallet, pairlist, strategy metadata, analyzed candles, and backtest result files.
-3. **Multi-bot account scan** — `_scan_live_bots()` reads every `user_data/accounts/*.json`, probes each one's `.lock` file to tell "running" from "crashed" from "stopped", and lets this portal show/control bots it isn't attached to in-process.
+3. **Multi-bot account scan** — `_scan_live_bots()` reads every `user_data/accounts/*.json` and, for each, checks `bot.py::in_process_bot_running()` first (this process's own `single_process_mode` registry) and only falls back to probing the `.lock` file when that returns `None` (not one of this process's own bots) — see "single_process_mode" below for why the fallback alone isn't reliable for a bot hosted in THIS process. Tells "running" from "crashed" from "stopped" either way, and lets this portal show/control bots it isn't attached to in-process.
 4. **Config manager** — CRUD + start/stop over `user_data/configs/*.json`, each treated as one bot definition (see "Multi-bot fleet control" below).
 5. **Static asset host** — serves `template/` HTML files and `static/` assets.
 
@@ -521,14 +541,14 @@ keeps its own trade accounting — `Order.close_bt_order`'s
 | `GET` | `/api/pair/candles?pair=&tf=&n=` | Analyzed dataframe for a pair |
 | `GET` | `/api/pair/trades?pair=` | Per-pair trade history |
 | `GET` | `/api/livebots` | Scan `user_data/accounts/*.json` — every detected bot + running/crashed state |
-| `POST` | `/api/livebots/{name}/stop` | Graceful cross-process stop (writes `<db>.json.stop`) |
+| `POST` | `/api/livebots/{name}/stop` | Graceful stop - `stop_in_process_bot()` (instant, sets that bot's `stop_event` directly) if it's hosted in THIS process under `single_process_mode`, else the cross-process stop-file (`<db>.json.stop`) |
 | `POST` | `/api/livebots/{name}/forceexit?pair=` | Cross-process force-exit (writes `<db>.json.forceexit`) |
 | `GET` | `/api/dashboard?bot=<name>` | Full dashboard payload for another account's bot |
 | `GET` | `/api/configs` | List configs with `is_bot` not explicitly false, each with `strategy`/`auto_start`/`dry_run`/`running`/`crashed` |
 | `GET`/`PUT` | `/api/configs/{name}/raw` | Read/write a config's raw JSON |
 | `POST` | `/api/configs/{name}/duplicate` \| `/rename` | Copy / rename a config file |
 | `DELETE` | `/api/configs/{name}` | Delete a config (blocked while its bot is running) |
-| `POST` | `/api/configs/{name}/start` \| `/stop` | Launch/stop that config as its own bot process |
+| `POST` | `/api/configs/{name}/start` \| `/stop` | Launch/stop that config - as its own bot process, or as a thread in THIS process under `single_process_mode` (see below) |
 | `GET` | `/api/strategies` | Every `IStrategy` subclass found under `user_data/strategies/` |
 | `GET` | `/api/exchanges` | Every exchange used by a config OR with existing `user_data/data/<exchange>/` contents (`_list_exchanges()`) |
 | `GET` | `/api/data/coverage?exchange=` | Per pair+timeframe+candle_type OHLCV coverage for one exchange - start/end date, candle count, file size (`_data_coverage()`) |
@@ -631,9 +651,11 @@ actually launched.
 
 ### Launching: `util/proc_launch.py::launch_detached()`
 
-The one function every launch call site goes through
-(`cmd_autostart`, `_start_config_bot`, the legacy `api_start`). Given a `cmd`
-list and the specific bot config's dict:
+The function every launch call site goes through
+(`cmd_autostart`, `_start_config_bot`, the legacy `api_start`) **when
+`single_process_mode` is false** (the default) — see below for the
+in-process alternative each of those same call sites branches to otherwise.
+Given a `cmd` list and the specific bot config's dict:
 - Windows: `show_terminal` → `CREATE_NEW_CONSOLE` or plain `Popen`.
 - Linux/macOS: `tmux` → `tmux kill-window -t VulcanTrader:<bot_name>` first
   (clears any stale window from a crashed previous run of *this* bot, so
@@ -641,6 +663,77 @@ list and the specific bot config's dict:
   `new-window`/`new-session -s VulcanTrader -n <bot_name>`. Window name is
   the bot's own `bot_name` (sanitized to tmux-safe characters), not a
   generic label — falls back to plain background if tmux isn't installed.
+
+### `single_process_mode` — run the whole fleet in one process
+
+Fleet-wide flag in `configs_system/system.json` (`config_schema.py`, default
+`false`). Motivated by per-process RAM overhead (see
+[[trader-bot-ram-investigation]] in memory / `_ccxt_lazy.py`) — every
+subprocess-per-bot launch pays its own cold `pandas`/`numpy`/`ccxt` import
+and interpreter startup cost. Measured on a 3-bot fleet: **586 MB across 4
+processes (subprocess mode) vs 186 MB in one process (single_process_mode)**,
+and **10.35s vs 4.36s** aggregate wall-clock to bring all 3 up (first bot in
+each process pays the cold-import tax; every bot after that is nearly free
+within that same process). Trade-off: bots sharing one process compete for
+the same GIL instead of getting genuine OS-level parallelism across cores -
+usually negligible for I/O-bound strategies (mostly waiting on
+exchange/data_server calls), more of a concern for many bots doing heavy
+CPU-bound indicator work simultaneously.
+
+**Every call site that used to unconditionally call `launch_detached()`
+branches on this flag instead**: `bot.py::_launch_autostart_configs()`,
+`web_portal.py::_start_config_bot()`, and the legacy `_stop_config_bot()`/
+`api_start`/`api_stop` pair. When true, each launches
+`bot.py::launch_bot_in_process(spec, user_data_dir, port)` instead of
+spawning a subprocess:
+
+- Builds this config's fully-resolved config dict the same way the `trade`
+  subcommand's CLI args would (config file(s) + `system.json` + the same
+  `db_url`/`port`/`bot_name` overrides `cmd_trade()` applies), then runs
+  `run_bot_lifecycle(config, stop_event)` (see "cmd_trade() pipeline" above -
+  the exact same function subprocess mode uses) as a daemon `threading.Thread`.
+- Registers the thread + its own `stop_event` in a module-level registry
+  (`bot.py::_IN_PROCESS_BOTS`, keyed by account name) so it can be looked up
+  again: `stop_in_process_bot(name)` (instant stop, used by `/api/livebots/
+  {name}/stop`), `in_process_bot_running(name)` (preferred over the lock-file
+  probe for accounts hosted in this process - see "Why not just the lock
+  probe" below), and `stop_all_in_process_bots()` (fan-out, wired into
+  `WebPortal`'s `on_shutdown` callback so Ctrl+C on the fleet-control process
+  also gracefully stops every bot it's hosting, not just its own uvicorn
+  server).
+- Everything downstream of that — persistence file, OS-level writer lock,
+  stop-file/forceexit-file watcher threads, heartbeat, embedded `WebPortal`
+  on its own port — behaves **identically** to the subprocess path; only the
+  OS-process boundary is gone. This is why `/api/livebots/{name}/stop`'s
+  cross-process stop-file mechanism *also* still works unmodified for an
+  in-process bot: its watcher thread is running regardless of which process
+  hosts it.
+
+**Persistence isolation** (why this needed more than a launcher change):
+`persistence/base.py`'s `PersistenceContext` holds one bot's entire
+Trade/Order/PairLock/CustomData/KeyValueStore state, bound via `contextvars`
+(not `threading.local()` - contextvars propagate correctly through FastAPI's
+sync-endpoint threadpool dispatch, thread-locals don't) instead of the
+class-level lists a single-bot-per-process design could get away with. A
+thread that never called `init_db()` - or wasn't started via
+`util/ctx_thread.py::start_thread_with_context()` from one that did - sees
+**no** bot's data at all (raises, doesn't silently leak another bot's). See
+the "persistence/" section below for the full contextvar design.
+
+**Why not just the lock probe (`WebPortal._probe_db_lock`)**: fcntl advisory
+locks on POSIX are scoped per-*process*, not per file-handle - a probe issued
+from the very process that already holds the lock (true whenever the account
+being scanned is hosted in this same `single_process_mode` process) always
+reports "free" there, so the fleet scan needs `in_process_bot_running()`
+checked first. Also: a bot's graceful in-process shutdown does **not**
+release its OS writer-lock fd by itself (fds are process-scoped, not
+thread-scoped - closing a thread doesn't close fds it opened), so
+`persistence/models.py::release_writer_lock()` explicitly closes it,
+called from `run_bot_lifecycle`'s cleanup path right after
+`bot.cleanup()`/`portal.cleanup()`. Skipping this left a cleanly-stopped
+bot's account permanently reporting `running: true` for the rest of the
+process's life even though its own `is_running` KV flag correctly read 0 -
+found live, not by a unit test.
 
 ### Discord: multi-bot `!` prefix commands (`util/discord_bot.py`)
 
@@ -682,26 +775,94 @@ message text; without it the client logs in but never sees a `!command`.
 
 ## persistence/
 
-**No SQLAlchemy.** All state is in-memory Python lists serialised to a single JSON file.
+**No SQLAlchemy.** All state is Python objects serialised to a single JSON
+file, held in a `contextvars`-scoped `PersistenceContext` — **not**
+class-level lists (that was the design before `single_process_mode`; several
+bots sharing one interpreter would otherwise all read/write the same global
+`Trade`/`Order`/... lists and corrupt each other's ledgers, exactly the
+`LocalTrade.bt_trades*` process-global problem `backtesting.py` already
+avoids by requiring separate worker processes per concurrent run - see
+`bot.py::_backtest_worker`'s docstring for that precedent).
+
+### `PersistenceContext` (`base.py`)
+
+One bot's entire store: `_instances`/`_next_id` dicts keyed by model class,
+`active_path`, `writer_lock_fd`/`writer_lock_path`, `save_callback`, its own
+`save_lock`. Bound to the module-level `_current_db: ContextVar
+[PersistenceContext | None]`. `ModelBase._instances()`/`_add_instance()`/
+`_delete_instance()`/`_reset_instances()` all resolve the ambient context via
+`_ctx()` (raises `RuntimeError: No persistence context bound` if none is
+bound on the calling thread/task - loud failure instead of silently reading
+another bot's data or nothing).
+
+**Isolation mechanic**: a plain `threading.Thread` starts with a *blank*
+contextvars context by design - that blankness IS what keeps two bots'
+threads from seeing each other's `PersistenceContext`, since neither one's
+`init_db()`-bound context propagates to a new OS thread automatically. Any
+thread spawned *on behalf of* an already-initialised bot (its own embedded
+`WebPortal` server thread, its stop-file/forceexit-file watcher threads) must
+instead go through `util/ctx_thread.py::start_thread_with_context(target,
+...)`, called from the bot's own already-bound thread, which does
+`contextvars.copy_context()` and runs `target` inside it. `asyncio.to_thread`
+/ FastAPI's sync-endpoint threadpool dispatch already copy the ambient
+context automatically (stdlib guarantee) - confirmed live: a bot's embedded
+dashboard's `/api/trades/open` etc. resolve correctly with zero extra wiring.
 
 ### init_db(db_url)
 
 - Accepts `json:///path/to/file.json` or legacy `sqlite:///` (rewritten to `.json`).
-- Loads existing JSON into class-level lists on `Trade`, `Order`, `PairLock`, `_CustomData`, `_KeyValueStoreModel`.
-- Registers an atomic save callback: every `Trade.commit()` rewrites the file via temp-file + `os.replace`.
+- Re-initialising the **same path from the same context** (tests,
+  `RELOAD_CONFIG`) reuses the already-held writer lock and context identity;
+  re-initialising a **different** path, or the same path from a **different**
+  context, creates a fresh `PersistenceContext` and acquires a new OS-level
+  writer lock (`_acquire_writer_lock` - `msvcrt.locking` on Windows,
+  `fcntl.flock` elsewhere) on a sibling `<name>.lock` file, refusing outright
+  (`OperationalException`) if another writer already holds it.
+- Loads existing JSON into that context's `_instances`, keyed by class -
+  `Trade`, `Order`, `PairLock`, `_CustomData`, `_KeyValueStoreModel`. A
+  malformed file is backed up to `<name>.corrupt-<timestamp>` and the context
+  starts empty rather than crashing or silently overwriting it.
+- Binds `ctx.save_callback = functools.partial(_save_snapshot, ctx)` — every
+  `Trade.session.commit()` (really `_FakeSession.commit()`, resolving the
+  *ambient* context) invokes that same bound `ctx`'s callback, so the
+  snapshot writer always sees the same context it committed against, by
+  construction (see `_save_snapshot`'s docstring).
+- `release_writer_lock()` (called from `bot.py::run_bot_lifecycle`'s cleanup
+  path) explicitly closes the ambient context's writer-lock fd and clears its
+  `save_callback`. Needed under `single_process_mode` specifically: a
+  subprocess-per-bot's OS-level exit releases every fd it holds for free, but
+  one bot's thread exiting inside a still-alive shared process does not (fds
+  are process-scoped, not thread-scoped) - see "single_process_mode" above.
+
+### Atomic writes (`_save_snapshot`)
+
+write-to-per-PID-tmp-file → flush → `fsync` → read-back-and-verify-parses →
+`os.replace(tmp, active_path)` (via `_replace_with_retry`). The verify step
+means a bad snapshot (serialization bug, disk fault, mid-write crash) can
+never become the live file - the previous good snapshot survives untouched,
+and any failure is logged, not raised (a bad commit shouldn't crash the trade
+loop). `_replace_with_retry` retries `os.replace()` itself with capped
+exponential backoff (up to 25 attempts, ~a few seconds worst case) because
+Windows refuses to replace a file another handle currently has open for
+reading (no `FILE_SHARE_DELETE`) - and a concurrent reader of THIS exact file
+is real and reachable: `web_portal.py`'s account scan (behind `/api/livebots`)
+reads every account JSON directly off disk, including an in-process bot's own
+file while that bot is mid-commit. Found via a deliberately adversarial
+concurrent read/write stress test, not the live 2-bot smoke test (dashboard
+polling alone was too infrequent to reliably hit the window).
 
 ### Key classes
 
 | Class | Module | Purpose |
 |---|---|---|
-| `Trade` | `trade_model.py` | Open/closed trade record; all query methods are class methods on the in-memory list |
+| `Trade` | `trade_model.py` | Open/closed trade record; query methods resolve the ambient context's instance list |
 | `Order` | `trade_model.py` | CCXT order mirror; one-to-many with `Trade` |
-| `LocalTrade` | `trade_model.py` | Backtesting-only in-memory trade (no persistence) |
+| `LocalTrade` | `trade_model.py` | Backtesting-only in-memory trade (process-global by design - see `bot.py::_backtest_worker`, unrelated to `PersistenceContext`) |
 | `PairLock` | `pairlock.py` | Time-bounded trading locks per pair or global |
 | `CustomDataWrapper` | `custom_data.py` | Strategy-scoped key/value blob storage |
 | `KeyValueStore` | `key_value_store.py` | Bot-scoped persistent key/value store |
-| — | `base.py` | Shared base class / helpers for persistence models |
-| — | `models.py` | Data-class definitions for serialised models |
+| `PersistenceContext` | `base.py` | Per-bot contextvar-bound store - see above |
+| — | `models.py` | `init_db`/snapshot save-load, writer-lock, `_replace_with_retry` |
 | — | `pairlock_middleware.py` | Middleware helpers for PairLock queries |
 | — | `usedb_context.py` | Context manager for enabling/disabling persistence |
 
@@ -865,6 +1026,7 @@ Merges (in order):
 | `auto_start` | bool | See "Multi-bot fleet control" |
 | `show_terminal` | bool | See "Multi-bot fleet control" |
 | `tmux` | bool | See "Multi-bot fleet control" |
+| `single_process_mode` | bool | Fleet-wide, `configs_system/system.json` only (default false) — see "single_process_mode" under "Multi-bot fleet control" |
 | `pairlists` | list[dict] | Ordered pairlist handler configs |
 | `protections` | list[dict] | Protection handler configs |
 
@@ -878,7 +1040,8 @@ Merges (in order):
 | `protectionmanager.py` | `ProtectionManager` | Evaluates cool-down / drawdown protections |
 | `discord_bot.py` | `DiscordBot` | Multi-bot `!`-prefix command interface (runs in daemon thread) — see "Multi-bot fleet control" |
 | `discord_logger.py` | `log`, `log_startup`, `log_trade_chart`, … | Fire-and-forget webhook poster, tags messages `[bot_name]` |
-| `proc_launch.py` | `launch_detached` | Spawns a `trader_bot.py` subprocess honouring that config's `show_terminal`/`tmux` — see "Multi-bot fleet control" |
+| `proc_launch.py` | `launch_detached` | Spawns a `trader_bot.py` subprocess honouring that config's `show_terminal`/`tmux` — the `single_process_mode: false` path, see "Multi-bot fleet control" |
+| `ctx_thread.py` | `start_thread_with_context` | Spawns a thread that inherits the caller's `contextvars` context — required for any thread spawned on behalf of an already-`init_db()`'d bot under `single_process_mode`, see "persistence/" |
 | `trade_chart.py` | `render_trade_chart` | Matplotlib PNG chart for Discord |
 | `optimize_reports.py` | `generate_backtest_stats`, `store_backtest_results` | Backtest stats aggregation + JSON write |
 | `bt_progress.py` | `BTProgress` | Rich progress bar for backtest |
@@ -951,7 +1114,31 @@ Never call `Trade.session.add()` / `Trade.commit()` from background threads with
 |---|---|
 | `run-live.bat` / `run-live.sh` | Live trading (real orders) |
 | `run-paper.bat` / `run-paper.sh` | Dry-run paper trading |
-| `run-app.bat` / `run-app.sh` | Web portal standalone |
+| `run-app.bat` / `run-app.sh` | Web portal standalone (`python -m VulcanTrader.bot webserver`) |
+| `main.py` | Same as `run-app`'s underlying command, run directly: `python main.py [--port ...]`. Whether the fleet it starts spawns subprocesses or runs everything in this one process is controlled by `single_process_mode` in `configs_system/system.json`, not by which of these you use. |
 | `install.bat` / `install.sh` | Create `.venv` and install deps |
 
 Environment variables `CONFIG`, `STRATEGY`, `DB_URL` override defaults in all run scripts.
+
+---
+
+## Testing
+
+`tests/` — stdlib `unittest`, no pytest in the venv (don't add it as a
+dependency without checking first). Run everything:
+
+```
+python -m unittest discover -s tests -v
+```
+
+| File | Covers |
+|---|---|
+| `test_persistence_single_process.py` | `PersistenceContext` isolation across concurrent threads, `start_thread_with_context` propagation, same-path/same-thread reinit reuse, second-writer rejection, `release_writer_lock()` regression |
+| `test_persistence_integrity.py` | All five model types isolated (not just `Trade`) across many bots, save→reload round-trip fidelity (incl. two bots "restarting" concurrently), a real bot's own trade-loop-writes/dashboard-reads concurrency pattern under load, atomic-write crash-safety (failed snapshot leaves the live file untouched, no stray tmp file), corrupt-file recovery isolation between bots, `_replace_with_retry`'s Windows sharing-violation retry |
+| `test_bot_single_process_launcher.py` | `launch_bot_in_process`/`stop_in_process_bot`/`in_process_bot_running`/`stop_all_in_process_bots` registry mechanics — mocks out `run_bot_lifecycle` itself so these run fast and offline, no exchange/network needed |
+
+None of this replaces a live check when touching `single_process_mode` or
+`persistence/`: run `main.py` (or `webserver` with `single_process_mode:
+true`) against two real dry-run configs and confirm via `/api/livebots` +
+each bot's own `/api/dashboard` that they stay isolated, both before and
+after a stop.

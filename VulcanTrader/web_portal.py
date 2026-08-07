@@ -81,6 +81,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -343,10 +344,16 @@ class WebPortal:
 
     MAX_MESSAGES = 500
 
-    def __init__(self, bot: Any | None = None) -> None:
+    def __init__(self, bot: Any | None = None, *, on_shutdown: Callable[[], None] | None = None) -> None:
         self.bot = bot
         self.config: dict = getattr(bot, "config", {}) if bot else {}
         api_cfg = self.config.get("api_server", {}) if isinstance(self.config, dict) else {}
+        # Called from the blocking-mode Ctrl+C handler (see start()) before
+        # the uvicorn server itself starts shutting down - lets a caller
+        # hosting bots in-process (single_process_mode, see bot.py's
+        # stop_all_in_process_bots) stop them too. A plain SIGINT would
+        # otherwise only know to stop this portal's own server.
+        self._on_shutdown = on_shutdown
 
         self._password: str = api_cfg.get("password", "VulcanTrader")
         self._token: str = secrets.token_urlsafe(32)
@@ -372,6 +379,10 @@ class WebPortal:
         # Subprocess bot launched from webserver mode via /api/start
         self._bot_process: subprocess.Popen | None = None
         self._bot_config_name: str | None = None
+        # single_process_mode counterpart of the above - set instead of
+        # _bot_process when /api/start launches the bot in-process (see
+        # bot.py's launch_bot_in_process).
+        self._bot_account_name: str | None = None
 
         # CPU%/RAM per running bot (Configs table) - psutil.Process objects
         # cached by PID so cpu_percent() gets a real delta between calls
@@ -528,12 +539,25 @@ class WebPortal:
                         "\n[VulcanTrader] Shutting down… (Ctrl+C again to force)",
                         flush=True,
                     )
+                    if self._on_shutdown is not None:
+                        # Best-effort: e.g. bot.py's stop_all_in_process_bots -
+                        # sets every in-process bot's stop_event so its own
+                        # thread runs its normal cleanup path. Non-blocking:
+                        # this just signals, it doesn't wait for them.
+                        try:
+                            self._on_shutdown()
+                        except Exception:
+                            logger.exception("on_shutdown callback failed")
                     if self._server is not None:
                         # force_exit skips waiting for open connections (SSE, keep-alive)
                         # to drain — without it uvicorn blocks until the browser disconnects.
                         self._server.should_exit = True
                         self._server.force_exit = True
                     # Hard-exit backstop in case asyncio cleanup itself stalls.
+                    # Bumped when on_shutdown is set: real bot cleanup (closing
+                    # exchange connections, a final persistence flush) races
+                    # this timer, so give it a bit more room than the plain
+                    # portal-only shutdown needs.
                     def _force() -> None:
                         print(
                             "\n[VulcanTrader] Shutdown timed out — forcing exit.",
@@ -541,7 +565,8 @@ class WebPortal:
                         )
                         _os._exit(0)
 
-                    t = threading.Timer(3.0, _force)
+                    watchdog_s = 5.0 if self._on_shutdown is not None else 3.0
+                    t = threading.Timer(watchdog_s, _force)
                     t.daemon = True
                     t.start()
                     _watchdog[0] = t
@@ -565,12 +590,19 @@ class WebPortal:
             return
 
         self._server = uvicorn.Server(cfg)
-        self._server_thread = threading.Thread(
-            target=self._server.run,
+        # start_thread_with_context (not a plain threading.Thread): this
+        # server thread must see whatever persistence context (see
+        # persistence/base.py) is ambient on the calling thread - the
+        # attached bot's own, if any - so its REST handlers (including ones
+        # FastAPI dispatches to its own sync-endpoint threadpool, which
+        # AnyIO propagates contextvars into) read that bot's trade data and
+        # not another bot's sharing the same process (single_process_mode).
+        from VulcanTrader.util.ctx_thread import start_thread_with_context
+        self._server_thread = start_thread_with_context(
+            self._server.run,
             name="WebPortalServer",
             daemon=True,
         )
-        self._server_thread.start()
         url = f"http://{self._host}:{self._port}"
         banner = (
             "\n"
@@ -732,11 +764,25 @@ class WebPortal:
         @app.post("/api/start", dependencies=[Depends(auth)])
         def api_start(req: StartBotRequest = Body(default_factory=StartBotRequest)) -> dict:
             if self.bot is None or not hasattr(self.bot, "process"):
-                # Webserver mode: launch the bot as a subprocess
+                # Webserver mode: launch the bot as a subprocess (or, under
+                # single_process_mode, as a thread in this process - see
+                # bot.py's launch_bot_in_process).
                 if self._bot_process is not None and self._bot_process.poll() is None:
-                    return {"state": "RUNNING"}  # already running
+                    return {"state": "RUNNING"}  # already running (subprocess mode)
                 if not req.config or not req.strategy:
                     raise HTTPException(status_code=400, detail="Select a config and strategy before starting the bot.")
+                if self.config.get("single_process_mode"):
+                    from VulcanTrader.bot import launch_bot_in_process, in_process_bot_running
+                    account_name = f"{req.config}_{'dry_run' if req.dry_run else 'live'}"
+                    if in_process_bot_running(account_name):
+                        return {"state": "RUNNING"}  # already running (in-process)
+                    spec = {
+                        "config_name": req.config, "strategy": req.strategy,
+                        "dry_run": bool(req.dry_run), "bot_name": req.strategy,
+                    }
+                    launch_bot_in_process(spec, self._user_data_dir(), no_web=True)
+                    self._bot_account_name = account_name
+                    return {"state": "RUNNING"}
                 import sys
                 from VulcanTrader.util.proc_launch import launch_detached
                 cmd = [
@@ -767,6 +813,12 @@ class WebPortal:
         @app.post("/api/stop", dependencies=[Depends(auth)])
         def api_stop() -> dict:
             if self.bot is None or not hasattr(self.bot, "process"):
+                if self._bot_account_name is not None:
+                    from VulcanTrader.bot import stop_in_process_bot
+                    stop_in_process_bot(self._bot_account_name)
+                    logger.info("In-process bot %s stop requested via web portal.", self._bot_account_name)
+                    self._bot_account_name = None
+                    return {"state": "STOPPED"}
                 # Webserver mode: terminate the subprocess bot
                 proc = self._bot_process
                 if proc is not None and proc.poll() is None:
@@ -1204,7 +1256,19 @@ class WebPortal:
         hb_age = (now - heartbeat).total_seconds() if heartbeat else None
         bot_name = (kv.get("bot_name") or {}).get("string_value")
 
-        lock_held = self._probe_db_lock(path)
+        # Prefer the in-process registry (single_process_mode) over the
+        # lock-file probe when this process itself launched the account:
+        # fcntl advisory locks are scoped per-PROCESS on POSIX, not per-
+        # file-handle, so a probe issued from the very process that already
+        # holds the lock always reports "free" there - see
+        # bot.py's in_process_bot_running docstring.
+        in_proc: bool | None = None
+        try:
+            from VulcanTrader.bot import in_process_bot_running
+            in_proc = in_process_bot_running(path.stem)
+        except ImportError:
+            pass
+        lock_held = in_proc if in_proc is not None else self._probe_db_lock(path)
         if lock_held is None:
             running = kv_running and hb_age is not None and hb_age < self.HEARTBEAT_STALE_SECS
         else:
@@ -1280,6 +1344,21 @@ class WebPortal:
                 raise
             except Exception:
                 pass
+        # Instant path for a bot this process is itself hosting in-process
+        # (single_process_mode, see bot.py's launch_bot_in_process) - no
+        # need for the ~2s stop-file poll below when we can set its
+        # stop_event directly.
+        try:
+            from VulcanTrader.bot import stop_in_process_bot
+            if stop_in_process_bot(name):
+                logger.info("Stop requested for in-process bot account %s", name)
+                return {
+                    "requested": True,
+                    "detail": "Stop requested — this bot runs in-process and will "
+                              "exit within one cycle.",
+                }
+        except ImportError:
+            pass
         stop_file = path.with_name(path.name + ".stop")
         try:
             stop_file.touch()
@@ -2390,6 +2469,25 @@ class WebPortal:
         db_url = f"json:///user_data/accounts/{account_name}.json"
         bot_name = raw.get("bot_name") or strategy
         port = self._find_free_port(8080)
+
+        if self.config.get("single_process_mode"):
+            from VulcanTrader.bot import launch_bot_in_process
+            spec = {
+                "config_name": name, "strategy": strategy,
+                "dry_run": dry_run, "bot_name": bot_name,
+            }
+            try:
+                launch_bot_in_process(spec, self._user_data_dir(), port)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Could not launch bot: {exc}") from exc
+            logger.info(
+                "Launched config %s in-process (strategy=%s, port=%d, db=%s)",
+                name, strategy, port, db_url,
+            )
+            return {
+                "started": True, "config": name, "strategy": strategy,
+                "port": port, "db_url": db_url, "account_name": account_name,
+            }
 
         cmd = [
             sys.executable, "-m", "VulcanTrader.bot", "trade",

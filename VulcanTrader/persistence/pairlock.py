@@ -79,7 +79,7 @@ class PairLock(ModelBase):
     ) -> list["PairLock"]:
         """Return all currently active locks matching the filters."""
         result: list[PairLock] = []
-        for lock in PairLock._instances:
+        for lock in PairLock._instances():
             if not lock.active:
                 continue
             if lock.lock_end_time is None or lock.lock_end_time <= now:
@@ -97,7 +97,7 @@ class PairLock(ModelBase):
 
     @staticmethod
     def get_all_locks() -> list["PairLock"]:
-        return list(PairLock._instances)  # type: ignore[arg-type]
+        return list(PairLock._instances())  # type: ignore[arg-type]
 
     def to_json(self) -> dict[str, Any]:
         return {

@@ -431,11 +431,11 @@ class Order(ModelBase):
 
     @staticmethod
     def get_open_orders() -> Sequence["Order"]:
-        return [o for o in Order._instances if o.ft_is_open]  # type: ignore[arg-type]
+        return [o for o in Order._instances() if o.ft_is_open]  # type: ignore[arg-type]
 
     @staticmethod
     def order_by_id(order_id: str) -> Optional["Order"]:
-        for o in Order._instances:
+        for o in Order._instances():
             if o.order_id == order_id:
                 return o  # type: ignore[return-value]
         return None
@@ -1267,7 +1267,7 @@ class LocalTrade:
     @staticmethod
     def get_open_trade_count() -> int:
         if Trade.use_db:
-            return sum(1 for t in Trade._instances if t.is_open)
+            return sum(1 for t in Trade._instances() if t.is_open)
         return LocalTrade.bt_open_open_trade_count
 
     @staticmethod
@@ -1536,7 +1536,7 @@ class Trade(ModelBase, LocalTrade):
         close_date: datetime | None = None,
     ) -> list["LocalTrade"]:
         if Trade.use_db:
-            trades = list(Trade._instances)  # type: ignore[arg-type]
+            trades = list(Trade._instances())  # type: ignore[arg-type]
             if pair:
                 trades = [t for t in trades if t.pair == pair]
             if open_date:
@@ -1567,14 +1567,14 @@ class Trade(ModelBase, LocalTrade):
         """
         if not Trade.use_db:
             raise NotImplementedError("`Trade.get_trades()` not supported in backtesting mode.")
-        trades = _apply_filters(list(Trade._instances), trade_filter)  # type: ignore[arg-type]
+        trades = _apply_filters(list(Trade._instances()), trade_filter)  # type: ignore[arg-type]
         return _ResultProxy(trades)
 
     @staticmethod
     def get_open_trades_without_assigned_fees() -> list["Trade"]:
         return [
             t
-            for t in Trade._instances
+            for t in Trade._instances()
             if t.fee_open_currency is None and t.is_open is True and t.orders
         ]  # type: ignore[return-value]
 
@@ -1582,7 +1582,7 @@ class Trade(ModelBase, LocalTrade):
     def get_closed_trades_without_assigned_fees() -> list["Trade"]:
         return [
             t
-            for t in Trade._instances
+            for t in Trade._instances()
             if t.fee_close_currency is None and t.is_open is False and t.orders
         ]  # type: ignore[return-value]
 
@@ -1591,7 +1591,7 @@ class Trade(ModelBase, LocalTrade):
         if Trade.use_db:
             return sum(
                 (t.close_profit_abs or 0)
-                for t in Trade._instances
+                for t in Trade._instances()
                 if t.is_open is False
             )
         return sum(
@@ -1602,7 +1602,7 @@ class Trade(ModelBase, LocalTrade):
     @staticmethod
     def total_open_trades_stakes() -> float:
         if Trade.use_db:
-            return sum(t.stake_amount for t in Trade._instances if t.is_open is True) or 0
+            return sum(t.stake_amount for t in Trade._instances() if t.is_open is True) or 0
         return sum(t.stake_amount for t in LocalTrade.get_trades_proxy(is_open=True)) or 0
 
     # ----- aggregations / performance --------------------------------------
@@ -1611,7 +1611,7 @@ class Trade(ModelBase, LocalTrade):
     def _generic_pair_costs(filters: list[Callable[["Trade"], bool]]) -> dict[int, float]:
         """Return ``{trade_id: total_buy_cost_per_leverage_unit}``."""
         costs: dict[int, float] = {}
-        for t in Trade._instances:
+        for t in Trade._instances():
             if not all(f(t) for f in filters):
                 continue
             entry_side = "sell" if t.is_short else "buy"
@@ -1641,7 +1641,7 @@ class Trade(ModelBase, LocalTrade):
         groups: dict[Any, dict[str, float]] = defaultdict(
             lambda: {"profit_sum_abs": 0.0, "count": 0, "cost": 0.0}
         )
-        for t in Trade._instances:
+        for t in Trade._instances():
             if not all(f(t) for f in filters):
                 continue
             key = key_fn(t)
@@ -1715,7 +1715,7 @@ class Trade(ModelBase, LocalTrade):
         if pair is not None:
             filters.append(lambda t: t.pair == pair)
         resp: list[dict] = []
-        for t in Trade._instances:
+        for t in Trade._instances():
             if not all(f(t) for f in filters):
                 continue
             enter_tag = t.enter_tag if t.enter_tag is not None else "Other"
@@ -1768,7 +1768,7 @@ class Trade(ModelBase, LocalTrade):
                     if callable(f):
                         filters.append(f)
         total = 0.0
-        for t in Trade._instances:
+        for t in Trade._instances():
             if not all(f(t) for f in filters):
                 continue
             for o in t.orders:

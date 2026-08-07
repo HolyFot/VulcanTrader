@@ -96,7 +96,7 @@ class _KeyValueStoreModel(ModelBase):
 
     @staticmethod
     def _find(key: str) -> "_KeyValueStoreModel | None":
-        for kv in _KeyValueStoreModel._instances:
+        for kv in _KeyValueStoreModel._instances():
             if kv.key == key:
                 return kv  # type: ignore[return-value]
         return None
@@ -198,7 +198,7 @@ def set_startup_time() -> None:
         from VulcanTrader.persistence import Trade
 
         trades = sorted(
-            [t for t in Trade._instances if getattr(t, "open_date", None) is not None],
+            [t for t in Trade._instances() if getattr(t, "open_date", None) is not None],
             key=lambda t: t.open_date,
         )
         if trades:

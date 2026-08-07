@@ -1,4 +1,5 @@
 {
+    "single_process_mode": true,
     "auto_start_data_server": true,
     "data_server_ip": "127.0.0.1",
     "data_server_port": 8720,

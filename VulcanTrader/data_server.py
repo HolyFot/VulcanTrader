@@ -294,6 +294,12 @@ class DataCollector:
         self.reload_cooldown = reload_cooldown
         self._consecutive_failures = 0
         self._last_reload_attempt = 0.0
+        # Grows (capped) on each reload attempt that doesn't restore a
+        # successful fetch, so a prolonged outage backs off instead of
+        # reconnecting every `reload_cooldown` seconds forever - see
+        # collect_once()'s use of it. Reset to reload_cooldown the moment any
+        # pair fetch succeeds again.
+        self._reload_backoff_s = reload_cooldown
 
         self.max_pairs_per_batch = max_pairs_per_batch
         # Adaptively-ramped current batch size (see _record_batch_outcome) -
@@ -657,25 +663,69 @@ class DataCollector:
             exchange_logger.addHandler(rate_limit_cap)
             try:
                 results = self.exchange.refresh_latest_ohlcv(batch_pairlist)
-                self._consecutive_failures = 0
             except Exception:
-                self._consecutive_failures += 1
-                logger.exception(
-                    "refresh_latest_ohlcv failed (%d/%d consecutive failures)",
-                    self._consecutive_failures,
-                    self.max_consecutive_failures,
-                )
+                logger.exception("refresh_latest_ohlcv failed")
                 results = {}
-                if self._consecutive_failures >= self.max_consecutive_failures:
-                    now = time.time()
-                    if now - self._last_reload_attempt >= self.reload_cooldown:
-                        self._last_reload_attempt = now
-                        self._reload_exchange()
             finally:
                 exchange_logger.removeHandler(rate_limit_cap)
 
         if batch_pairlist:
             self._record_batch_outcome(rate_limited=rate_limit_cap.hit)
+
+            if results:
+                # At least one pair came back - the exchange is clearly
+                # reachable, regardless of how many others in this batch
+                # failed.
+                if self._consecutive_failures:
+                    logger.info(
+                        "Exchange connectivity restored after %d consecutive "
+                        "failed OHLCV tick(s).", self._consecutive_failures,
+                    )
+                self._consecutive_failures = 0
+                self._reload_backoff_s = self.reload_cooldown
+            elif rate_limit_cap.hit:
+                # Fully rate-limited, not a connectivity problem - the
+                # adaptive ramp above already backs off the batch size for
+                # this. Reloading the exchange connection wouldn't fix a
+                # 429, so don't count this toward
+                # max_consecutive_failures/trigger a reload for it.
+                pass
+            else:
+                # refresh_latest_ohlcv() returned cleanly (no exception - it
+                # never raises for per-pair failures, see
+                # _RateLimitLogCapture's own docstring) but genuinely
+                # produced NOTHING for any pair in the batch, and it wasn't
+                # rate-limiting. That combination means the exchange - or our
+                # own internet connection - is unreachable right now, not
+                # just busy. Previously this reset _consecutive_failures to 0
+                # unconditionally (any non-exception return counted as a
+                # "success"), so a real outage never tripped the
+                # reload/backoff logic below and silently produced empty
+                # batches forever at full polling cadence.
+                self._consecutive_failures += 1
+                logger.warning(
+                    "OHLCV fetch returned no data for any of %d due pair(s) this "
+                    "tick (%d/%d consecutive failures) - exchange may be "
+                    "unreachable",
+                    len({pk[0] for pk in batch_pairlist}),
+                    self._consecutive_failures,
+                    self.max_consecutive_failures,
+                )
+                if self._consecutive_failures >= self.max_consecutive_failures:
+                    now = time.time()
+                    if now - self._last_reload_attempt >= self._reload_backoff_s:
+                        self._last_reload_attempt = now
+                        self._reload_exchange()
+                        # Back off further (capped) for next time if the
+                        # exchange is still unreachable after this reload -
+                        # avoids hammering reconnect attempts every
+                        # reload_cooldown seconds through a prolonged outage,
+                        # while still trying regularly rather than giving up.
+                        # Reset to the base cooldown above the moment a fetch
+                        # succeeds again.
+                        self._reload_backoff_s = min(
+                            self._reload_backoff_s * 2, _EXCHANGE_RELOAD_BACKOFF_CAP_S
+                        )
 
         t_fetch = time.time() - _t_phase
         _t_phase = time.time()
@@ -954,7 +1004,13 @@ class DataCollector:
             logger.exception("Error closing the stale exchange instance (continuing anyway)")
         try:
             self.exchange = ExchangeResolver.load_exchange(self.config, validate=False)
-            self._consecutive_failures = 0
+            # Deliberately NOT resetting _consecutive_failures here - building
+            # a fresh Exchange object can succeed (a local ccxt client
+            # constructs fine) without the exchange actually being reachable
+            # again yet (e.g. mid-internet-outage). Only collect_once()
+            # observing an actual successful fetch should reset it/the reload
+            # backoff - see its own comment. This just means "the object is
+            # fresh," not "the outage is over."
             logger.info("Exchange connection reloaded successfully.")
         except Exception:
             logger.exception(
@@ -1907,6 +1963,8 @@ _RAMP_FLOOR = 10  # starting/minimum batch size - matches the observed default
 # urllib3 HTTPConnectionPool size (10); also a reasonable floor generally.
 _RAMP_STEP = 5  # pairs added per clean tick while ramping up
 _RAMP_COOLDOWN_S = 60.0  # pause ramp-up for this long after a rate-limit cut
+
+_EXCHANGE_RELOAD_BACKOFF_CAP_S = 300.0  # ceiling for DataCollector's reload backoff
 
 # See DataCollector.collect_once(): only include funding-rate-HISTORY entries
 # (which roughly double a batch's request count when bundled with regular

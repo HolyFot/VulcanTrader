@@ -94,51 +94,51 @@ Each config under `user_data/configs/*.json` is treated as a **individual bot co
 
 ### Per-bot config fields
 
-- **`is_bot`** — `true` (default) means this config is a fleet-managed bot: it
-  shows up in the dashboard's Configs table and is eligible for `autostart`.
-  Set to `false` for a shared base/template config not meant to run as a bot
-  in its own right (still usable for `backtest`/`hyperopt` etc., just hidden
-  from the fleet list — and skipped by `autostart` even if `auto_start` is
-  also `true`).
-- **`strategy`** — which `IStrategy` class this config runs. Overridden by
-  `-s`/`--strategy` on the CLI when given. **Ignored by `backtest`/
-  `hyperopt`** — those always need an explicit `-s`/`--strategies`, so one
-  config can still be backtested against many strategies.
-- **`auto_start`** — if `true`, gets launched automatically as soon as the
-  fleet-control process starts — either `python -m VulcanTrader.bot webserver`
-  (which scans for these on every startup; pass `--no-autostart` to skip)
-  or the standalone `python -m VulcanTrader.bot autostart` command.
-- **`show_terminal`** *(Windows)* — `true` (default) opens a new console
-  window per bot; `false` launches with no visible window.
-- **`tmux`** *(Linux/macOS)* — `true` opens each bot in its own tmux window
-  (session `VulcanTrader`, window named after `bot_name`); `false` (default)
-  runs as a plain background process. Falls back to plain background if
-  `tmux` isn't installed. A stale window from a previous crashed run of the
-  *same* bot is killed automatically before a fresh one opens, so restarts
-  never pile up duplicates.
+- **`is_bot`** — `true` (default): real bot, shows in the dashboard.
+  `false`: template only, hidden (still works for backtest/hyperopt).
+- **`strategy`** — which strategy to run. CLI `-s` overrides it. Ignored by
+  backtest/hyperopt (use `-s` there too).
+- **`auto_start`** — `true`: starts automatically with the fleet.
+- **`show_terminal`** *(Windows)* — `true` (default): own console window.
+- **`tmux`** *(Linux/macOS)* — `true`: own tmux window. `false` (default):
+  runs in the background.
 
-
-Either path scans every config, launches each `auto_start: true` one as its
-own detached `trade` subprocess, and moves on — each bot then runs
-independently (persistence account `user_data/accounts/<config-name>_
-<dry_run|live>.json`, keyed by the config's own filename so it never
-collides with another config sharing the same strategy). The standalone
-`autostart` command exits immediately afterward; `webserver` keeps running
-the dashboard/Discord bot.
+Starting the fleet launches every `auto_start: true` bot, each with its own
+trade history.
 
 ### Shared settings: `user_data/configs_system/system.json`
 
-`api_server` (dashboard host/port/credentials), `discord`, and `telegram`
-live in **one** shared file instead of being duplicated into every config.
-It's loaded first, so any individual config can still override just one key
-(e.g. to disable Discord for that specific bot) without repeating the whole
-block. `configs_system/data_server.json` is separate and auto-managed — it's
-the shared `data_server.py` master's own config, not something you edit
-directly. Its `show_terminal`/`tmux` settings (both default `false`) control
-whether an auto-launched master gets its own visible console window/tmux
-pane — set them on a bot config's own `"data_server"` block instead (they're
-copied through on every bot startup, so editing this file by hand doesn't
-stick).
+Dashboard login, Discord, and Telegram settings live once here instead of in
+every config. A bot config can still override one key just for itself.
+
+`data_server.json` is different — it's auto-managed, don't hand-edit it. To
+change the data server's window/tmux behavior, set that on a bot config's
+own `data_server` block instead.
+
+### Running the whole fleet in one process (`single_process_mode`)
+
+By default each bot is its own program — safe, but slower to start with a
+big fleet (every bot reloads pandas/numpy/etc. from scratch).
+
+Turn on `"single_process_mode": true` in `system.json` and bots run as
+threads in one shared program instead — same isolation, far less memory
+(586 MB → 186 MB on a 3-bot fleet) and a faster start. Tradeoff: bots share
+one CPU core, so heavy compute won't run in parallel — rarely matters, since
+bots mostly wait on network calls.
+
+`false` (default) = unchanged behavior.
+
+```powershell
+python main.py --port 8060
+```
+
+```bash
+python main.py --port 8060
+```
+
+`main.py` at the repo root is just a shorthand for `python -m VulcanTrader.bot
+webserver` — use whichever you prefer, both read `single_process_mode` from
+`system.json` the same way.
 
 ### Running the data server master explicitly
 
@@ -389,6 +389,9 @@ added exchange shows up (as empty coverage) right away.
 ## Layout
 
 ```
+main.py                  ← Shorthand for `python -m VulcanTrader.bot webserver`
+tests/                   ← unittest suite (no pytest) - `python -m unittest discover -s tests -v`
+
 VulcanTrader/            ← Python package (imported as VulcanTrader.*)
   bot.py                 ← CLI entry point (all subcommands)
   backtesting.py         ← historical replay engine

@@ -306,9 +306,8 @@ class VulcanTraderBot(LoggingMixin):
             return None
 
         try:
-            import os
-
-            from VulcanTrader.data_server import DataServerClient, ensure_master_running
+            from VulcanTrader.data_server import ensure_master_running
+            from VulcanTrader.util.shared_data_server_client import get_bot_data_server_handle
 
             # host/port/auto_start fall back to the shared system.json-wide
             # defaults (auto_start_data_server/data_server_ip/data_server_port
@@ -348,12 +347,20 @@ class VulcanTraderBot(LoggingMixin):
                 )
                 return None
 
-            client_id = f"{self.config.get('bot_name', 'trader_bot')}-{os.getpid()}"
-            client = DataServerClient(host, port, self.config["exchange"]["name"], client_id)
-            client.start()
+            # Shares one real connection with every other bot in THIS process
+            # already targeting the same (host, port, exchange) - see
+            # util/shared_data_server_client.py. Under subprocess mode this is
+            # a no-op (one bot per process, so there's never a second
+            # subscriber to share with); under single_process_mode it's what
+            # collapses N bots' worth of sockets/registrations into one.
+            # bot_id is this bot's own object identity - purely internal
+            # bookkeeping, doesn't need to be human-meaningful or config-derived.
+            client = get_bot_data_server_handle(
+                host, port, self.config["exchange"]["name"], str(id(self))
+            )
             logger.info(
-                "data_server client started (client_id=%s, master=%s:%d)",
-                client_id, host, port,
+                "data_server client ready (bot_id=%s, master=%s:%d)",
+                str(id(self)), host, port,
             )
             return client
         except Exception:

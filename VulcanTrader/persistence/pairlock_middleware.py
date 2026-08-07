@@ -104,7 +104,7 @@ class PairLocks:
 
         if PairLocks.use_db:
             logger.info(f"Releasing all locks with reason '{reason}':")
-            for lock in PairLock._instances:
+            for lock in PairLock._instances():
                 if (
                     lock.lock_end_time
                     and lock.lock_end_time > now
