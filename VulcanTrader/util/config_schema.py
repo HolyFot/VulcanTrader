@@ -40,9 +40,7 @@ CONF_SCHEMA = {
             "minimum": -1,
         },
         "timeframe": {
-            "description": (
-                f"The timeframe to use (e.g `1m`, `5m`, `15m`, `30m`, `1h` ...). {__IN_STRATEGY}"
-            ),
+            "description": f"The timeframe to use (e.g `1m`, `5m`, `15m`, `30m`, `1h` ...). {__IN_STRATEGY}",
             "type": "string",
         },
         "proxy_coin": {
@@ -156,10 +154,7 @@ CONF_SCHEMA = {
             "type": "boolean",
         },
         "exit_profit_only": {
-            "description": (
-                "Exit only when in profit. Exit signals are ignored as "
-                f"long as profit is < exit_profit_offset. {__IN_STRATEGY}"
-            ),
+            "description": "Exit only when in profit. Exit signals are ignored as " f"long as profit is < exit_profit_offset. {__IN_STRATEGY}",
             "type": "boolean",
         },
         "exit_profit_offset": {
@@ -253,17 +248,12 @@ CONF_SCHEMA = {
             "minimum": 1,
         },
         "early_stop": {
-            "description": (
-                "Early stop hyperopt if no improvement after <epochs>. Set to 0 to disable."
-            ),
+            "description": "Early stop hyperopt if no improvement after <epochs>. Set to 0 to disable.",
             "type": "integer",
             "minimum": 0,
         },
         "spaces": {
-            "description": (
-                "Hyperopt parameter spaces to optimize. Default is the default set and"
-                "includes all spaces except for 'trailing', 'protection', and 'trades'."
-            ),
+            "description": "Hyperopt parameter spaces to optimize. Default is the default set and" "includes all spaces except for 'trailing', 'protection', and 'trades'.",
             "type": "array",
             "items": {"type": "string"},
             "default": ["default"],
@@ -278,12 +268,7 @@ CONF_SCHEMA = {
             "default": False,
         },
         "hyperopt_jobs": {
-            "description": (
-                "The number of concurrently running jobs for hyperoptimization "
-                "(hyperopt worker processes). "
-                "If -1 (default), all CPUs are used, for -2, all CPUs but one are used, etc. "
-                "If 1 is given, no parallel computing is used."
-            ),
+            "description": "Concurrent hyperopt worker processes. -1 (default) = all CPUs.",
             "type": "integer",
             "default": -1,
         },
@@ -298,12 +283,7 @@ CONF_SCHEMA = {
             "minimum": 0,
         },
         "hyperopt_loss": {
-            "description": (
-                "The class name of the hyperopt loss function class (IHyperOptLoss). "
-                "Different functions can generate completely different results, "
-                "since the target for optimization is different. "
-                f"Built-in Hyperopt-loss-functions are: {', '.join(HYPEROPT_LOSS_BUILTIN)}"
-            ),
+            "description": f"Hyperopt loss function class. Built-in: {', '.join(HYPEROPT_LOSS_BUILTIN)}",
             "type": "string",
         },
         # end hyperopt
@@ -312,55 +292,23 @@ CONF_SCHEMA = {
             "type": "string",
         },
         "is_bot": {
-            "description": (
-                "Marks this config as a fleet-managed trading bot. Default true. Only "
-                "configs with is_bot true appear in the web portal's Configs table and "
-                "are eligible for `bot.py autostart`, even if they also have "
-                "`auto_start: true`. Set to false for a config that exists as a shared "
-                "base/template (e.g. one meant to be duplicated, or backtested against "
-                "many strategies via -s/--strategies) rather than a bot in its own right."
-            ),
+            "description": "true (default): real fleet bot, shown in dashboard. false: template only.",
             "type": "boolean",
         },
         "strategy": {
-            "description": (
-                "Strategy class name to run for live/dry-run trading (`bot.py trade`) and "
-                "for `bot.py autostart`. Overridden by -s/--strategy on the CLI when given. "
-                "Ignored by `bot.py backtest`/`hyperopt` - those always require an explicit "
-                "-s/--strategy or --strategies, so one shared config can be backtested "
-                "against many strategies without this field pinning it to just one."
-            ),
+            "description": "Strategy class to run. CLI -s overrides; ignored by backtest/hyperopt.",
             "type": "string",
         },
         "auto_start": {
-            "description": (
-                "If true, `bot.py autostart` launches this config as a live/dry-run trade "
-                "instance automatically (using this config's own `strategy`, `dry_run`, "
-                "`db_url` and `api_server.listen_port` - falling back to an auto-derived "
-                "db_url/port when those are absent). Ignored by every other subcommand."
-            ),
+            "description": "If true, starts this bot automatically with the fleet.",
             "type": "boolean",
         },
         "show_terminal": {
-            "description": (
-                "Per-bot-config setting (unlike api_server/discord/telegram, which live in "
-                "the shared user_data/configs_system/system.json). Windows only: when true "
-                "(default), launching THIS config via `bot.py autostart` or the web portal's "
-                "config manager gets its own new console window. When false, it launches "
-                "detached with no visible window."
-            ),
+            "description": "Windows only. true (default): own console window; false: hidden.",
             "type": "boolean",
         },
         "tmux": {
-            "description": (
-                "Per-bot-config setting (unlike api_server/discord/telegram, which live in "
-                "the shared user_data/configs_system/system.json). Linux/macOS only: when "
-                "true, launching THIS config via `bot.py autostart` or the web portal's "
-                "config manager opens in its own tmux window (session 'VulcanTrader'), "
-                "attachable with `tmux attach -t VulcanTrader`, instead of running as a plain "
-                "background process with no visible terminal. Falls back to plain background "
-                "if tmux isn't installed. Default false."
-            ),
+            "description": "Linux/macOS only. true: own tmux window; false (default): background.",
             "type": "boolean",
         },
         "unfilledtimeout": {
@@ -467,67 +415,35 @@ CONF_SCHEMA = {
             "required": ["price_side"],
         },
         "limit_order_simulation": {
-            "description": (
-                "Backtest-only: how resting LIMIT orders are simulated. `order_types` already "
-                "says whether an order is a limit or a market order, and `unfilledtimeout` says "
-                "how long an unfilled one lives; what a candle-level backtest cannot get from "
-                "live pricing (entry_pricing/exit_pricing read an order book) is how far from "
-                "the market the order rests — that is what the offsets here supply.\n"
-                "An offset of 0 (the default) prices the order at the candle's own open, which "
-                "always fills immediately: results are then identical to a market order. A "
-                "positive offset makes the order REST on the favourable side (below the open "
-                "for a long entry, above it for a long exit); it then fills only on a candle "
-                "whose range actually reaches it, and pays `fee_maker` when it does. Entries "
-                "that never fill mean the trade never happens; exits that never fill leave the "
-                "position open for a later exit condition. Stoploss, trailing-stop and ROI "
-                "exits are unaffected — they keep filling at their own price and taker fee."
-            ),
+            "description": "Backtest-only: how resting LIMIT orders are simulated. `order_types` already " "says whether an order is a limit or a market order, and `unfilledtimeout` says " "how long an unfilled one lives; what a candle-level backtest cannot get from " "live pricing (entry_pricing/exit_pricing read an order book) is how far from " "the market the order rests — that is what the offsets here supply.\n" "An offset of 0 (the default) prices the order at the candle's own open, which " "always fills immediately: results are then identical to a market order. A " "positive offset makes the order REST on the favourable side (below the open " "for a long entry, above it for a long exit); it then fills only on a candle " "whose range actually reaches it, and pays `fee_maker` when it does. Entries " "that never fill mean the trade never happens; exits that never fill leave the " "position open for a later exit condition. Stoploss, trailing-stop and ROI " "exits are unaffected — they keep filling at their own price and taker fee.",
             "type": "object",
             "properties": {
                 "entry_offset": {
-                    "description": (
-                        "Fraction of price a resting ENTRY limit sits below the candle open "
-                        "(above it, for shorts). E.g. 0.001 = 10 bps better than the open."
-                    ),
+                    "description": "Fraction of price a resting ENTRY limit sits below the candle open " "(above it, for shorts). E.g. 0.001 = 10 bps better than the open.",
                     "type": "number",
                     "minimum": 0.0,
                     "maximum": 1.0,
                     "default": 0.0,
                 },
                 "exit_offset": {
-                    "description": (
-                        "Fraction of price a resting EXIT limit sits above the candle open "
-                        "(below it, for shorts). Applies to exit-signal / custom-exit exits only."
-                    ),
+                    "description": "Fraction of price a resting EXIT limit sits above the candle open " "(below it, for shorts). Applies to exit-signal / custom-exit exits only.",
                     "type": "number",
                     "minimum": 0.0,
                     "maximum": 1.0,
                     "default": 0.0,
                 },
                 "entry_timeout_bars": {
-                    "description": (
-                        "Bars an unfilled entry order survives past the bar it was placed on "
-                        "before being cancelled (0 = fill-or-kill on that bar). Overrides the "
-                        "bar count derived from `unfilledtimeout.entry`. Omit both and the "
-                        "order rests until it fills or the strategy cancels it, which is what "
-                        "freqtrade does with no `unfilledtimeout` set."
-                    ),
+                    "description": "Bars an unfilled entry order survives past the bar it was placed on " "before being cancelled (0 = fill-or-kill on that bar). Overrides the " "bar count derived from `unfilledtimeout.entry`. Omit both and the " "order rests until it fills or the strategy cancels it, which is what " "freqtrade does with no `unfilledtimeout` set.",
                     "type": "integer",
                     "minimum": 0,
                 },
                 "exit_timeout_bars": {
-                    "description": (
-                        "Same, for exit orders. A timed-out exit order leaves the POSITION "
-                        "open — the exit has to be re-triggered by a later bar."
-                    ),
+                    "description": "Same, for exit orders. A timed-out exit order leaves the POSITION " "open — the exit has to be re-triggered by a later bar.",
                     "type": "integer",
                     "minimum": 0,
                 },
                 "fee_maker": {
-                    "description": (
-                        "Fee paid by a fill that rested on the book. Defaults to the single "
-                        "`fee` value, which leaves results identical to an all-taker run."
-                    ),
+                    "description": "Fee paid by a fill that rested on the book. Defaults to the single " "`fee` value, which leaves results identical to an all-taker run.",
                     "type": "number",
                     "minimum": 0.0,
                 },
@@ -675,16 +591,11 @@ CONF_SCHEMA = {
                 },
                 "token": {"description": "Telegram bot token.", "type": "string"},
                 "chat_id": {
-                    "description": (
-                        f"Telegram chat or group ID. {__VIA_ENV} VulcanTrader__TELEGRAM__CHAT_ID"
-                    ),
+                    "description": f"Telegram chat or group ID. {__VIA_ENV} VulcanTrader__TELEGRAM__CHAT_ID",
                     "type": "string",
                 },
                 "topic_id": {
-                    "description": (
-                        "Telegram topic ID - only applicable for group chats. "
-                        f"{__VIA_ENV} VulcanTrader__TELEGRAM__TOPIC_ID"
-                    ),
+                    "description": "Telegram topic ID - only applicable for group chats. " f"{__VIA_ENV} VulcanTrader__TELEGRAM__TOPIC_ID",
                     "type": "string",
                 },
                 "authorized_users": {
@@ -803,23 +714,15 @@ CONF_SCHEMA = {
             "properties": {
                 "enabled": {"type": "boolean"},
                 "webhook_url": {
-                    "description": (
-                        f"Discord webhook URL. {__VIA_ENV} VulcanTrader__DISCORD__WEBHOOK_URL"
-                    ),
+                    "description": f"Discord webhook URL. {__VIA_ENV} VulcanTrader__DISCORD__WEBHOOK_URL",
                     "type": "string",
                 },
                 "bot_token": {
-                    "description": (
-                        f"Discord bot token for the interactive '!'-prefix command client. "
-                        f"{__VIA_ENV} VulcanTrader__DISCORD__BOT_TOKEN"
-                    ),
+                    "description": f"Discord bot token for the interactive '!'-prefix command client. " f"{__VIA_ENV} VulcanTrader__DISCORD__BOT_TOKEN",
                     "type": "string",
                 },
                 "allowed_user_ids": {
-                    "description": (
-                        "Whitelist of Discord user IDs (integers) permitted to use bot commands. "
-                        "If empty, all users can interact with the bot."
-                    ),
+                    "description": "Whitelist of Discord user IDs (integers) permitted to use bot commands. " "If empty, all users can interact with the bot.",
                     "type": "array",
                     "items": {"type": "integer"},
                     "uniqueItems": True,
@@ -912,78 +815,37 @@ CONF_SCHEMA = {
         },
         # end of RPC section
         "single_process_mode": {
-            "description": "Fleet-wide setting (user_data/configs_system/system.json). "
-            "When true, `bot.py webserver`/`autostart` (and the root `main.py`, and the "
-            "web portal's config-manager Start button) run every auto_start / "
-            "manually-started bot as a background thread inside THIS process instead of "
-            "spawning `python -m VulcanTrader.bot trade` as its own OS process. Each bot "
-            "still gets its own VulcanTraderBot instance, its own embedded WebPortal on "
-            "its own port, and its own isolated trade ledger/lock file (see "
-            "persistence/base.py's PersistenceContext, contextvar-scoped per bot precisely "
-            "so this is safe) - only the OS-process boundary is gone, trading N processes' "
-            "worth of interpreter/import overhead for shared memory. Default false (spawn "
-            "subprocesses, the original behavior) when unset.",
+            "description": "Fleet-wide setting (user_data/configs_system/system.json). " "When true, `bot.py webserver`/`autostart` (and the root `main.py`, and the " "web portal's config-manager Start button) run every auto_start / " "manually-started bot as a background thread inside THIS process instead of " "spawning `python -m VulcanTrader.bot trade` as its own OS process. Each bot " "still gets its own VulcanTraderBot instance, its own embedded WebPortal on " "its own port, and its own isolated trade ledger/lock file (see " "persistence/base.py's PersistenceContext, contextvar-scoped per bot precisely " "so this is safe) - only the OS-process boundary is gone, trading N processes' " "worth of interpreter/import overhead for shared memory. Default false (spawn " "subprocesses, the original behavior) when unset.",
             "type": "boolean",
         },
         "auto_start_data_server": {
-            "description": "Shared, fleet-wide default (set in user_data/configs_system/"
-            "system.json, like api_server/discord/telegram) for whether a bot with no "
-            "reachable data_server master should launch one itself. False makes every "
-            "bot connect-only - it uses data_server_ip/data_server_port if reachable and "
-            "otherwise falls back to direct exchange polling, but never spawns a master. "
-            "Set false fleet-wide and start the master explicitly instead, via "
-            "run-datamaster.bat/.sh, to rule out two independent launches (e.g. two "
-            "Python interpreters, or a rerun before the first fully bound its port) each "
-            "spawning their own master and doubling the exchange request load - the exact "
-            "failure mode this setting exists to prevent. A bot config's own "
-            "`data_server.auto_start` still wins if explicitly set. Default true (the "
-            "original auto-launch-from-first-bot behavior) when unset.",
+            "description": "Shared, fleet-wide default (set in user_data/configs_system/" "system.json, like api_server/discord/telegram) for whether a bot with no " "reachable data_server master should launch one itself. False makes every " "bot connect-only - it uses data_server_ip/data_server_port if reachable and " "otherwise falls back to direct exchange polling, but never spawns a master. " "Set false fleet-wide and start the master explicitly instead, via " "run-datamaster.bat/.sh, to rule out two independent launches (e.g. two " "Python interpreters, or a rerun before the first fully bound its port) each " "spawning their own master and doubling the exchange request load - the exact " "failure mode this setting exists to prevent. A bot config's own " "`data_server.auto_start` still wins if explicitly set. Default true (the " "original auto-launch-from-first-bot behavior) when unset.",
             "type": "boolean",
         },
         "data_server_ip": {
-            "description": "Shared, fleet-wide default (system.json) for the host the "
-            "data_server master listens on / clients connect to. Overridden per-bot by "
-            "that config's own `data_server.host`, if explicitly set. Default "
-            "\"127.0.0.1\" when unset anywhere.",
+            "description": "Shared, fleet-wide default (system.json) for the host the " "data_server master listens on / clients connect to. Overridden per-bot by " "that config's own `data_server.host`, if explicitly set. Default " "\"127.0.0.1\" when unset anywhere.",
             "type": "string",
         },
         "data_server_port": {
-            "description": "Shared, fleet-wide default (system.json) for the port the "
-            "data_server master's client-request socket listens on. Overridden per-bot by "
-            "that config's own `data_server.port`, if explicitly set. Default 8720 when "
-            "unset anywhere.",
+            "description": "Shared, fleet-wide default (system.json) for the port the " "data_server master's client-request socket listens on. Overridden per-bot by " "that config's own `data_server.port`, if explicitly set. Default 8720 when " "unset anywhere.",
             "type": "integer",
             "minimum": 1,
             "maximum": 65535,
         },
         "data_server": {
-            "description": "This bot's own use of the shared data_server master "
-            "(VulcanTrader/data_server.py) - whether to use one at all, and the "
-            "ports it should be reachable on. Overrides the system.json-wide "
-            "auto_start_data_server/data_server_ip/data_server_port defaults above when "
-            "explicitly set. The master/subserver process itself "
-            "reads its own separate, minimal config file (see data_server.py's "
-            "`_load_minimal_config`), not this block - a trading bot never runs "
-            "as a subserver, so master_host/master_port/name have no place here.",
+            "description": "This bot's own use of the shared data_server master " "(VulcanTrader/data_server.py) - whether to use one at all, and the " "ports it should be reachable on. Overrides the system.json-wide " "auto_start_data_server/data_server_ip/data_server_port defaults above when " "explicitly set. The master/subserver process itself " "reads its own separate, minimal config file (see data_server.py's " "`_load_minimal_config`), not this block - a trading bot never runs " "as a subserver, so master_host/master_port/name have no place here.",
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Use the shared data_server system at all. False skips "
-                    "it entirely - this bot always polls the exchange directly, and never "
-                    "tries to reach or launch a master.",
+                    "description": "Use the shared data_server system at all. False skips " "it entirely - this bot always polls the exchange directly, and never " "tries to reach or launch a master.",
                     "type": "boolean",
                 },
                 "auto_start": {
-                    "description": "Per-bot override of the system.json-wide "
-                    "`auto_start_data_server` default (only meaningful when `enabled` above "
-                    "isn't false). False means this bot will connect to a master if one is "
-                    "already reachable, but will never spawn one itself.",
+                    "description": "Per-bot override of the system.json-wide " "`auto_start_data_server` default (only meaningful when `enabled` above " "isn't false). False means this bot will connect to a master if one is " "already reachable, but will never spawn one itself.",
                     "type": "boolean",
                 },
                 "persist_to_disk": {
-                    "description": "Write collected OHLCV (every pair) and funding-rate "
-                    "history (futures pairs) back to feather files under `datadir`, same "
-                    "layout `backtesting.py` reads from.",
+                    "description": "Write collected OHLCV (every pair) and funding-rate " "history (futures pairs) back to feather files under `datadir`, same " "layout `backtesting.py` reads from.",
                     "type": "boolean",
                     "default": True,
                 },
@@ -1004,23 +866,12 @@ CONF_SCHEMA = {
                     "maximum": 65535,
                 },
                 "show_terminal": {
-                    "description": "Windows only. Default false. When this bot auto-launches "
-                    "a data_server master (none was already listening), true gives it its "
-                    "own new console window; false launches it fully headless. Only read "
-                    "at the moment a bot actually launches a master - has no effect if one "
-                    "is already running. Written through into `configs_system/"
-                    "data_server.json`'s own `show_terminal` field, but that file is "
-                    "overwritten on every launch, so set it here (per-bot config), not there.",
+                    "description": "Windows only. Default false. When this bot auto-launches " "a data_server master (none was already listening), true gives it its " "own new console window; false launches it fully headless. Only read " "at the moment a bot actually launches a master - has no effect if one " "is already running. Written through into `configs_system/" "data_server.json`'s own `show_terminal` field, but that file is " "overwritten on every launch, so set it here (per-bot config), not there.",
                     "type": "boolean",
                     "default": False,
                 },
                 "tmux": {
-                    "description": "Linux/macOS only. Default false. When this bot "
-                    "auto-launches a data_server master, true opens it in its own tmux "
-                    "window (session \"VulcanTrader\", same one bot subprocesses use) "
-                    "instead of a plain headless background process. Falls back to plain "
-                    "background if tmux isn't installed. Same one-shot-at-launch caveat as "
-                    "`show_terminal` above.",
+                    "description": "Linux/macOS only. Default false. When this bot " "auto-launches a data_server master, true opens it in its own tmux " "window (session \"VulcanTrader\", same one bot subprocesses use) " "instead of a plain headless background process. Falls back to plain " "background if tmux isn't installed. Same one-shot-at-launch caveat as " "`show_terminal` above.",
                     "type": "boolean",
                     "default": False,
                 },
@@ -1161,54 +1012,34 @@ CONF_SCHEMA = {
             "properties": {
                 "name": {"description": "Name of the exchange.", "type": "string"},
                 "key": {
-                    "description": (
-                        f"API key for the exchange. {__VIA_ENV} VulcanTrader__EXCHANGE__KEY"
-                    ),
+                    "description": f"API key for the exchange. {__VIA_ENV} VulcanTrader__EXCHANGE__KEY",
                     "type": "string",
                     "default": "",
                 },
                 "secret": {
-                    "description": (
-                        f"API secret for the exchange. {__VIA_ENV} VulcanTrader__EXCHANGE__SECRET"
-                    ),
+                    "description": f"API secret for the exchange. {__VIA_ENV} VulcanTrader__EXCHANGE__SECRET",
                     "type": "string",
                     "default": "",
                 },
                 "password": {
-                    "description": (
-                        "Password for the exchange, if required. "
-                        f"{__VIA_ENV} VulcanTrader__EXCHANGE__PASSWORD"
-                    ),
+                    "description": "Password for the exchange, if required. " f"{__VIA_ENV} VulcanTrader__EXCHANGE__PASSWORD",
                     "type": "string",
                     "default": "",
                 },
                 "uid": {
-                    "description": (
-                        "User ID for the exchange, if required. "
-                        f"{__VIA_ENV} VulcanTrader__EXCHANGE__UID"
-                    ),
+                    "description": "User ID for the exchange, if required. " f"{__VIA_ENV} VulcanTrader__EXCHANGE__UID",
                     "type": "string",
                 },
                 "account_id": {
-                    "description": (
-                        "Account ID for the exchange, if required. "
-                        f"{__VIA_ENV} VulcanTrader__EXCHANGE__ACCOUNT_ID"
-                    ),
+                    "description": "Account ID for the exchange, if required. " f"{__VIA_ENV} VulcanTrader__EXCHANGE__ACCOUNT_ID",
                     "type": "string",
                 },
                 "wallet_address": {
-                    "description": (
-                        "Wallet address for the exchange, if required. "
-                        "Usually used by DEX exchanges. "
-                        f"{__VIA_ENV} VulcanTrader__EXCHANGE__WALLET_ADDRESS"
-                    ),
+                    "description": "Wallet address for the exchange, if required. " "Usually used by DEX exchanges. " f"{__VIA_ENV} VulcanTrader__EXCHANGE__WALLET_ADDRESS",
                     "type": "string",
                 },
                 "private_key": {
-                    "description": (
-                        "Private key for the exchange, if required. Usually used by DEX exchanges. "
-                        f"{__VIA_ENV} VulcanTrader__EXCHANGE__PRIVATE_KEY"
-                    ),
+                    "description": "Private key for the exchange, if required. Usually used by DEX exchanges. " f"{__VIA_ENV} VulcanTrader__EXCHANGE__PRIVATE_KEY",
                     "type": "string",
                 },
                 "pair_whitelist": {
@@ -1224,10 +1055,7 @@ CONF_SCHEMA = {
                     "uniqueItems": True,
                 },
                 "log_responses": {
-                    "description": (
-                        "Log responses from the exchange."
-                        "Useful/required to debug issues with order processing."
-                    ),
+                    "description": "Log responses from the exchange." "Useful/required to debug issues with order processing.",
                     "type": "boolean",
                     "default": False,
                 },
@@ -1252,17 +1080,11 @@ CONF_SCHEMA = {
                 },
                 "ccxt_config": {"description": "CCXT configuration settings.", "type": "object"},
                 "ccxt_async_config": {
-                    "description": (
-                        "CCXT asynchronous configuration settings."
-                        "Usually ccxt_config should be used instead."
-                    ),
+                    "description": "CCXT asynchronous configuration settings." "Usually ccxt_config should be used instead.",
                     "type": "object",
                 },
                 "ccxt_sync_config": {
-                    "description": (
-                        "CCXT synchronous configuration settings. "
-                        "Usually ccxt_config should be used instead."
-                    ),
+                    "description": "CCXT synchronous configuration settings. " "Usually ccxt_config should be used instead.",
                     "type": "object",
                 },
             },
@@ -1273,17 +1095,7 @@ CONF_SCHEMA = {
             "properties": {
                 "version": {"type": "number", "const": 1},
                 "formatters": {
-                    "type": "object",
-                    # In theory the below, but can be more flexible
-                    # based on logging.config documentation
-                    # "additionalProperties": {
-                    #     "type": "object",
-                    #     "properties": {
-                    #         "format": {"type": "string"},
-                    #         "datefmt": {"type": "string"},
-                    #     },
-                    #     "required": ["format"],
-                    # },
+                    "type": "object",  # left flexible - see logging.config docs
                 },
                 "handlers": {"type": "object"},
                 "root": {"type": "object"},
@@ -1379,10 +1191,7 @@ CONF_SCHEMA = {
                     "default": False,
                 },
                 "identifier": {
-                    "description": (
-                        "A unique ID for the current model. "
-                        "Must be changed when modifying features."
-                    ),
+                    "description": "A unique ID for the current model. " "Must be changed when modifying features.",
                     "type": "string",
                     "default": "example",
                 },
@@ -1402,17 +1211,12 @@ CONF_SCHEMA = {
                     "default": 1,
                 },
                 "train_period_days": {
-                    "description": (
-                        "Number of days to use for the training data (width of the sliding window)"
-                    ),
+                    "description": "Number of days to use for the training data (width of the sliding window)",
                     "type": "integer",
                     "default": 0,
                 },
                 "backtest_period_days": {
-                    "description": (
-                        "Number of days to inference from the trained model before sliding the "
-                        "`train_period_days` window "
-                    ),
+                    "description": "Number of days to inference from the trained model before sliding the " "`train_period_days` window ",
                     "type": "number",
                     "default": 7,
                 },
@@ -1422,10 +1226,7 @@ CONF_SCHEMA = {
                     "default": 0,
                 },
                 "expiration_hours": {
-                    "description": (
-                        "Avoid making predictions if a model is more than `expiration_hours` "
-                        "old. Defaults to 0 (no expiration)."
-                    ),
+                    "description": "Avoid making predictions if a model is more than `expiration_hours` " "old. Defaults to 0 (no expiration).",
                     "type": "number",
                     "default": 0,
                 },
@@ -1435,17 +1236,11 @@ CONF_SCHEMA = {
                     "default": False,
                 },
                 "fit_live_predictions_candles": {
-                    "description": (
-                        "Number of historical candles to use for computing target (label) "
-                        "statistics from prediction data, instead of from the training dataset."
-                    ),
+                    "description": "Number of historical candles to use for computing target (label) " "statistics from prediction data, instead of from the training dataset.",
                     "type": "integer",
                 },
                 "data_kitchen_thread_count": {
-                    "description": (
-                        "Designate the number of threads you want to use for data processing "
-                        "(outlier methods, normalization, etc.)."
-                    ),
+                    "description": "Designate the number of threads you want to use for data processing " "(outlier methods, normalization, etc.).",
                     "type": "integer",
                 },
                 "activate_tensorboard": {
@@ -1454,18 +1249,12 @@ CONF_SCHEMA = {
                     "default": True,
                 },
                 "wait_for_training_iteration_on_reload": {
-                    "description": (
-                        "Wait for the next training iteration to complete after /reload or ctrl+c."
-                    ),
+                    "description": "Wait for the next training iteration to complete after /reload or ctrl+c.",
                     "type": "boolean",
                     "default": True,
                 },
                 "continual_learning": {
-                    "description": (
-                        "Use the final state of the most recently trained model "
-                        "as starting point for the new model, allowing for "
-                        "incremental learning."
-                    ),
+                    "description": "Use the final state of the most recently trained model " "as starting point for the new model, allowing for " "incremental learning.",
                     "type": "boolean",
                     "default": False,
                 },
@@ -1475,11 +1264,7 @@ CONF_SCHEMA = {
                     "default": False,
                 },
                 "override_exchange_check": {
-                    "description": (
-                        "Override the exchange check to force FreqAI to use exchanges "
-                        "that may not have enough historic data. Turn this to True if "
-                        "you know your FreqAI model and strategy do not require historical data."
-                    ),
+                    "description": "Override the exchange check to force FreqAI to use exchanges " "that may not have enough historic data. Turn this to True if " "you know your FreqAI model and strategy do not require historical data.",
                     "type": "boolean",
                     "default": False,
                 },
@@ -1492,55 +1277,35 @@ CONF_SCHEMA = {
                             "type": "array",
                         },
                         "include_timeframes": {
-                            "description": (
-                                "A list of timeframes that all indicators in "
-                                "`feature_engineering_expand_*()` will be created for."
-                            ),
+                            "description": "A list of timeframes that all indicators in " "`feature_engineering_expand_*()` will be created for.",
                             "type": "array",
                         },
                         "label_period_candles": {
-                            "description": (
-                                "Number of candles into the future to use for labeling the period."
-                                "This can be used in `set_freqai_targets()`."
-                            ),
+                            "description": "Number of candles into the future to use for labeling the period." "This can be used in `set_freqai_targets()`.",
                             "type": "integer",
                         },
                         "include_shifted_candles": {
-                            "description": (
-                                "Add features from previous candles to subsequent candles with "
-                                "the intent of adding historical information."
-                            ),
+                            "description": "Add features from previous candles to subsequent candles with " "the intent of adding historical information.",
                             "type": "integer",
                             "default": 0,
                         },
                         "DI_threshold": {
-                            "description": (
-                                "Activates the use of the Dissimilarity Index for "
-                                "outlier detection when set to > 0."
-                            ),
+                            "description": "Activates the use of the Dissimilarity Index for " "outlier detection when set to > 0.",
                             "type": "number",
                             "default": 0,
                         },
                         "weight_factor": {
-                            "description": (
-                                "Weight training data points according to their recency."
-                            ),
+                            "description": "Weight training data points according to their recency.",
                             "type": "number",
                             "default": 0,
                         },
                         "principal_component_analysis": {
-                            "description": (
-                                "Automatically reduce the dimensionality of the data set using "
-                                "Principal Component Analysis"
-                            ),
+                            "description": "Automatically reduce the dimensionality of the data set using " "Principal Component Analysis",
                             "type": "boolean",
                             "default": False,
                         },
                         "indicator_periods_candles": {
-                            "description": (
-                                "Time periods to calculate indicators for. "
-                                "The indicators are added to the base indicator dataset."
-                            ),
+                            "description": "Time periods to calculate indicators for. " "The indicators are added to the base indicator dataset.",
                             "type": "array",
                             "items": {"type": "number", "minimum": 1},
                         },
@@ -1555,9 +1320,7 @@ CONF_SCHEMA = {
                             "default": 0,
                         },
                         "svm_params": {
-                            "description": (
-                                "All parameters available in Sklearn's `SGDOneClassSVM()`."
-                            ),
+                            "description": "All parameters available in Sklearn's `SGDOneClassSVM()`.",
                             "type": "object",
                             "properties": {
                                 "shuffle": {
@@ -1572,18 +1335,12 @@ CONF_SCHEMA = {
                             },
                         },
                         "shuffle_after_split": {
-                            "description": (
-                                "Split the data into train and test sets, and then shuffle "
-                                "both sets individually."
-                            ),
+                            "description": "Split the data into train and test sets, and then shuffle " "both sets individually.",
                             "type": "boolean",
                             "default": False,
                         },
                         "buffer_train_data_candles": {
-                            "description": (
-                                "Cut `buffer_train_data_candles` off the beginning and end of the "
-                                "training data *after* the indicators were populated."
-                            ),
+                            "description": "Cut `buffer_train_data_candles` off the beginning and end of the " "training data *after* the indicators were populated.",
                             "type": "integer",
                             "default": 0,
                         },
@@ -1605,19 +1362,14 @@ CONF_SCHEMA = {
                     },
                 },
                 "model_training_parameters": {
-                    "description": (
-                        "Flexible dictionary that includes all parameters available by "
-                        "the selected model library. "
-                    ),
+                    "description": "Flexible dictionary that includes all parameters available by " "the selected model library. ",
                     "type": "object",
                 },
                 "rl_config": {
                     "type": "object",
                     "properties": {
                         "drop_ohlc_from_features": {
-                            "description": (
-                                "Do not include the normalized ohlc data in the feature set."
-                            ),
+                            "description": "Do not include the normalized ohlc data in the feature set.",
                             "type": "boolean",
                             "default": False,
                         },
@@ -1626,16 +1378,11 @@ CONF_SCHEMA = {
                             "type": "integer",
                         },
                         "max_trade_duration_candles": {
-                            "description": (
-                                "Guides the agent training to keep trades below desired length."
-                            ),
+                            "description": "Guides the agent training to keep trades below desired length.",
                             "type": "integer",
                         },
                         "add_state_info": {
-                            "description": (
-                                "Include state information in the feature set for "
-                                "training and inference."
-                            ),
+                            "description": "Include state information in the feature set for " "training and inference.",
                             "type": "boolean",
                             "default": False,
                         },
@@ -1655,9 +1402,7 @@ CONF_SCHEMA = {
                             "default": "PPO",
                         },
                         "policy_type": {
-                            "description": (
-                                "One of the available policy types from stable_baselines3."
-                            ),
+                            "description": "One of the available policy types from stable_baselines3.",
                             "type": "string",
                             "default": "MlpPolicy",
                         },
@@ -1667,9 +1412,7 @@ CONF_SCHEMA = {
                             "default": [128, 128],
                         },
                         "randomize_starting_position": {
-                            "description": (
-                                "Randomize the starting point of each episode to avoid overfitting."
-                            ),
+                            "description": "Randomize the starting point of each episode to avoid overfitting.",
                             "type": "boolean",
                             "default": False,
                         },
