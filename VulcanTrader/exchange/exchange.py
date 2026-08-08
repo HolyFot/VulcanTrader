@@ -892,8 +892,15 @@ class Exchange:
         logger.debug("Performing scheduled market reload..")
         try:
             import time as _t
-            # on initial load, we retry 3 times to ensure we get the markets
-            retries: int = 3 if force else 0
+            # on initial load, we retry 3 times to ensure we get the markets.
+            # Periodic (non-forced) reloads got zero retries, so any single
+            # transient 429 during the hourly refresh immediately gave up and
+            # logged a full DDosProtection traceback - alarming to see live,
+            # even though it's already harmless (the outer except below just
+            # skips this cycle and get_rate() falls back to its own cached
+            # rate) - one retry is cheap and avoids most of that noise without
+            # meaningfully delaying a refresh that isn't urgent to begin with.
+            retries: int = 3 if force else 1
             # Reload async markets, then assign them to sync api
             _t0 = _t.perf_counter()
             cache_hit = is_initial and self._try_load_markets_from_cache()
