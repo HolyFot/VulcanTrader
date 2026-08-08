@@ -1243,6 +1243,7 @@ class VulcanTraderBot(LoggingMixin):
             use_public_trades = self.config.get("exchange", {}).get("use_public_trades", False)
             self._data_server_client.register(
                 _whitelist,
+                timeframes=[self.strategy.timeframe],
                 want_funding_rate=(self.trading_mode == TradingMode.FUTURES),
                 want_trades=use_public_trades,
             )

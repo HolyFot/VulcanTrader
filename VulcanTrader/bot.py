@@ -1,64 +1,7 @@
 # =============================================================================
-#  VulcanBot  ::  Top-level orchestrator
-# =============================================================================
-#
-#  Purpose
-#  -------
-#  Single CLI entry-point that hosts and routes between the three runtime
-#  components of VulcanTrader:
-#
-#      * :class:`Backtesting`  (src/backtesting.py)   — historical replay
-#      * :class:`VulcanTraderBot` (src/trader_bot.py)    — live trading daemon
-#      * :class:`WebPortal`    (src/web_portal.py)    — FastAPI dashboard
-#
-#  All invocation paths funnel through this file so configuration loading,
-#  user_data layout and notification wiring stay consistent.
-#
-#  Subcommands
-#  -----------
-#      backtest        Run one or many strategies through the backtester.
-#                      Supports asyncio fan-out so several strategy/config
-#                      combinations can run concurrently.
-#      download-data   Pull OHLCV history for the configured pairs/timeframes.
-#      trade           Launch the live (or dry-run) trading bot, attaching
-#                      the web portal for monitoring and notifications.
-#      webserver       Run the web portal standalone (browse backtest
-#                      results without spinning up the trader).
-#
-#  User-data layout
-#  ----------------
-#      user_data/
-#        configs/             ← default location for *.json config files
-#        data/                ← OHLCV cache (per exchange / timeframe)
-#        strategies/          ← user strategy modules
-#        backtest_results/    ← JSON output consumed by /api/backtests
-#
-#  Config resolution
-#  -----------------
-#  Any ``--config`` value passed to a subcommand is resolved as follows:
-#      1. If the path exists as given, use it verbatim.
-#      2. Otherwise, look it up under ``<user_data>/configs/<name>``,
-#         appending ``.json`` if no extension is supplied.
-#  This mirrors the layout requested by the user (configs live in
-#  ``user_data/configs``) without forcing changes inside backtesting.py
-#  or trader_bot.py — paths are normalised before the underlying
-#  ``Configuration`` loader is invoked.
-#
-#  Examples
-#  --------
-#      python -m VulcanTrader.bot backtest -c live -s MyStrat \
-#             --timeframe 5m --timerange 20240101-20240601
-#
-#      python -m VulcanTrader.bot backtest -c live \
-#             --strategies StratA StratB StratC --jobs 3
-#
-#      python -m VulcanTrader.bot download-data -c live \
-#             --pairs BTC/USDT ETH/USDT --timeframes 1m 5m 1h \
-#             --days 90
-#
-#      python -m VulcanTrader.bot trade -c live --strategy MyStrat
-#
-#      python -m VulcanTrader.bot webserver --port 8080
+#  VulcanBot :: CLI entry point routing to Backtesting/VulcanTraderBot/WebPortal.
+#  Subcommands: backtest, download-data, trade, webserver, autostart,
+#  hyperopt, lookahead-analysis, recursive-analysis. See build_parser() below.
 # =============================================================================
 
 """CLI orchestrator (see header comment above for details)."""
@@ -78,14 +21,9 @@ from concurrent import futures
 from pathlib import Path
 from typing import Any, Sequence
 
-# On Windows both asyncio loop types emit spurious connection-error tracebacks:
-#   SelectorEventLoop  → ConnectionResetError   [WinError 10054] in _read_from_self
-#   ProactorEventLoop  → ConnectionAbortedError [WinError  1236] on shutdown
-# Neither is a real error. We keep the SelectorEventLoop (better ccxt compat)
-# and suppress both - see VulcanTrader/win_asyncio_fix.py (shared with
-# data_server.py, which needs the identical fix for the identical reason;
-# deliberately a top-level module, not under VulcanTrader/util/, so this stays
-# importable with zero third-party deps installed).
+# Windows: both asyncio loop types log spurious connection-error tracebacks on
+# shutdown that aren't real errors. Suppressed in win_asyncio_fix.py (shared
+# with data_server.py; kept top-level so it needs zero third-party deps).
 from VulcanTrader.win_asyncio_fix import apply as _apply_win_asyncio_fix
 
 _apply_win_asyncio_fix()
@@ -118,20 +56,9 @@ def _configs_system_dir(args: argparse.Namespace) -> Path:
 
 
 def _with_system_config(configs: list[str], args: argparse.Namespace) -> list[str]:
-    """Prepend the shared system-level config, if present.
-
-    api_server (host, port default, jwt_secret_key, username/password) plus
-    discord/telegram are system-wide concerns, not per-strategy ones - they
-    used to be duplicated verbatim into every config under user_data/configs,
-    which meant rotating a credential meant editing N files. Loaded first
-    here so a bot's own -c config(s), and later --port/--host CLI overrides,
-    still win if they explicitly set something (last-file-wins / CLI-wins
-    semantics unchanged).
-
-    Note: "show_terminal"/"tmux" (see config_schema.py) are deliberately
-    NOT here - those live per-bot-config instead, since different bots may
-    want different terminal-visibility behavior.
-    """
+    """Prepend the shared system-level config (api_server/discord/telegram),
+    if present, so those don't need duplicating into every bot config.
+    Loaded first so a bot's own config/CLI flags still win."""
     sys_cfg = _configs_system_dir(args) / SYSTEM_CONFIG_NAME
     if sys_cfg.is_file():
         return [str(sys_cfg), *configs]
@@ -139,13 +66,8 @@ def _with_system_config(configs: list[str], args: argparse.Namespace) -> list[st
 
 
 def _resolve_config_path(name: str, configs_dir: Path) -> str:
-    """
-    Resolve a single ``--config`` argument.
-
-    * Absolute / existing relative paths are returned unchanged.
-    * Bare names (``live`` or ``live.json``) are looked up under
-      ``user_data/configs``.
-    """
+    """Resolve one --config value: existing paths pass through unchanged;
+    bare names (``live``) are looked up under ``user_data/configs``."""
     p = Path(name)
     if p.exists():
         return str(p)
@@ -243,54 +165,29 @@ def _load_configuration(args_dict: dict[str, Any], runmode: Any) -> dict[str, An
 # ---------------------------------------------------------------------------
 
 def _run_backtest_sync(args_dict: dict[str, Any]) -> dict[str, Any]:
-    """
-    Run one Backtesting().start() to completion in the calling process.
-
-    Module-level rather than a closure so it can also be dispatched to a
-    spawned worker process (a closure is not picklable).
-    """
+    """Run one Backtesting().start() to completion. Module-level (not a
+    closure) so it's picklable for a worker process."""
     from VulcanTrader.backtesting import Backtesting  # type: ignore
     from VulcanTrader.enums import RunMode  # type: ignore
 
     config = _load_configuration(args_dict, RunMode.BACKTEST)
-    # Backtest must ignore a config file's own "strategy" field (see
-    # config_schema.py's "strategy" entry) - Configuration otherwise
-    # inherits it whenever -s/--strategies wasn't passed, which would
-    # silently pin every backtest against this config to one strategy
-    # and defeat the multi-strategy fan-out in _cmd_backtest_async.
-    # args_dict["strategy"] (possibly absent/None) is the only
-    # authoritative source here.
+    # Override the config file's own "strategy" so -s/--strategies fan-out
+    # (multiple strategies against one config) isn't pinned to whatever the
+    # config happened to say.
     config["strategy"] = args_dict.get("strategy")
     if args_dict.get("engine"):
         config["engine"] = args_dict["engine"]
     bt = Backtesting(config)
     bt.start()
-    # Deliberately does NOT return bt.results: nothing consumes it (the caller
-    # only checks for failure, and the run has already written its own result
-    # JSON and printed its own summary), and it would otherwise have to be
-    # pickled back from a worker process.
+    # No bt.results here: nothing consumes it, and it'd need pickling back
+    # from a worker process for nothing.
     return {"strategies": [s.get_strategy_name() for s in bt.strategylist]}
 
 
 def _backtest_worker(payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    Process-pool entry point for one backtest.
-
-    A backtest keeps its per-run state in PROCESS-GLOBAL containers, not on the
-    Backtesting instance: LocalTrade.bt_trades / bt_trades_open /
-    bt_trades_open_pp / bt_open_open_trade_count / bt_total_profit
-    (persistence/trade_model.py), plus PairLocks and CustomDataWrapper. And
-    Backtesting.reset_backtest() clears all of them at the start of every run.
-    Two backtests sharing one interpreter therefore scribble over each other's
-    open-trade ledger - producing silently wrong trade counts and P&L, and
-    eventually "ValueError: list.remove(x): x not in list" out of
-    LocalTrade.close_bt_trade when one run retires a trade the other already
-    removed. Concurrency has to come from separate processes, so each run gets
-    its own copy of that state.
-
-    The worker sets up its own logging: it is a fresh interpreter that never
-    ran main().
-    """
+    """Process-pool entry point for one backtest. Needs a separate process
+    (not a thread) because backtest state lives in process-global containers
+    (LocalTrade.bt_trades etc.) that two concurrent runs would corrupt."""
     _setup_logging(int(payload.get("verbose") or 0), payload.get("logfile"))
     return _run_backtest_sync(payload["args"])
 
@@ -301,15 +198,9 @@ async def _run_one_backtest(
     verbose: int = 0,
     logfile: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Run a single backtest.
-
-    Without an ``executor`` the run happens in a worker thread of this process,
-    which is safe because nothing else is running concurrently. When several
-    backtests are in flight they are dispatched to ``executor`` (a process
-    pool) instead - see :func:`_backtest_worker` for why threads cannot be used
-    for that.
-    """
+    """Run a single backtest: a plain thread if no ``executor`` is given
+    (nothing else running concurrently), else dispatched to the process
+    pool (see _backtest_worker for why threads can't be used there)."""
     if executor is None:
         return await asyncio.to_thread(_run_backtest_sync, args_dict)
 
@@ -446,13 +337,7 @@ def cmd_download_data(args: argparse.Namespace) -> int:
 
 def _attach_portal(bot: Any, portal: Any) -> None:
     """Wire WebPortal into VulcanTraderBot in place of the ``_emit`` stub.
-
-    Must still call the bot's own ``_dispatch_discord`` - it's a separate
-    method (untouched by this monkey-patch), not part of the stub being
-    replaced, and it's the only thing that forwards trade lifecycle events
-    to the Discord webhook. Forgetting it here silently kills Discord
-    notifications entirely, since attaching a portal is the default path.
-    """
+    Must still call bot._dispatch_discord, or Discord notifications die."""
     bot.portal = portal
 
     def _emit(msg: dict) -> None:
@@ -469,11 +354,8 @@ def _attach_portal(bot: Any, portal: Any) -> None:
 
 
 def _fleet_stagger_s(config: dict, timeframe_s: float) -> float:
-    """Deterministic per-bot delay (0..timeframe_s) used to spread this bot's
-    direct-exchange calls apart from the rest of a fleet launched together.
-    Hash of this bot's own name/db_url (not random), so the offset is stable
-    across restarts and every fleet member spreads out independently without
-    needing to know how many other bots exist or coordinate with them."""
+    """Deterministic per-bot delay (0..timeframe_s), hashed from the bot's
+    name/db_url, so a fleet's exchange calls don't all land at once."""
     stagger_key = str(config.get("bot_name") or config.get("db_url") or "")
     return (
         int(hashlib.sha256(stagger_key.encode()).hexdigest(), 16) % 1000
@@ -495,24 +377,12 @@ def _stagger_wait(
 def run_bot_lifecycle(
     config: dict[str, Any], stop_event: threading.Event, *, no_web: bool = False
 ) -> None:
-    """Construct a VulcanTraderBot from ``config``, attach a WebPortal
-    (unless ``no_web``), and run its trade loop until ``stop_event`` is set
-    - by a signal handler, a cross-process stop-file, or an in-process
-    caller (see ``launch_bot_in_process``). This is the one shared bot
-    lifecycle: identical whether it's the only thing running in this OS
-    process (``cmd_trade``, one bot per process - today's default) or one
-    of several sharing a process (``single_process_mode`` - see
-    ``launch_bot_in_process`` below). The only difference between those two
-    callers is how the process/thread that owns ``stop_event`` decides to
-    set it; everything from persistence isolation (see
-    persistence/base.py's PersistenceContext) to cleanup happens the same
-    way either way.
+    """Build a bot from ``config``, attach a WebPortal (unless ``no_web``),
+    and run its trade loop until ``stop_event`` is set. Shared by both
+    one-bot-per-process and ``single_process_mode``.
 
-    IMPORTANT: must run on a thread that either calls ``init_db()`` itself
-    (which ``VulcanTraderBot.__init__`` does) or was started via
-    ``util/ctx_thread.py::start_thread_with_context`` from one that already
-    has - a plain new thread has no persistence context bound and every
-    Trade/Order/PairLock call would raise.
+    Must run on a thread with a persistence context bound (either it calls
+    ``init_db()`` itself, or was started via ``start_thread_with_context``).
     """
     from VulcanTrader.trader_bot import VulcanTraderBot  # type: ignore
     from VulcanTrader.web_portal import WebPortal  # type: ignore
@@ -521,10 +391,9 @@ def run_bot_lifecycle(
     from VulcanTrader.persistence.models import release_writer_lock
 
     def _cleanup(bot: Any, portal: Any) -> None:
-        """bot.cleanup() + portal.cleanup(), then release this bot's OS
-        writer lock - see release_writer_lock's docstring for why that last
-        step matters under single_process_mode specifically (a plain
-        subprocess-per-bot process exit would release it for free)."""
+        """bot.cleanup() + portal.cleanup(), then release the OS writer
+        lock (a plain process exit would do this for free; a shared
+        single_process_mode thread needs it done explicitly)."""
         try:
             bot.cleanup()
         finally:
@@ -534,14 +403,9 @@ def run_bot_lifecycle(
             finally:
                 release_writer_lock()
 
-    # Cross-process stop requests: the web portal (or anything else) creates
-    # ``<db>.json.stop`` next to the persistence file; the loop below notices
-    # within one cycle and shuts down exactly like a local Ctrl+C.
-    #
-    # Cross-process force-exit requests use the same pattern: ``<db>.json.forceexit``
-    # holds a JSON list of pair strings, written by the multi-bot Discord
-    # controller (or web portal) for a bot it isn't attached to in-process -
-    # see web_portal.py's ``_request_account_force_exit``.
+    # Cross-process control files next to the persistence file: "<db>.json.stop"
+    # triggers a graceful shutdown; "<db>.json.forceexit" holds a JSON list of
+    # pairs to force-exit. Written by the web portal/Discord controller.
     stop_file: Path | None = None
     forceexit_file: Path | None = None
     try:
@@ -562,12 +426,9 @@ def run_bot_lifecycle(
         stop_file = None
         forceexit_file = None
 
-    # Started early (before the bot even exists) so a dashboard/Discord Stop
-    # can interrupt a bot that's stuck retrying initialisation below, not
-    # just a local Ctrl+C. ``bot`` is captured by the closures via late
-    # binding - it's still None until construction below succeeds. Both
-    # watchers run via start_thread_with_context since they're spawned from
-    # this (the bot's own) thread and the forceexit watcher touches trades.
+    # Started early so a dashboard/Discord Stop can interrupt a bot stuck
+    # retrying init below, not just local Ctrl+C. `bot` is late-bound (still
+    # None here) via closure.
     bot = None
     if stop_file is not None:
         def _stop_file_watcher(sf: Path = stop_file) -> None:
@@ -601,17 +462,9 @@ def run_bot_lifecycle(
 
         start_thread_with_context(_forceexit_file_watcher, name="ForceExitFileWatcher", daemon=True)
 
-    # Per-phase timing so slow startups are easy to diagnose. Initialisation
-    # (exchange market loading, initial balance/position fetch) can hit
-    # transient errors - rate limits, a temporary 5xx/451 from the exchange,
-    # a network blip - that have nothing to do with the strategy itself. A
-    # fleet bot dying on one of these means a silent, permanently-stopped bot
-    # until someone notices and restarts it by hand, so instead of letting
-    # the exception escape and kill the process, log it and keep retrying
-    # here: the console window/tmux pane/dashboard/Discord all stay live and
-    # show the error, and the bot comes up on its own once the issue clears.
-    # A stop request (Ctrl+C, or a stop file once bots are running elsewhere)
-    # still breaks out of the retry loop instead of retrying forever.
+    # Retry init on failure instead of letting the process die - a transient
+    # exchange error (rate limit, 5xx, network blip) shouldn't permanently
+    # kill a fleet bot. A stop request still breaks the retry loop.
     logger.info("[trade] initialising bot ...")
     t0 = time.perf_counter()
     init_retry_s = 30.0
@@ -637,31 +490,16 @@ def run_bot_lifecycle(
         portal.start(blocking=False)
         logger.info("[trade] web portal started in %.2fs", time.perf_counter() - t1)
 
-    # The interactive Discord (!) command client runs from `cmd_webserver()`
-    # instead of here - it's a control-plane concern belonging to the one
-    # persistent orchestrating process, not something tied to any individual
-    # trade subprocess's lifecycle (see "Multi-bot fleet control" in
-    # AGENTS.md). This process's trade events still reach Discord via the
-    # webhook (util/discord_logger.py, through _dispatch_discord below) -
-    # that part needs no interactive client at all.
+    # Interactive Discord (!) commands run from cmd_webserver(), not here -
+    # that's a fleet-wide control-plane concern. Webhook notifications from
+    # this bot still work fine without it (see _dispatch_discord).
 
     timeframe_s = max(1.0, float(config.get("internals", {}).get("process_throttle_secs", 5)))
     fleet_stagger_s = _fleet_stagger_s(config, timeframe_s)
 
-    # bot.startup() (below) runs update_all_liquidation_prices(),
-    # update_funding_fees(), and startup_update_open_orders() - each a DIRECT
-    # exchange call, bypassing data_server entirely (it only serves OHLCV/
-    # funding-rate/trades/on-demand tickers, not liquidation-price or
-    # funding-fee bookkeeping). _launch_autostart_configs starts every fleet
-    # bot within the same second, so without this wait all N bots' startup()
-    # calls landed in the same ~1-3s window - confirmed live as a 429 storm
-    # that caused several "Unable to exit/create trade" failures right at
-    # fleet launch (open positions briefly un-exitable). The existing stagger
-    # further down only delayed the recurring trade-loop cycle, which starts
-    # AFTER startup() - it never covered this one-time burst. Same
-    # deterministic offset as that one (this bot's own hash), just applied
-    # earlier too, so the one-time startup burst and the recurring per-cycle
-    # bursts are both spread out.
+    # bot.startup() below makes direct exchange calls (liquidation prices,
+    # funding fees, open orders - bypassing data_server). Fleet bots all
+    # start within the same second, so stagger this too or it's a 429 storm.
     _stagger_wait(stop_event, fleet_stagger_s, what="startup")
 
     t2 = time.perf_counter()
@@ -690,14 +528,8 @@ def run_bot_lifecycle(
         pass
 
     try:
-        # Stagger this bot's cycle start within the throttle window so a fleet of
-        # several bots launched together don't keep hitting the exchange in
-        # lockstep forever after: every bot.process() call can fire its own direct
-        # exchange requests OHLCV/data_server intentionally avoids sharing (ticker
-        # fetches for entry/exit pricing - see Exchange.get_rate - market reloads,
-        # etc.), so N bots on the same 5s period means N-way simultaneous bursts
-        # every single cycle, not just at startup (that one-time burst is now
-        # covered separately, above, before bot.startup()).
+        # Same stagger as above, but for the recurring per-cycle direct calls
+        # (ticker fetches etc.) bot.process() makes every cycle, not just startup.
         _stagger_wait(stop_event, fleet_stagger_s, what="initial cycle")
 
         logger.info("[trade] trade loop active — cycle every %.0fs", timeframe_s)
@@ -770,18 +602,9 @@ def cmd_trade(args: argparse.Namespace) -> int:
             # Not in main thread / unsupported platform
             pass
 
-    # Windows only: clicking the X on this bot's own console window (the
-    # normal way to "close" a show_terminal:true bot) sends CTRL_CLOSE_EVENT,
-    # NOT SIGINT/SIGTERM - Python's signal module never sees it, so the
-    # handlers above never fire and cleanup() never runs. Without a real
-    # console-control handler, Windows force-kills the process a few seconds
-    # later regardless, permanently leaving is_running=1 in the account JSON
-    # (cleanup() is what flips it back to 0) - which is exactly what makes a
-    # deliberately-closed bot show up as "crashed" the next time the
-    # dashboard scans it, forever, until someone edits the file by hand.
-    # Registering this gives the same graceful stop_event.set() path a
-    # chance to run bot.cleanup() during the OS's few-second grace period
-    # before it kills the process outright.
+    # Windows only: closing the console window (X button) sends
+    # CTRL_CLOSE_EVENT, not SIGINT - the handlers above never fire, so
+    # cleanup() never runs and the bot shows as "crashed" forever after.
     if sys.platform == "win32":
         try:
             import ctypes
@@ -798,11 +621,8 @@ def cmd_trade(args: argparse.Namespace) -> int:
                     return True
                 return False
 
-            # ctypes keeps no reference of its own to the wrapped callback -
-            # it must stay alive as a local in this still-running function's
-            # frame for as long as the process runs, or the CFUNCTYPE object
-            # can be garbage-collected out from under a live OS callback
-            # pointer.
+            # Must stay referenced for the process lifetime, or ctypes can
+            # GC this callback out from under a live OS callback pointer.
             _console_handler_ref = _HANDLER_TYPE(_console_ctrl_handler)
             if not ctypes.windll.kernel32.SetConsoleCtrlHandler(_console_handler_ref, True):
                 logger.debug("SetConsoleCtrlHandler registration returned false")
@@ -817,16 +637,9 @@ def cmd_trade(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-#  single_process_mode: in-process bot launcher
-#
-#  The single_process_mode equivalent of util/proc_launch.py::launch_detached()
-#  - runs a bot's full lifecycle (run_bot_lifecycle) as a daemon thread in
-#  THIS process instead of spawning `python -m VulcanTrader.bot trade` as a
-#  separate OS process. Used by _launch_autostart_configs() below and by
-#  web_portal.py's config-manager Start button when single_process_mode is
-#  true (see config_schema.py). Each launched bot's persistence stays
-#  isolated via persistence/base.py's contextvar-scoped PersistenceContext -
-#  see run_bot_lifecycle's docstring.
+#  single_process_mode: in-process bot launcher. Runs a bot's lifecycle as a
+#  daemon thread here instead of a separate OS process. Persistence stays
+#  isolated per bot via persistence/base.py's contextvar-scoped context.
 # ---------------------------------------------------------------------------
 
 _IN_PROCESS_BOTS: dict[str, dict[str, Any]] = {}  # account_name -> {"stop_event", "thread"}
@@ -834,10 +647,8 @@ _IN_PROCESS_LOCK = threading.Lock()
 
 
 def _read_single_process_mode(user_data_dir: Path) -> bool:
-    """Cheap raw read of configs_system/system.json's single_process_mode -
-    same lightweight-scan style as _scan_autostart_configs() (deliberately
-    not the full Configuration loader, since this may run on every fleet
-    scan)."""
+    """Cheap raw read of system.json's single_process_mode - not the full
+    Configuration loader, since this may run on every fleet scan."""
     sys_cfg = user_data_dir / DEFAULT_SYSTEM_CONFIG_SUBDIR / SYSTEM_CONFIG_NAME
     if not sys_cfg.is_file():
         return False
@@ -851,14 +662,9 @@ def _read_single_process_mode(user_data_dir: Path) -> bool:
 def launch_bot_in_process(
     spec: dict[str, Any], user_data_dir: Path, port: int | None = None, *, no_web: bool = False
 ) -> dict[str, Any]:
-    """Resolve ``spec`` (same shape _scan_autostart_configs() produces -
-    config_name/strategy/dry_run/bot_name) into a full bot config exactly
-    like `trade` would (config file(s) + system.json + strategy/dry-run/
-    db-url/port/bot-name overrides), then run its lifecycle as a daemon
-    thread in THIS process. Everything downstream - persistence file/lock,
-    stop/forceexit files, heartbeat, its own portal on its own port -
-    behaves identically to the subprocess path launch_detached() takes;
-    only the OS-process boundary is gone."""
+    """Resolve `spec` into a full bot config (same as `trade` would) and
+    run its lifecycle as a daemon thread here instead of a subprocess -
+    everything else (persistence, stop files, its own portal) is identical."""
     from argparse import Namespace
     from VulcanTrader.enums import RunMode  # type: ignore
 
@@ -910,9 +716,8 @@ def launch_bot_in_process(
 
 
 def stop_in_process_bot(account_name: str) -> bool:
-    """Instant stop for an in-process bot (vs. the ~2s stop-file poll used
-    for subprocess-spawned bots). Returns False if no in-process bot is
-    registered under this account name in THIS process."""
+    """Instant stop for an in-process bot. Returns False if none is
+    registered under this account name in this process."""
     with _IN_PROCESS_LOCK:
         handle = _IN_PROCESS_BOTS.get(account_name)
     if handle is None:
@@ -922,26 +727,18 @@ def stop_in_process_bot(account_name: str) -> bool:
 
 
 def in_process_bot_running(account_name: str) -> bool | None:
-    """True/False if this account was launched in-process in THIS process,
-    else None (unknown - subprocess-spawned, or never launched here at
-    all). Preferred over WebPortal._probe_db_lock for in-process accounts:
-    fcntl advisory locks (persistence/models.py) are scoped per-PROCESS on
-    POSIX, not per-file-handle, so a lock probe issued from the very
-    process that already holds the lock always reports "free" there - the
-    probe only reliably detects OTHER processes. (Windows' msvcrt locking
-    is per-handle and doesn't have this gap, but this keeps behavior
-    uniform across platforms.)"""
+    """True/False if launched in-process here, else None (unknown). Use
+    this over a lock probe for in-process accounts - POSIX fcntl locks are
+    per-process, so a probe from the lock-holder itself always reports free."""
     with _IN_PROCESS_LOCK:
         handle = _IN_PROCESS_BOTS.get(account_name)
     return None if handle is None else handle["thread"].is_alive()
 
 
 def stop_all_in_process_bots() -> None:
-    """Best-effort fleet-wide shutdown hook: set every in-process bot's
-    stop_event so its own thread runs its normal cleanup path. Wired into
-    WebPortal's Ctrl+C handler (see cmd_webserver's on_shutdown=) - a plain
-    SIGINT only stops the portal's own uvicorn server by default, it has no
-    idea any bot threads exist."""
+    """Fleet-wide shutdown hook: sets every in-process bot's stop_event.
+    Wired into WebPortal's Ctrl+C handler, since a plain SIGINT only
+    stops uvicorn and doesn't know any bot threads exist."""
     with _IN_PROCESS_LOCK:
         handles = list(_IN_PROCESS_BOTS.values())
     for h in handles:
@@ -1013,6 +810,18 @@ def cmd_recursive_analysis(args: argparse.Namespace) -> int:
 def cmd_webserver(args: argparse.Namespace) -> int:
     from VulcanTrader.web_portal import WebPortal  # type: ignore
     from VulcanTrader.enums import RunMode  # type: ignore
+
+    # Import eagerly, here, before _launch_autostart_configs() below spawns
+    # dozens of bot threads that immediately start importing their own heavy
+    # deps (pandas, ccxt exchange classes, strategy modules) concurrently.
+    # portal.start() only imports uvicorn lazily on first call, which would
+    # otherwise race that thread storm for Python's import lock - observed
+    # in practice as a spurious "ModuleNotFoundError: No module named
+    # 'multiprocessing'" (a stdlib module, so not actually missing - transient
+    # import-machinery contention) coming out of uvicorn's own multiprocessing
+    # import. Caching it in sys.modules now, single-threaded, sidesteps that
+    # race entirely.
+    import uvicorn  # noqa: F401
 
     config: dict[str, Any] = {}
     if args.config:
@@ -1104,12 +913,9 @@ def cmd_webserver(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _scan_autostart_configs(user_data_dir: Path) -> list[dict[str, Any]]:
-    """Read every ``*.json`` under ``<user_data_dir>/configs`` and return a
-    launch spec for each one with ``auto_start: true`` and ``is_bot`` not
-    explicitly false (see config_schema.py's ``strategy``/``auto_start``/
-    ``is_bot`` entries). A raw JSON read, not the full Configuration pipeline -
-    this only needs a few top-level fields and must stay cheap since it may
-    scan many config files."""
+    """Return a launch spec for each config with auto_start:true and
+    is_bot not false. Raw JSON read, not the full Configuration pipeline -
+    stays cheap since it may scan many files."""
     cfg_dir = user_data_dir / "configs"
     specs: list[dict[str, Any]] = []
     if not cfg_dir.is_dir():
@@ -1149,36 +955,10 @@ def _scan_autostart_configs(user_data_dir: Path) -> list[dict[str, Any]]:
 
 
 def _launch_autostart_configs(user_data_dir: Path) -> int:
-    """Scan every config for ``auto_start: true`` and launch each as its own
-    detached ``trade`` subprocess. Returns how many were launched.
-
-    Fire-and-forget: launches the fleet and returns immediately. Each bot
-    then runs as an independent process, observable/controllable the same
-    way as any manually-launched ``trade`` instance (stop-file, the web
-    portal's multi-bot account scan, the multi-bot Discord commands).
-
-    ``db_url`` is always derived as
-    ``user_data/accounts/<config-name>_<dry_run|live>.json`` - keyed by the
-    config's own filename (unique by construction), not its ``strategy``
-    (two configs could share one) - matching the web portal's config-manager
-    ``_start_config_bot``. A config's own db_url is ignored here since a
-    persistence account is inherently per-bot-instance, never something
-    meaningfully shared across configs.
-    ``api_server.listen_port`` is honoured when set and not already claimed
-    by an earlier auto_start config in this same scan; otherwise the next
-    free port from 8080 is assigned instead of colliding.
-
-    Shared by both ``bot.py autostart`` (standalone CLI use) and
-    ``cmd_webserver()`` (so starting the fleet-control process itself brings
-    up every auto_start:true config, instead of requiring a separate manual
-    ``autostart`` invocation every time - see ``--no-autostart``).
-
-    When ``configs_system/system.json``'s ``single_process_mode`` is true
-    (see config_schema.py), each spec is launched via
-    ``launch_bot_in_process()`` instead - a thread in THIS process rather
-    than a ``trade`` subprocess. Everything else (port picking, the
-    already-running guard, db_url derivation) is identical either way.
-    """
+    """Scan every config for auto_start:true and launch each (as a
+    subprocess, or in-process if single_process_mode is on). Returns how
+    many were launched. db_url is always derived from the config's own
+    filename; api_server.listen_port is honoured if free, else next open port."""
     from VulcanTrader.util.proc_launch import launch_detached
 
     specs = _scan_autostart_configs(user_data_dir)
@@ -1202,14 +982,9 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
     used_ports: set[int] = set()
     launched = 0
     for spec in specs:
-        # An actual bind-probe, not just "not already picked in this batch" -
-        # since `cmd_webserver()` now calls this too (see --no-autostart),
-        # naive same-batch-only avoidance let every auto_start config without
-        # an explicit unique api_server.listen_port try to grab 8080, the
-        # same port the calling webserver itself is usually already bound to
-        # (confirmed directly: that collision is exactly what happened before
-        # this fix - the launched bot's own dashboard failed to bind while
-        # the trade loop itself kept running regardless).
+        # Real bind-probe, not just "not picked yet in this batch" - otherwise
+        # every config without an explicit port tries to grab 8080, which
+        # collides with the calling webserver's own port.
         port = spec["port"]
         while port in used_ports or not _port_is_free(port):
             port += 1
@@ -1218,20 +993,11 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
         mode = "dry_run" if spec["dry_run"] else "live"
         db_url = f"json:///user_data/accounts/{spec['config_name']}_{mode}.json"
 
-        # Skip configs whose bot is already running - without this, every
-        # `cmd_webserver()` restart (or a stray second `bot.py autostart`)
-        # while an earlier auto_start subprocess is still alive spawns a
-        # SECOND trader_bot.py against the same persistence account: two
-        # processes fighting over the same account lock/db file, duplicate
-        # trades, and a port collision on top. Same lock-probe web_portal.py
-        # already uses for its own live-bot scan/Start-button guard
-        # (`_probe_db_lock`) - reused here (via a lazy import to avoid a
-        # module-load-time circular import with web_portal.py) rather than
-        # reimplemented, since Windows vs POSIX file-locking differs.
+        # Skip configs whose bot is already running, or a restart/second
+        # autostart spawns a duplicate process fighting over the same
+        # account lock. In-process check first (lock probe isn't reliable
+        # for that case on POSIX - see in_process_bot_running).
         account_name = f"{spec['config_name']}_{mode}"
-        # Checked first: authoritative for a bot THIS process itself already
-        # launched in-process (see in_process_bot_running's docstring for
-        # why the lock-probe below can't be trusted for that case on POSIX).
         already_running = bool(in_process_bot_running(account_name))
         if not already_running:
             try:
@@ -1249,7 +1015,14 @@ def _launch_autostart_configs(user_data_dir: Path) -> int:
             continue
 
         if single_process_mode:
-            launch_bot_in_process(spec, user_data_dir, port)
+            # Fleet bots are controlled entirely through account-file scanning
+            # and stop-files (see web_portal.py's _scan_live_bots /
+            # _request_account_stop) - nothing ever calls a bot's own port.
+            # Each one spinning up its own WebPortal/uvicorn instance is pure
+            # overhead (42 redundant servers) and was never needed; see the
+            # single "attached" bot's own launch at web_portal.py's
+            # api_start(), which already passes no_web=True for this reason.
+            launch_bot_in_process(spec, user_data_dir, port, no_web=True)
         else:
             cmd = [
                 sys.executable, "-m", "VulcanTrader.bot", "trade",
@@ -1531,18 +1304,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     for sub in ("configs", "data", "strategies", "backtest_results", "logs"):
         (ud / sub).mkdir(parents=True, exist_ok=True)
 
-    # No default --logfile here (previously forced every subcommand onto one
-    # fixed, ever-appended user_data/logs/bot.log - confirmed live: a single
-    # 350MB/3.9M-line file, since EVERY bot process, the webserver, and every
-    # autostart/backtest/etc invocation all shared it with no rotation and no
-    # per-run separation). VulcanTrader.util.logger.setup() (called below via
-    # _setup_logging) already gives every process its own freshly-timestamped,
-    # size-capped, rotating file under user_data/logs/ - that's the log,
-    # full stop. --logfile remains available as an explicit opt-in for a
-    # caller that genuinely wants an additional fixed path (e.g. an external
-    # tailer expecting one); it's just no longer defaulted for every run. The
-    # web portal's viewer-mode log tail (web_portal.py) now finds the most
-    # recently written of those timestamped files instead of a fixed name.
+    # No default --logfile: every process already gets its own timestamped,
+    # rotating log file under user_data/logs/ (see _setup_logging). --logfile
+    # is opt-in only, for a caller that wants one extra fixed path.
     _setup_logging(args.verbose, getattr(args, "logfile", None))
 
     try:

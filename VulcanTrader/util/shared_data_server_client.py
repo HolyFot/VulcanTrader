@@ -65,9 +65,12 @@ class BotDataServerHandle:
         self.on_trades_push: Callable[[str, "DataFrame"], None] | None = None
 
     def register(
-        self, pairs: list[str], *, want_funding_rate: bool = False, want_trades: bool = False
+        self, pairs: list[str], *, timeframes: list[str] | None = None,
+        want_funding_rate: bool = False, want_trades: bool = False,
     ) -> None:
-        self._shared._update_subscriber(self._bot_id, pairs, want_funding_rate, want_trades, self)
+        self._shared._update_subscriber(
+            self._bot_id, pairs, timeframes or [], want_funding_rate, want_trades, self
+        )
 
     def stop(self) -> None:
         # Goes through the module-level registry function (not
@@ -105,8 +108,11 @@ class SharedDataServerClient:
 
         self._key: tuple[str, int, str] = (host, port, exchange_name)
         self._lock = threading.Lock()
-        # bot_id -> (pairs, want_funding_rate, want_trades, handle)
-        self._subscribers: dict[str, tuple[list[str], bool, bool, BotDataServerHandle]] = {}
+        # bot_id -> (pairs, timeframes, want_funding_rate, want_trades, handle). Each
+        # in-process bot contributes its own strategy timeframe here, unioned below -
+        # a fleet mixing strategy timeframes must not collapse to whichever bot
+        # happened to register (and so launch the master) first.
+        self._subscribers: dict[str, tuple[list[str], list[str], bool, bool, BotDataServerHandle]] = {}
         client_id = f"shared-{exchange_name}-{os.getpid()}"
         self._client: "DataServerClient" = DataServerClient(host, port, exchange_name, client_id)
         self._client.on_ohlcv_push = self._dispatch_ohlcv
@@ -124,22 +130,25 @@ class SharedDataServerClient:
     def _reregister_locked(self) -> None:
         """Caller must hold self._lock."""
         pairs: set[str] = set()
+        timeframes: set[str] = set()
         want_funding_rate = False
         want_trades = False
-        for p, wf, wt, _handle in self._subscribers.values():
+        for p, tf, wf, wt, _handle in self._subscribers.values():
             pairs.update(p)
+            timeframes.update(tf)
             want_funding_rate = want_funding_rate or wf
             want_trades = want_trades or wt
         self._client.register(
-            sorted(pairs), want_funding_rate=want_funding_rate, want_trades=want_trades
+            sorted(pairs), timeframes=sorted(timeframes),
+            want_funding_rate=want_funding_rate, want_trades=want_trades,
         )
 
     def _update_subscriber(
-        self, bot_id: str, pairs: list[str], want_funding_rate: bool, want_trades: bool,
-        handle: BotDataServerHandle,
+        self, bot_id: str, pairs: list[str], timeframes: list[str],
+        want_funding_rate: bool, want_trades: bool, handle: BotDataServerHandle,
     ) -> None:
         with self._lock:
-            self._subscribers[bot_id] = (list(pairs), want_funding_rate, want_trades, handle)
+            self._subscribers[bot_id] = (list(pairs), list(timeframes), want_funding_rate, want_trades, handle)
             self._reregister_locked()
 
     def _remove_subscriber(self, bot_id: str) -> bool:
@@ -154,21 +163,21 @@ class SharedDataServerClient:
 
     def _dispatch_ohlcv(self, pair: str, timeframe: str, candle_type: str, df: "DataFrame") -> None:
         with self._lock:
-            targets = [h for p, _wf, _wt, h in self._subscribers.values() if pair in p]
+            targets = [h for p, _tf, _wf, _wt, h in self._subscribers.values() if pair in p]
         for h in targets:
             if h.on_ohlcv_push is not None:
                 h.on_ohlcv_push(pair, timeframe, candle_type, df)
 
     def _dispatch_funding_rate(self, pair: str, payload: dict) -> None:
         with self._lock:
-            targets = [h for p, _wf, _wt, h in self._subscribers.values() if pair in p]
+            targets = [h for p, _tf, _wf, _wt, h in self._subscribers.values() if pair in p]
         for h in targets:
             if h.on_funding_rate_push is not None:
                 h.on_funding_rate_push(pair, payload)
 
     def _dispatch_trades(self, pair: str, df: "DataFrame") -> None:
         with self._lock:
-            targets = [h for p, _wf, _wt, h in self._subscribers.values() if pair in p]
+            targets = [h for p, _tf, _wf, _wt, h in self._subscribers.values() if pair in p]
         for h in targets:
             if h.on_trades_push is not None:
                 h.on_trades_push(pair, df)

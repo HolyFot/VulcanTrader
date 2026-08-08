@@ -427,6 +427,13 @@ def main() -> int:
             cfg["db_url"] = f"json:user_data/accounts/trades-{name}.json"
         if "bot_name" in cfg:
             cfg["bot_name"] = name
+        # Never inherit auto_start from the base config - this is a
+        # pair-discovery/backtest artifact, not a decision to deploy the
+        # strategy live. bot.py's fleet launcher autostarts anything with
+        # auto_start:true under user_data/configs, so leaving this on has
+        # previously caused every discovered strategy (including broken
+        # ones) to go live unintentionally on the next fleet restart.
+        cfg["auto_start"] = False
         cfg_path = CONFIGS_DIR / f"configBot{name}.json"
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)

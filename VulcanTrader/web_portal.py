@@ -2477,7 +2477,10 @@ class WebPortal:
                 "dry_run": dry_run, "bot_name": bot_name,
             }
             try:
-                launch_bot_in_process(spec, self._user_data_dir(), port)
+                # See bot.py's _launch_autostart_configs for why fleet bots
+                # skip their own WebPortal - this dashboard controls them
+                # entirely through account-file scanning and stop-files.
+                launch_bot_in_process(spec, self._user_data_dir(), port, no_web=True)
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Could not launch bot: {exc}") from exc
             logger.info(

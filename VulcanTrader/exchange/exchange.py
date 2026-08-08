@@ -116,6 +116,16 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Per-cache-path locks guarding the network fetch in Exchange.reload_markets().
+# single_process_mode can launch dozens of bots on the same exchange within the
+# same second (see bot.py's autostart loop) - every one of them independently
+# loses the markets-cache freshness race on a cold/stale cache and, without this,
+# would hammer the exchange with a simultaneous load_markets() call, tripping its
+# rate limiter (429/DDosProtection). Keyed by cache path so different exchanges
+# (or trading modes) never block each other.
+_markets_reload_locks: dict[Any, Lock] = {}
+_markets_reload_locks_guard = Lock()
+
 
 class Exchange:
     # Parameters to add directly to buy/sell calls (like agreeing to trading agreement)
@@ -834,6 +844,17 @@ class Exchange:
             logger.warning("Markets cache unusable as fallback (%s).", exc)
             return False
 
+    def _markets_reload_lock(self) -> Lock:
+        """Lock shared by every Exchange instance pointed at the same cache
+        path (same exchange + trading mode) - see _markets_reload_locks."""
+        path = self._markets_cache_path()
+        with _markets_reload_locks_guard:
+            lock = _markets_reload_locks.get(path)
+            if lock is None:
+                lock = Lock()
+                _markets_reload_locks[path] = lock
+        return lock
+
     def _save_markets_cache(self) -> None:
         import pickle
         try:
@@ -877,8 +898,20 @@ class Exchange:
             _t0 = _t.perf_counter()
             cache_hit = is_initial and self._try_load_markets_from_cache()
             if not cache_hit:
-                retrier(self._load_async_markets, retries=retries)(reload=True)
-                logger.warning("[reload_markets] ccxt load_markets took %.2fs", _t.perf_counter() - _t0)
+                with self._markets_reload_lock():
+                    # Re-check: another Exchange instance sharing this cache path
+                    # may have won the race and refreshed it while we waited for
+                    # the lock - reuse that instead of also hitting the network.
+                    cache_hit = is_initial and self._try_load_markets_from_cache()
+                    if not cache_hit:
+                        retrier(self._load_async_markets, retries=retries)(reload=True)
+                        logger.warning(
+                            "[reload_markets] ccxt load_markets took %.2fs", _t.perf_counter() - _t0
+                        )
+                        # Written before releasing the lock, so any bot that was
+                        # waiting on it sees a fresh cache and skips the network
+                        # entirely instead of also racing the exchange.
+                        self._save_markets_cache()
             self._markets = self._api_async.markets
             if not cache_hit:
                 self._api.set_markets_from_exchange(self._api_async)
@@ -891,8 +924,6 @@ class Exchange:
                     self._ws_async.set_markets_from_exchange(self._api_async)
                 self._ws_async.options = self._api.options
             self._last_markets_refresh = dt_ts()
-            if not cache_hit:
-                self._save_markets_cache()
 
             if is_initial and self.trader_has["needs_trading_fees"]:
                 _t0 = _t.perf_counter()

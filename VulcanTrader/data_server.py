@@ -459,6 +459,55 @@ class DataCollector:
         # pairlist before their first real collect_once() happens.
         self._wake_event.set()
 
+    def set_timeframes(self, timeframes: list[str]) -> None:
+        """Replace the set of timeframes this collector actively refreshes,
+        mirroring set_pairs()'s dynamic-union pattern. Exists because a fleet
+        of trading-bot clients isn't guaranteed to share one strategy
+        timeframe - a master launched via the first-connecting client's own
+        `--timeframes` arg (see ensure_master_running) previously stayed
+        pinned to THAT ONE timeframe for its entire life, silently starving
+        every other client whose strategy used a different timeframe (e.g. a
+        lone `timeframe = "1h"` strategy launching the master ahead of an
+        otherwise-all-15m fleet froze 15m collection completely - confirmed
+        live, candles stuck ~21h stale for every 15m client while the "1h"
+        client stayed fresh). ClientInterestRegistry now unions every
+        registered client's own timeframe the same way it already unions
+        pairs, and this applies that union to the collector."""
+        new_timeframes = sorted(set(timeframes))
+        new_pairlist: ListPairsWithTimeframes
+        with self._pairs_lock:
+            if new_timeframes == sorted(self.timeframes):
+                return
+            self.timeframes = new_timeframes
+            new_pairlist = self._build_pairlist(self.pairs)
+            new_keys = set(new_pairlist)
+            old_keys = set(self.pairlist)
+            for pair_key in new_keys - old_keys:
+                pair, tf, c_type = pair_key
+                try:
+                    self._cache[pair_key] = self.data_handler.ohlcv_load(
+                        pair,
+                        timeframe=tf,
+                        candle_type=c_type,
+                        fill_missing=False,
+                        drop_incomplete=False,
+                        warn_no_data=False,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to load cached OHLCV for newly-assigned %s - starting empty",
+                        pair_key,
+                    )
+                    self._cache[pair_key] = DataFrame()
+            for pair_key in old_keys - new_keys:
+                self._cache.pop(pair_key, None)
+            self.pairlist = new_pairlist
+        logger.info(
+            "DataCollector timeframe assignment updated: now tracking %s (%d combination(s))",
+            new_timeframes, len(new_pairlist),
+        )
+        self._wake_event.set()
+
     def _persist(self, pair_key: PairWithTimeframe, new_data: DataFrame) -> bool:
         """Merge freshly-fetched candles into the in-memory cache. Returns True if
         new candles actually landed (i.e. this wasn't a no-op refresh)."""
@@ -1320,7 +1369,21 @@ class TickerFetcher:
         # entry/exit pricing - Exchange.get_rate falls back to a direct
         # fetch_ticker() whenever this returns nothing - at 40% of the requests.
         max_age_s: float = 5.0,
-        fetch_timeout_s: float = 5.0,
+        # get_tickers()/fetch_ticker() are @retrier-wrapped with the default
+        # API_RETRY_COUNT=4, whose backoff alone (calculate_backoff:
+        # 1+2+5+10s) sums to ~18s before real per-request latency on top - so
+        # under genuine rate-limit pressure the underlying fetch this waits on
+        # can easily take 20-30s. A 5s timeout meant most concurrent waiters
+        # gave up on the shared in-flight fetch and fired their OWN direct
+        # fallback fetch long before it had a chance to resolve - observed
+        # live on a 42-bot fleet: 247 ticker-fetch 429s and repeated "Unable
+        # to exit trade" warnings, the exact failure mode this coalescing was
+        # built to prevent, because waiters weren't actually waiting long
+        # enough to benefit from it. Raised to comfortably cover that
+        # worst-case retry chain; doesn't affect price freshness (max_age_s,
+        # unchanged, still governs that) - only how long a caller is willing
+        # to sit on an already-in-flight fetch before giving up on it.
+        fetch_timeout_s: float = 30.0,
     ) -> None:
         self.exchange = exchange
         self.cache = cache
@@ -1329,6 +1392,8 @@ class TickerFetcher:
         self.fetch_timeout_s = fetch_timeout_s
         self._lock = threading.Lock()
         self._inflight: dict[str, concurrent.futures.Future] = {}
+        self._refresh_thread: threading.Thread | None = None
+        self._refresh_stop = threading.Event()
         # Sized for real overlap (several DIFFERENT pairs' first-fetch-of-the-
         # window landing at once) - not for total client count, since same-
         # pair requests share one in-flight Future rather than each taking a
@@ -1359,6 +1424,50 @@ class TickerFetcher:
                 "TickerFetcher: %s emulates fetchTicker via fetchTickers - using one "
                 "bulk fetch to warm all pairs per %.1fs window", exchange_name, max_age_s,
             )
+
+    def start_background_refresh(self, interval_s: float = 3.0) -> None:
+        """Proactively keep the ticker cache warm on this fixed server-side
+        cadence, independent of whether/how often any bot asks - so `get()`'s
+        cache-check very rarely misses and almost never has to fall through to
+        its own on-demand fetch-and-wait path. Without this, cache warmth was
+        entirely a byproduct of bot requests: 42 bots each polling on their own
+        5s cycle meant the cache was constantly expiring and being re-triggered
+        by whichever bot happened to ask right after a `max_age_s` window
+        lapsed, still one bulk fetch per stale-window-crossing rather than a
+        single steady cadence. Only meaningful in bulk mode - non-bulk
+        exchanges keep relying on `get()`'s on-demand per-pair fetch, since
+        proactively polling every pair on the whitelist regardless of whether
+        it's actually held costs more than it saves there (see the on-demand
+        design note above this class)."""
+        if not self._bulk or self._refresh_thread is not None:
+            return
+
+        def _loop() -> None:
+            while not self._refresh_stop.wait(interval_s):
+                self._refresh_all_once()
+
+        self._refresh_thread = threading.Thread(
+            target=_loop, name="TickerFetcher-refresh", daemon=True
+        )
+        self._refresh_thread.start()
+        logger.info("TickerFetcher: background refresh started (every %.1fs)", interval_s)
+
+    def stop_background_refresh(self) -> None:
+        self._refresh_stop.set()
+        if self._refresh_thread is not None:
+            self._refresh_thread.join(timeout=5)
+
+    def _refresh_all_once(self) -> None:
+        """Synchronous bulk fetch + cache-warm, called from the background
+        refresh loop - deliberately bypasses the `_inflight`/Future dedup
+        machinery in `_fetch_all` below, since there's only ever one caller
+        (this loop) rather than N concurrent on-demand askers to coalesce."""
+        try:
+            tickers = self.exchange.get_tickers()
+            for p, t in (tickers or {}).items():
+                self.cache.set_ticker(self.exchange_name, p, t)
+        except Exception:
+            logger.debug("Background ticker refresh failed", exc_info=True)
 
     def get(self, pair: str) -> dict | None:
         """Returns None on any failure/timeout - callers (the master's
@@ -1600,12 +1709,15 @@ class ClientInterestRegistry:
     `get_ohlcv`/etc. on its own cycle and wait up to one poll interval to see it."""
 
     def __init__(
-        self, on_union_changed: Callable[[list[str], bool, bool], None]
+        self, on_union_changed: Callable[[list[str], list[str], bool, bool], None]
     ) -> None:
         self._on_union_changed = on_union_changed
         self._lock = threading.Lock()
-        # client_id -> (pairs, want_funding_rate, want_trades)
-        self._clients: dict[str, tuple[list[str], bool, bool]] = {}
+        # client_id -> (pairs, timeframes, want_funding_rate, want_trades). Per-client
+        # timeframes so a fleet mixing strategy timeframes (e.g. mostly "15m" plus one
+        # "1h" strategy) unions correctly instead of the master collecting only
+        # whichever timeframe the first-ever client happened to launch it with.
+        self._clients: dict[str, tuple[list[str], list[str], bool, bool]] = {}
         # client_id -> live connection, only present while a push target is
         # reachable - a client that registered interest before this feature
         # existed (impossible in practice, but defensively) simply never gets
@@ -1633,11 +1745,14 @@ class ClientInterestRegistry:
         )
         # Latest union awaiting a rebalance, and whether a drain task is already
         # running - see _submit_union_changed for why they coalesce.
-        self._pending_union: tuple[list[str], bool, bool] | None = None
+        self._pending_union: tuple[list[str], list[str], bool, bool] | None = None
         self._pending_lock = threading.Lock()
         self._rebalance_running = False
 
-    def _submit_union_changed(self, union_pairs: list[str], union_ffr: bool, union_trades: bool) -> None:
+    def _submit_union_changed(
+        self, union_pairs: list[str], union_timeframes: list[str],
+        union_ffr: bool, union_trades: bool,
+    ) -> None:
         """Queue a rebalance for the newest union, COALESCING with any already
         queued.
 
@@ -1655,7 +1770,7 @@ class ClientInterestRegistry:
         that matters - the last union submitted is always the last one applied.
         """
         with self._pending_lock:
-            self._pending_union = (union_pairs, union_ffr, union_trades)
+            self._pending_union = (union_pairs, union_timeframes, union_ffr, union_trades)
             if self._rebalance_running:
                 return
             self._rebalance_running = True
@@ -1679,52 +1794,56 @@ class ClientInterestRegistry:
         self,
         client_id: str,
         pairs: list[str],
+        timeframes: list[str],
         want_funding_rate: bool,
         want_trades: bool,
         *,
         connection: _ClientConnection | None = None,
     ) -> None:
         with self._lock:
-            self._clients[client_id] = (list(pairs), want_funding_rate, want_trades)
+            self._clients[client_id] = (list(pairs), list(timeframes), want_funding_rate, want_trades)
             if connection is not None:
                 self._connections[client_id] = connection
-            union_pairs, union_ffr, union_trades = self._union()
+            union_pairs, union_timeframes, union_ffr, union_trades = self._union()
             n_clients = len(self._clients)
         logger.info(
-            "Client '%s' registered interest in %d pair(s) (union now %d pair(s) "
-            "across %d client(s); funding_rate=%s, trades=%s)",
-            client_id, len(pairs), len(union_pairs), n_clients, union_ffr, union_trades,
+            "Client '%s' registered interest in %d pair(s), timeframe(s) %s (union now %d "
+            "pair(s), %s across %d client(s); funding_rate=%s, trades=%s)",
+            client_id, len(pairs), timeframes, len(union_pairs), union_timeframes,
+            n_clients, union_ffr, union_trades,
         )
         # Fire-and-forget (see __init__ docstring on _rebalance_executor) - the
         # registration itself (the dicts above) already succeeded and this
         # method must return immediately regardless of how long rebalancing
         # takes.
-        self._submit_union_changed(union_pairs, union_ffr, union_trades)
+        self._submit_union_changed(union_pairs, union_timeframes, union_ffr, union_trades)
 
     def unregister(self, client_id: str) -> None:
         with self._lock:
             removed = self._clients.pop(client_id, None) is not None
             self._connections.pop(client_id, None)
-            union_pairs, union_ffr, union_trades = self._union()
+            union_pairs, union_timeframes, union_ffr, union_trades = self._union()
             n_clients = len(self._clients)
         if removed:
             logger.info(
-                "Client '%s' disconnected (union now %d pair(s) across %d client(s))",
-                client_id, len(union_pairs), n_clients,
+                "Client '%s' disconnected (union now %d pair(s), %s across %d client(s))",
+                client_id, len(union_pairs), union_timeframes, n_clients,
             )
             # Called from handler `finally:` blocks - must return promptly and
             # never raise; see _submit_union_changed.
-            self._submit_union_changed(union_pairs, union_ffr, union_trades)
+            self._submit_union_changed(union_pairs, union_timeframes, union_ffr, union_trades)
 
-    def _union(self) -> tuple[list[str], bool, bool]:
+    def _union(self) -> tuple[list[str], list[str], bool, bool]:
         pairs: set[str] = set()
+        timeframes: set[str] = set()
         want_funding_rate = False
         want_trades = False
-        for p, wf, wt in self._clients.values():
+        for p, tf, wf, wt in self._clients.values():
             pairs.update(p)
+            timeframes.update(tf)
             want_funding_rate = want_funding_rate or wf
             want_trades = want_trades or wt
-        return sorted(pairs), want_funding_rate, want_trades
+        return sorted(pairs), sorted(timeframes), want_funding_rate, want_trades
 
     def _targets_for_pair(self, pair: str, *, need_funding_rate: bool = False,
                           need_trades: bool = False) -> list[_ClientConnection]:
@@ -1732,7 +1851,7 @@ class ClientInterestRegistry:
         `pair` (and, if asked, also wants funding-rate / trades data)."""
         with self._lock:
             client_ids = [
-                cid for cid, (pairs, wf, wt) in self._clients.items()
+                cid for cid, (pairs, tf, wf, wt) in self._clients.items()
                 if pair in pairs
                 and (not need_funding_rate or wf)
                 and (not need_trades or wt)
@@ -1844,6 +1963,7 @@ class _ClientHandler(socketserver.BaseRequestHandler):
                     client_id = msg.get("client_id", client_id)
                     conn.client_id = client_id
                     pairs = msg.get("pairs", [])
+                    timeframes = msg.get("timeframes", [])
                     want_funding_rate = bool(msg.get("want_funding_rate", False))
                     want_trades = bool(msg.get("want_trades", False))
                     try:
@@ -1851,7 +1971,8 @@ class _ClientHandler(socketserver.BaseRequestHandler):
                         # interest list) - it's the target `publish_*` sends
                         # pushes down, from the collection thread, later.
                         registry.register(
-                            client_id, pairs, want_funding_rate, want_trades, connection=conn,
+                            client_id, pairs, timeframes, want_funding_rate, want_trades,
+                            connection=conn,
                         )
                         registered = True
                         response = {"type": "registered", "pairs": len(pairs)}
@@ -1962,7 +2083,18 @@ _ticker_sort_executor = concurrent.futures.ThreadPoolExecutor(
 _RAMP_FLOOR = 10  # starting/minimum batch size - matches the observed default
 # urllib3 HTTPConnectionPool size (10); also a reasonable floor generally.
 _RAMP_STEP = 5  # pairs added per clean tick while ramping up
-_RAMP_COOLDOWN_S = 60.0  # pause ramp-up for this long after a rate-limit cut
+# Observed live on a 42-bot fleet + 44-pair whitelist: rate-limit signals
+# (mostly from the OTHER bots' own ticker/order-management calls sharing the
+# same exchange budget, not this collector's own traffic) recur roughly every
+# 40-120s. A 60s cooldown meant a clean tick almost never landed before the
+# next hit reset it, permanently pinning the cap at _RAMP_FLOOR (confirmed:
+# 44/45 ticks deferred pairs, cap escaped 10 exactly once in 45 minutes) even
+# though the exchange clearly tolerates short bursts above the floor between
+# hits. Shortened so more recovery attempts land in those gaps - a cut still
+# only takes the cap back to half its pre-cut value (not all the way to
+# floor) once it's climbed past ~20, so successive partial recoveries should
+# let it oscillate higher on average instead of staying pinned.
+_RAMP_COOLDOWN_S = 20.0  # pause ramp-up for this long after a rate-limit cut
 
 _EXCHANGE_RELOAD_BACKOFF_CAP_S = 300.0  # ceiling for DataCollector's reload backoff
 
@@ -2982,6 +3114,7 @@ class DataServerClient:
         self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._pairs: list[str] = []
+        self._timeframes: list[str] = []
         self._want_funding_rate = False
         self._want_trades = False
         self._has_registration = False
@@ -3010,12 +3143,22 @@ class DataServerClient:
             return self._sock is not None
 
     def register(
-        self, pairs: list[str], *, want_funding_rate: bool = False, want_trades: bool = False
+        self, pairs: list[str], *, timeframes: list[str] | None = None,
+        want_funding_rate: bool = False, want_trades: bool = False,
     ) -> None:
-        """Update this process's wanted pairs/data-kinds. Re-sent automatically on
-        every (re)connect too, so a master restart doesn't lose the registration.
-        Call again (e.g. after every pairlist refresh) to update it."""
+        """Update this process's wanted pairs/timeframes/data-kinds. Re-sent
+        automatically on every (re)connect too, so a master restart doesn't
+        lose the registration. Call again (e.g. after every pairlist refresh)
+        to update it.
+
+        ``timeframes`` matters even for a single-timeframe strategy: the
+        master unions every registered client's timeframes (see
+        ClientInterestRegistry/DataCollector.set_timeframes) rather than
+        collecting only whichever timeframe first launched it - omitting this
+        (or always sending the same one) silently starves any OTHER client
+        whose strategy uses a different timeframe."""
         self._pairs = list(pairs)
+        self._timeframes = list(timeframes) if timeframes else []
         self._want_funding_rate = want_funding_rate
         self._want_trades = want_trades
         self._has_registration = True
@@ -3030,6 +3173,7 @@ class DataServerClient:
             "type": "register_interest",
             "client_id": self.client_id,
             "pairs": self._pairs,
+            "timeframes": self._timeframes,
             "want_funding_rate": self._want_funding_rate,
             "want_trades": self._want_trades,
         }
@@ -3552,10 +3696,23 @@ def _run_master(config: Config, args: Any, stop_event: threading.Event) -> None:
     # into the distributor above - so N trader_bot processes watching overlapping
     # pairs collapse into one deduped collection job instead of N independent ones.
     static_pairs = list(collector.pairs)
+    # The collector's own launch-time timeframe(s) (from --timeframes) - kept
+    # as a floor so a client union that (transiently) drops to empty during a
+    # reconnect storm never shrinks collection below what this master was
+    # explicitly started for. Every OTHER timeframe a connecting client needs
+    # (see ClientInterestRegistry's per-client timeframe union) gets added on
+    # top - see set_timeframes's docstring for why this matters: without it,
+    # whichever client happened to launch the master pinned its own timeframe
+    # for the master's entire life, starving every other client's timeframe.
+    static_timeframes = list(collector.timeframes)
 
-    def _on_interest_changed(client_pairs: list[str], want_funding_rate: bool, want_trades: bool) -> None:
+    def _on_interest_changed(
+        client_pairs: list[str], client_timeframes: list[str],
+        want_funding_rate: bool, want_trades: bool,
+    ) -> None:
         union = set(static_pairs) | set(client_pairs)
         distributor.update(_volume_sorted_pairs(list(union), collector.exchange))
+        collector.set_timeframes(sorted(set(static_timeframes) | set(client_timeframes)))
         if want_funding_rate:
             collector.collect_funding_rate = True
         if want_trades:
@@ -3570,6 +3727,7 @@ def _run_master(config: Config, args: Any, stop_event: threading.Event) -> None:
     # ASYNC one (_api_async) the OHLCV collection loop drives, so the two
     # never contend over the same in-flight request.
     ticker_fetcher = TickerFetcher(collector.exchange, cache, exchange_name)
+    ticker_fetcher.start_background_refresh()
 
     server = MasterServer(
         cache, host=args.host, client_port=args.port, subserver_port=args.subserver_port,
@@ -3580,6 +3738,7 @@ def _run_master(config: Config, args: Any, stop_event: threading.Event) -> None:
     try:
         collector.run_forever(poll_interval=args.poll_interval, stop_event=stop_event)
     finally:
+        ticker_fetcher.stop_background_refresh()
         collector.close()
         server.stop()
 

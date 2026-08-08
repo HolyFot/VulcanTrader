@@ -1,11 +1,9 @@
 """Spawn a thread that inherits the calling thread's contextvars context.
 
-A plain ``threading.Thread`` starts with a *blank* contextvars context - the
-isolation ``persistence/base.py``'s ``PersistenceContext`` relies on to keep
-several bots' trade ledgers apart in ``single_process_mode``. But a thread
-spawned on behalf of an already-bound bot (web portal server, stop-file
-watchers) needs that context carried over explicitly, or it silently sees no
-bot's Trade/Order/PairLock data.
+A plain ``threading.Thread`` starts with a *blank* context - the isolation
+``PersistenceContext`` uses to keep bots' ledgers apart in
+``single_process_mode``. Threads spawned on behalf of a bound bot (web
+portal, stop-file watchers) need that context carried over explicitly.
 """
 
 from __future__ import annotations

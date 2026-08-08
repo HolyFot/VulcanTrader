@@ -415,35 +415,35 @@ CONF_SCHEMA = {
             "required": ["price_side"],
         },
         "limit_order_simulation": {
-            "description": "Backtest-only: how resting LIMIT orders are simulated. `order_types` already " "says whether an order is a limit or a market order, and `unfilledtimeout` says " "how long an unfilled one lives; what a candle-level backtest cannot get from " "live pricing (entry_pricing/exit_pricing read an order book) is how far from " "the market the order rests — that is what the offsets here supply.\n" "An offset of 0 (the default) prices the order at the candle's own open, which " "always fills immediately: results are then identical to a market order. A " "positive offset makes the order REST on the favourable side (below the open " "for a long entry, above it for a long exit); it then fills only on a candle " "whose range actually reaches it, and pays `fee_maker` when it does. Entries " "that never fill mean the trade never happens; exits that never fill leave the " "position open for a later exit condition. Stoploss, trailing-stop and ROI " "exits are unaffected — they keep filling at their own price and taker fee.",
+            "description": "Backtest-only: simulate resting LIMIT orders instead of instant fills at the candle open.",
             "type": "object",
             "properties": {
                 "entry_offset": {
-                    "description": "Fraction of price a resting ENTRY limit sits below the candle open " "(above it, for shorts). E.g. 0.001 = 10 bps better than the open.",
+                    "description": "How far below open (shorts: above) a resting entry limit sits, as a price fraction.",
                     "type": "number",
                     "minimum": 0.0,
                     "maximum": 1.0,
                     "default": 0.0,
                 },
                 "exit_offset": {
-                    "description": "Fraction of price a resting EXIT limit sits above the candle open " "(below it, for shorts). Applies to exit-signal / custom-exit exits only.",
+                    "description": "How far above open (shorts: below) a resting exit limit sits, as a price fraction.",
                     "type": "number",
                     "minimum": 0.0,
                     "maximum": 1.0,
                     "default": 0.0,
                 },
                 "entry_timeout_bars": {
-                    "description": "Bars an unfilled entry order survives past the bar it was placed on " "before being cancelled (0 = fill-or-kill on that bar). Overrides the " "bar count derived from `unfilledtimeout.entry`. Omit both and the " "order rests until it fills or the strategy cancels it, which is what " "freqtrade does with no `unfilledtimeout` set.",
+                    "description": "Bars an unfilled entry order survives before cancelling (0 = fill-or-kill).",
                     "type": "integer",
                     "minimum": 0,
                 },
                 "exit_timeout_bars": {
-                    "description": "Same, for exit orders. A timed-out exit order leaves the POSITION " "open — the exit has to be re-triggered by a later bar.",
+                    "description": "Same as entry_timeout_bars, for exit orders.",
                     "type": "integer",
                     "minimum": 0,
                 },
                 "fee_maker": {
-                    "description": "Fee paid by a fill that rested on the book. Defaults to the single " "`fee` value, which leaves results identical to an all-taker run.",
+                    "description": "Fee for a resting-order fill. Defaults to `fee` (all-taker results).",
                     "type": "number",
                     "minimum": 0.0,
                 },
@@ -815,37 +815,37 @@ CONF_SCHEMA = {
         },
         # end of RPC section
         "single_process_mode": {
-            "description": "Fleet-wide setting (user_data/configs_system/system.json). " "When true, `bot.py webserver`/`autostart` (and the root `main.py`, and the " "web portal's config-manager Start button) run every auto_start / " "manually-started bot as a background thread inside THIS process instead of " "spawning `python -m VulcanTrader.bot trade` as its own OS process. Each bot " "still gets its own VulcanTraderBot instance, its own embedded WebPortal on " "its own port, and its own isolated trade ledger/lock file (see " "persistence/base.py's PersistenceContext, contextvar-scoped per bot precisely " "so this is safe) - only the OS-process boundary is gone, trading N processes' " "worth of interpreter/import overhead for shared memory. Default false (spawn " "subprocesses, the original behavior) when unset.",
+            "description": "Fleet-wide (system.json). If true, runs every bot as a thread in one process instead of one OS process each.",
             "type": "boolean",
         },
         "auto_start_data_server": {
-            "description": "Shared, fleet-wide default (set in user_data/configs_system/" "system.json, like api_server/discord/telegram) for whether a bot with no " "reachable data_server master should launch one itself. False makes every " "bot connect-only - it uses data_server_ip/data_server_port if reachable and " "otherwise falls back to direct exchange polling, but never spawns a master. " "Set false fleet-wide and start the master explicitly instead, via " "run-datamaster.bat/.sh, to rule out two independent launches (e.g. two " "Python interpreters, or a rerun before the first fully bound its port) each " "spawning their own master and doubling the exchange request load - the exact " "failure mode this setting exists to prevent. A bot config's own " "`data_server.auto_start` still wins if explicitly set. Default true (the " "original auto-launch-from-first-bot behavior) when unset.",
+            "description": "Fleet-wide (system.json). If true (default), a bot with no reachable data_server master launches one itself.",
             "type": "boolean",
         },
         "data_server_ip": {
-            "description": "Shared, fleet-wide default (system.json) for the host the " "data_server master listens on / clients connect to. Overridden per-bot by " "that config's own `data_server.host`, if explicitly set. Default " "\"127.0.0.1\" when unset anywhere.",
+            "description": "Fleet-wide default (system.json) data_server host. Default 127.0.0.1.",
             "type": "string",
         },
         "data_server_port": {
-            "description": "Shared, fleet-wide default (system.json) for the port the " "data_server master's client-request socket listens on. Overridden per-bot by " "that config's own `data_server.port`, if explicitly set. Default 8720 when " "unset anywhere.",
+            "description": "Fleet-wide default (system.json) data_server port. Default 8720.",
             "type": "integer",
             "minimum": 1,
             "maximum": 65535,
         },
         "data_server": {
-            "description": "This bot's own use of the shared data_server master " "(VulcanTrader/data_server.py) - whether to use one at all, and the " "ports it should be reachable on. Overrides the system.json-wide " "auto_start_data_server/data_server_ip/data_server_port defaults above when " "explicitly set. The master/subserver process itself " "reads its own separate, minimal config file (see data_server.py's " "`_load_minimal_config`), not this block - a trading bot never runs " "as a subserver, so master_host/master_port/name have no place here.",
+            "description": "Per-bot data_server settings, overriding the system.json-wide defaults above.",
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Use the shared data_server system at all. False skips " "it entirely - this bot always polls the exchange directly, and never " "tries to reach or launch a master.",
+                    "description": "Use the shared data_server at all. False = always poll the exchange directly.",
                     "type": "boolean",
                 },
                 "auto_start": {
-                    "description": "Per-bot override of the system.json-wide " "`auto_start_data_server` default (only meaningful when `enabled` above " "isn't false). False means this bot will connect to a master if one is " "already reachable, but will never spawn one itself.",
+                    "description": "Per-bot override of auto_start_data_server.",
                     "type": "boolean",
                 },
                 "persist_to_disk": {
-                    "description": "Write collected OHLCV (every pair) and funding-rate " "history (futures pairs) back to feather files under `datadir`, same " "layout `backtesting.py` reads from.",
+                    "description": "Write collected OHLCV/funding-rate history to feather files under `datadir`.",
                     "type": "boolean",
                     "default": True,
                 },
@@ -866,12 +866,12 @@ CONF_SCHEMA = {
                     "maximum": 65535,
                 },
                 "show_terminal": {
-                    "description": "Windows only. Default false. When this bot auto-launches " "a data_server master (none was already listening), true gives it its " "own new console window; false launches it fully headless. Only read " "at the moment a bot actually launches a master - has no effect if one " "is already running. Written through into `configs_system/" "data_server.json`'s own `show_terminal` field, but that file is " "overwritten on every launch, so set it here (per-bot config), not there.",
+                    "description": "Windows only. If this bot auto-launches a master, give it its own console window.",
                     "type": "boolean",
                     "default": False,
                 },
                 "tmux": {
-                    "description": "Linux/macOS only. Default false. When this bot " "auto-launches a data_server master, true opens it in its own tmux " "window (session \"VulcanTrader\", same one bot subprocesses use) " "instead of a plain headless background process. Falls back to plain " "background if tmux isn't installed. Same one-shot-at-launch caveat as " "`show_terminal` above.",
+                    "description": "Linux/macOS only. If this bot auto-launches a master, open it in its own tmux window.",
                     "type": "boolean",
                     "default": False,
                 },
@@ -1264,7 +1264,7 @@ CONF_SCHEMA = {
                     "default": False,
                 },
                 "override_exchange_check": {
-                    "description": "Override the exchange check to force FreqAI to use exchanges " "that may not have enough historic data. Turn this to True if " "you know your FreqAI model and strategy do not require historical data.",
+                    "description": "Force FreqAI onto an exchange with insufficient historic data.",
                     "type": "boolean",
                     "default": False,
                 },
