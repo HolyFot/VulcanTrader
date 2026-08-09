@@ -228,6 +228,16 @@ def _build_engine_config(strategy: Any, config: dict) -> dict:
         "trailing_enabled": bool(getattr(strategy, "trailing_stop", False)),
         "trailing_trigger": float(getattr(strategy, "trailing_stop_positive_offset", 0.0) or 0.0),
         "trailing_offset": float(getattr(strategy, "trailing_stop_positive", 0.0) or 0.0),
+        # freqtrade branches on `trailing_stop_positive is not None` (not on
+        # its truthiness) and gates the whole trailing block on
+        # `trailing_only_offset_is_reached` — both were previously dropped
+        # here, which silently collapsed every trailing config onto the single
+        # "only_offset=True with a positive set" shape. Keep the None-ness as
+        # its own flag: `trailing_offset` above coerces None to 0.0, and a 0.0
+        # trail distance would otherwise park the stop exactly ON the candle
+        # bound (an instant, fabricated exit at the high).
+        "trailing_offset_set": getattr(strategy, "trailing_stop_positive", None) is not None,
+        "trailing_only_offset": bool(getattr(strategy, "trailing_only_offset_is_reached", False)),
         "compounding_enabled": compounding,
         "starting_balance": wallet,
         "tradable_balance_ratio": ratio,
@@ -390,6 +400,7 @@ class _PairState:
         "dates", "open", "high", "low", "atr", "el", "xl", "es", "xs", "n",
         "row_idx", "in_position", "is_short", "entry_price", "base_price",
         "entry_row", "trade_leverage", "stop_loss_price", "stop_is_trailing",
+        "stop_loss_dist",
         "trailing_activated", "exchange_max_leverage", "precision", "trade_stake",
         "trade_amount", "local_trade", "entry_fee",
         # Resting-order state (all inert unless a limit offset is configured).
@@ -427,6 +438,10 @@ class _PairState:
         self.trade_leverage = 1.0
         self.stop_loss_price = 0.0
         self.stop_is_trailing = False
+        # freqtrade's `LocalTrade.stop_loss_pct`, already divided by leverage:
+        # the ratio that produced the CURRENT stop, needed by
+        # `_get_close_rate_for_stoploss`'s entry-candle worst-case pricing.
+        self.stop_loss_dist = 0.0
         self.trailing_activated = False
         self.trade_stake = 0.0
         self.trade_amount = 0.0
@@ -463,10 +478,11 @@ def _joint_multi_pair_backtest(
     per-trade, mirroring `Backtesting._enter_trade` / `get_valid_entry_price_
     and_stake`'s exact call order and semantics (2026-07-19 addition — these
     were previously NOT invoked at all; see the module docstring history).
-    `custom_exit()` / `custom_stoploss()` remain unimplemented: `custom_
-    stoploss` is a no-op on every strategy in this codebase anyway (none set
-    `use_custom_stoploss = True`, the flag freqtrade itself gates it on — see
-    `IStrategy.stop_loss_reached`), and no strategy here defines `custom_exit`.
+    `custom_exit()` and `custom_stoploss()` ARE both invoked (see
+    `do_exit_check`). An earlier version of this docstring claimed they were
+    dead code because no strategy set `use_custom_stoploss = True`; that was
+    never a safe assumption to encode, and the custom_stoploss path went on to
+    carry a real mispricing bug precisely because it was believed unreachable.
 
     Returns (trades, rejected_count, order_stats), where `order_stats` carries
     the limit-order counters freqtrade reports as `timedout_entry_orders` /
@@ -518,6 +534,8 @@ def _joint_multi_pair_backtest(
     trailing_enabled = eng["trailing_enabled"]
     trailing_trigger = eng["trailing_trigger"]
     trailing_offset = eng["trailing_offset"]
+    trailing_offset_set = eng["trailing_offset_set"]
+    trailing_only_offset = eng["trailing_only_offset"]
     roi_enabled = eng["roi_enabled"]
     roi_vals = eng["roi_vals"]
     roi_periods = eng["roi_periods"]
@@ -1146,6 +1164,7 @@ def _joint_multi_pair_backtest(
         p.pending_exit = False
         raw_stop = base_price * (1.0 + (base_stoploss / lev if not is_short else -base_stoploss / lev))
         p.stop_loss_price = _round_stop(raw_stop, p.precision[i], is_short)
+        p.stop_loss_dist = abs(base_stoploss) / lev
 
         # The trade and its order already exist (created at placement); the
         # fill just completes them.
@@ -1250,6 +1269,7 @@ def _joint_multi_pair_backtest(
 
         stop_loss_price = p.stop_loss_price
         stop_is_trailing = p.stop_is_trailing
+        stop_loss_dist = p.stop_loss_dist
         trailing_activated = p.trailing_activated
         dir_correct = (stop_loss_price < low_i) if is_long else (stop_loss_price > high_i)
 
@@ -1286,17 +1306,41 @@ def _joint_multi_pair_backtest(
                     candidate = _round_stop(candidate, precision_i, not is_long)
                     tighter = (candidate > stop_loss_price) if is_long else (candidate < stop_loss_price)
                     if tighter:
-                        stop_loss_price, stop_is_trailing = candidate, False
+                        # freqtrade's `adjust_stop_loss` sets
+                        # `is_stop_loss_trailing = True` on EVERY ratchet,
+                        # including this custom_stoploss one — and
+                        # `trader_stoploss_reached` then reports the exit as
+                        # TRAILING_STOP_LOSS rather than STOP_LOSS. Hardcoding
+                        # False here mislabelled the exit reason, let the stop
+                        # outrank ROI in the candidate order below, and — worst
+                        # of the three — routed entry-candle exits away from
+                        # `_get_close_rate_for_stoploss`'s worst-case pricing
+                        # and into "fill at the bound-anchored ratcheted stop",
+                        # manufacturing large same-candle `stop_loss` WINS.
+                        stop_loss_price, stop_is_trailing = candidate, True
+                        stop_loss_dist = dist
             if trailing_enabled:
-                if not trailing_activated and leveraged_bound_return >= trailing_trigger:
-                    trailing_activated = True
-                if trailing_activated:
-                    trail_dist = trailing_offset / lev
+                # Mirrors freqtrade's trailing block: re-evaluated every bar
+                # (NOT latched), skipped entirely only while
+                # `trailing_only_offset_is_reached` and the bound profit is
+                # still under the offset, and trailing at the BASE stoploss
+                # distance until the offset is cleared — only then switching to
+                # trailing_stop_positive. The previous latch-once/always-trail-
+                # at-trailing_stop_positive shape silently assumed
+                # `trailing_only_offset_is_reached = True` with a positive set.
+                if not (trailing_only_offset and leveraged_bound_return < trailing_trigger):
+                    if trailing_offset_set and leveraged_bound_return > trailing_trigger:
+                        trailing_activated = True
+                        trail_ratio = trailing_offset
+                    else:
+                        trail_ratio = base_stoploss
+                    trail_dist = abs(trail_ratio) / lev
                     candidate = bound * (1.0 - trail_dist) if is_long else bound * (1.0 + trail_dist)
                     candidate = _round_stop(candidate, precision_i, not is_long)
                     tighter = (candidate > stop_loss_price) if is_long else (candidate < stop_loss_price)
                     if tighter:
                         stop_loss_price, stop_is_trailing = candidate, True
+                        stop_loss_dist = trail_dist
 
         stop_triggered = (low_i <= stop_loss_price) if is_long else (high_i >= stop_loss_price)
         roi_triggered = roi_enabled and (
@@ -1365,6 +1409,7 @@ def _joint_multi_pair_backtest(
 
         p.stop_loss_price, p.stop_is_trailing, p.trailing_activated = \
             stop_loss_price, stop_is_trailing, trailing_activated
+        p.stop_loss_dist = stop_loss_dist
 
         # A resting exit order from an earlier bar. freqtrade re-runs
         # `_check_trade_exit` every bar and `handle_similar_order` cancels-and-
@@ -1417,19 +1462,29 @@ def _joint_multi_pair_backtest(
             # if that price is outside this candle's range the order can't
             # fill, so freqtrade DEFERS the exit to a later bar.
             if exit_reason == "TrailingStop" and time_in_position == 0:
-                trail_dist = trailing_offset / lev
-                pess = open_i * (1.0 + abs(trailing_trigger) - abs(trail_dist)) if is_long \
-                    else open_i * (1.0 - abs(trailing_trigger) + abs(trail_dist))
+                # `_get_close_rate_for_stoploss`'s entry-candle worst case. The
+                # offset-anchored formula is only freqtrade's FIRST branch, and
+                # that branch is gated on the pure native-trailing setup; every
+                # other case — notably use_custom_stoploss, which now reaches
+                # here under the same TRAILING_STOP_LOSS label — takes the else
+                # branch: "price ticks a tiny bit past the open and dives
+                # straight back to the stop", anchored on the OPEN at whatever
+                # stop ratio actually produced the current stop.
+                if (not use_custom_stoploss and trailing_enabled and trailing_only_offset
+                        and trailing_offset_set and trailing_offset):
+                    trail_dist = trailing_offset / lev
+                    pess = open_i * (1.0 + abs(trailing_trigger) - abs(trail_dist)) if is_long \
+                        else open_i * (1.0 - abs(trailing_trigger) + abs(trail_dist))
+                else:
+                    pess = open_i * (1.0 - abs(stop_loss_dist)) if is_long \
+                        else open_i * (1.0 + abs(stop_loss_dist))
                 fills = (pess <= high_i) if is_long else (pess >= low_i)
                 if not fills:
                     continue
-
-            if exit_reason == "TrailingStop" and time_in_position == 0:
-                trail_dist = trailing_offset / lev
-                if is_long:
-                    base_exit_price = max(open_i * (1.0 + abs(trailing_trigger) - abs(trail_dist)), low_i)
-                else:
-                    base_exit_price = min(open_i * (1.0 - abs(trailing_trigger) + abs(trail_dist)), high_i)
+                # "Limit to the candle low/high to avoid exits outside the
+                # candle. This still remains worst case - but worst REALISTIC
+                # case."
+                base_exit_price = max(pess, low_i) if is_long else min(pess, high_i)
             elif exit_reason in ("TrailingStop", "Stoploss"):
                 # freqtrade's `_get_close_rate_for_stoploss`: if the ratcheted
                 # stop sits entirely outside this candle's range (never
@@ -1452,7 +1507,10 @@ def _joint_multi_pair_backtest(
                 # solve rather than a naive `base_price * (1 +/- roi_pct)`.
                 side_1 = 1.0 if is_long else -1.0
                 roi_rate = base_price * roi_pct
-                open_fee_rate = side_1 * base_price * (1.0 + side_1 * fee)
+                # `trade.fee_open` — this trade's OWN entry fee (maker if the
+                # entry rested), not the blanket taker rate; the custom_exit
+                # block above already anchors on `fee_open` for the same reason.
+                open_fee_rate = side_1 * base_price * (1.0 + side_1 * fee_open)
                 raw_close = -(roi_rate + open_fee_rate) / (fee - side_1)
                 # freqtrade's `_get_close_rate_for_roi`: if this is exactly
                 # the bar a new (tighter) ROI tier takes effect, AND the
@@ -1463,7 +1521,12 @@ def _joint_multi_pair_backtest(
                 # the solved close_rate even when the real open price gapped
                 # straight through it, understating profit by the full gap
                 # size on the (rare, but not tiny) trades that hit it.
-                if time_in_position == roi_entry_period:
+                # freqtrade guards this with `trade_dur > 0`: it is specifically
+                # the "a NEW, tighter ROI tier came into effect on this bar"
+                # case. Without the guard an entry-bar ROI exit whose entry
+                # filled below the open (limit entries) also substituted the
+                # open, booking more profit than the solved close rate.
+                if time_in_position > 0 and time_in_position == roi_entry_period:
                     is_new_roi = (open_i > raw_close) if is_long else (open_i < raw_close)
                     if is_new_roi:
                         raw_close = open_i
