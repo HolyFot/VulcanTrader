@@ -865,9 +865,12 @@ class Exchange:
         DDosProtection retry budget (see the 429 traceback this was added
         for). filelock's FileLock releases automatically if a process dies
         while holding it (flock on POSIX / OS file lock on Windows), so a
-        crashed bot can't wedge every other bot out of loading markets."""
+        crashed bot can't wedge every other bot out of loading markets.
+        Timeout (180s) sits well above the ~61s worst-case backoff below
+        (retries=6) so a bot waiting its turn never times out just because
+        the bot ahead of it in the queue is legitimately still retrying."""
         import filelock
-        return filelock.FileLock(str(self._markets_cache_path()) + ".lock", timeout=120)
+        return filelock.FileLock(str(self._markets_cache_path()) + ".lock", timeout=180)
 
     def _save_markets_cache(self) -> None:
         import pickle
@@ -906,15 +909,22 @@ class Exchange:
         logger.debug("Performing scheduled market reload..")
         try:
             import time as _t
-            # on initial load, we retry 3 times to ensure we get the markets.
-            # Periodic (non-forced) reloads got zero retries, so any single
-            # transient 429 during the hourly refresh immediately gave up and
-            # logged a full DDosProtection traceback - alarming to see live,
-            # even though it's already harmless (the outer except below just
-            # skips this cycle and get_rate() falls back to its own cached
-            # rate) - one retry is cheap and avoids most of that noise without
-            # meaningfully delaying a refresh that isn't urgent to begin with.
-            retries: int = 3 if force else 1
+            # on initial (forced) load, retry hard to ride out a 429 storm.
+            # Now that _cross_process_markets_lock serializes every bot in the
+            # fleet onto a single attempt at a time, a lone attempt can still
+            # get 429'd by the *other already-running* bots' regular OHLCV/
+            # order polling sharing the same IP's rate budget - that's not a
+            # stampede our lock can fix, just a burst that needs to be waited
+            # out. calculate_backoff's quadratic growth means retries=6 gives
+            # backoff delays of 1/2/5/10/17/26s (~61s total across 7 attempts)
+            # vs. retries=3's ~8s total, which routinely wasn't enough headroom
+            # for hyperliquid's rate limiter to release (see the DDosProtection
+            # traceback this was raised for even after the cross-process lock
+            # landed). Periodic (non-forced) reloads still get 1 retry only -
+            # a transient 429 there just skips this cycle (see the outer
+            # except below; get_rate() falls back to its own cached rate),
+            # so it isn't worth this same patience.
+            retries: int = 6 if force else 1
             # Reload async markets, then assign them to sync api
             _t0 = _t.perf_counter()
             cache_hit = is_initial and self._try_load_markets_from_cache()
