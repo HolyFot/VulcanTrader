@@ -855,6 +855,20 @@ class Exchange:
                 _markets_reload_locks[path] = lock
         return lock
 
+    def _cross_process_markets_lock(self):
+        """OS-level file lock guarding the network fetch across separate OS
+        processes (autostart's non-single_process_mode path launches every
+        fleet bot as its own subprocess, back-to-back with no stagger - see
+        bot.py's _launch_autostart_configs). _markets_reload_lock above only
+        dedupes threads within one process, so on a cold cache every bot
+        process still raced the exchange simultaneously and blew through the
+        DDosProtection retry budget (see the 429 traceback this was added
+        for). filelock's FileLock releases automatically if a process dies
+        while holding it (flock on POSIX / OS file lock on Windows), so a
+        crashed bot can't wedge every other bot out of loading markets."""
+        import filelock
+        return filelock.FileLock(str(self._markets_cache_path()) + ".lock", timeout=120)
+
     def _save_markets_cache(self) -> None:
         import pickle
         try:
@@ -911,14 +925,28 @@ class Exchange:
                     # the lock - reuse that instead of also hitting the network.
                     cache_hit = is_initial and self._try_load_markets_from_cache()
                     if not cache_hit:
-                        retrier(self._load_async_markets, retries=retries)(reload=True)
-                        logger.warning(
-                            "[reload_markets] ccxt load_markets took %.2fs", _t.perf_counter() - _t0
-                        )
-                        # Written before releasing the lock, so any bot that was
-                        # waiting on it sees a fresh cache and skips the network
-                        # entirely instead of also racing the exchange.
-                        self._save_markets_cache()
+                        # Raises filelock.Timeout (a TimeoutError subclass) after
+                        # 120s if every sibling bot is jammed up fetching too -
+                        # falls through to the except below, which reuses its
+                        # existing stale-cache fallback rather than blocking this
+                        # bot's startup forever.
+                        with self._cross_process_markets_lock():
+                            # Re-check again: another OS process (e.g. a sibling
+                            # bot launched by the same autostart batch) may have
+                            # won the race and written a fresh cache while we
+                            # waited on the file lock.
+                            cache_hit = is_initial and self._try_load_markets_from_cache()
+                            if not cache_hit:
+                                retrier(self._load_async_markets, retries=retries)(reload=True)
+                                logger.warning(
+                                    "[reload_markets] ccxt load_markets took %.2fs",
+                                    _t.perf_counter() - _t0,
+                                )
+                                # Written before releasing the lock, so any
+                                # sibling bot waiting on it sees a fresh cache
+                                # and skips the network entirely instead of
+                                # also racing the exchange.
+                                self._save_markets_cache()
             self._markets = self._api_async.markets
             if not cache_hit:
                 self._api.set_markets_from_exchange(self._api_async)
@@ -939,7 +967,7 @@ class Exchange:
 
             if load_leverage_tiers and self.trading_mode == TradingMode.FUTURES:
                 self.fill_leverage_tiers()
-        except (ccxt.BaseError, TemporaryError):
+        except (ccxt.BaseError, TemporaryError, TimeoutError):
             logger.exception("Could not load markets.")
             # Fallback: use stale cache so parallel backtest workers don't crash
             # with 'Could not load markets' when the API is rate-limited.
