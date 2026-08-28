@@ -1,0 +1,1054 @@
+/* VulcanTrader shared theme - flat dark terminal.
+   Loaded after each page's own <style> block, so its !important rules win.
+   Edit here; every page picks it up. */
+
+/* === VulcanTrader flat-dark terminal theme === */
+:root {
+    --bg:         #11111b;   /* specified - crust  */
+    --bg-2:       #181825;   /* mantle             */
+    --panel:      #1e1e2e;   /* specified - base   */
+    --panel-head: #181825;   /* specified - mantle */
+    --panel-2:    #313244;   /* surface0           */
+    --panel-3:    #45475a;   /* surface1           */
+    --border:     #313244;   /* surface0           */
+    --border-2:   #45475a;   /* surface1           */
+    --chip:       #313244;   /* small square buttons - raised off the header */
+    --chip-brd:   #585b70;   /* surface2           */
+    --track:      #11111b;   /* recessed groove behind a tab group */
+    --track-brd:  #313244;
+    --seg-on:     #3e3a5c;
+    --seg-on-edge: #4c4678;  /* active pill: sideways gradient edge   */
+    --seg-on-mid:  #3a3559;  /* active pill: sideways gradient centre */   /* raised active pill */
+    --text:       #e8e5ef;
+    --text-dim:   #a9a3bd;
+    --text-mute:  #837c9c;
+    --pos:        #7ee2a8;
+    --neg:        #f4879b;
+    --neu:        #e3b341;
+    --info:       #7fb2f7;
+    --accent:     #8b7cf6;
+    --accent-txt: #cdc4ff;
+    --accent-bg:  rgba(139,124,246,0.22);
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;  /* no monospace anywhere: kept as an alias of --sans so stray references stay readable */
+}
+
+body {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: var(--sans) !important;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+}
+.content { max-width: 100% !important; padding: 1.25rem !important; margin: 0 !important; }
+
+/* ---- nav ---- */
+.navbar {
+    background: var(--bg-2) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-bottom: 1px solid var(--border) !important;
+    box-shadow: none !important;
+    padding: 0.65rem 1.25rem !important;
+}
+.navbar::after { display: none !important; }
+.brand {
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-weight: 700 !important;
+    font-size: 1.12rem !important;
+    letter-spacing: 0.04em !important;
+    /* White -> grey vertical gradient, painted through the glyphs. The text
+       itself must be transparent for background-clip:text to show, which is
+       also why the shadow below is a filter: text-shadow draws on the (now
+       invisible) text colour and would not render at all. */
+    background: linear-gradient(180deg, #ffffff 0%, #f2f2f4 40%, #a8a5b0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent !important;
+    text-shadow: none !important;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+/* The version tag sits inside .brand, so it would inherit the clipped
+   gradient and vanish against some backgrounds - give it a solid colour. */
+.brand span {
+    -webkit-text-fill-color: var(--text-mute);
+    color: var(--text-mute) !important;
+    font-family: var(--sans) !important;
+    letter-spacing: 0 !important;
+}
+.nav-link {
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    font-size: 0.78rem !important;
+    color: var(--text-dim) !important;
+    border: 1px solid transparent !important;
+    border-radius: 6px !important;
+    padding: 0.35rem 0.7rem !important;
+}
+.nav-link:hover { background: var(--panel-3) !important; border-color: var(--border-2) !important; color: var(--text) !important; }
+.nav-link.active {
+    background: var(--accent-bg) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent-txt) !important;
+    box-shadow: none !important;
+}
+
+/* ---- buttons ---- */
+.btn {
+    /* same construction as the active tab pill: sideways gradient, top
+       highlight, bottom emboss - so primary actions match the tab rows */
+    background: linear-gradient(90deg,
+                var(--seg-on-edge) 0%,
+                var(--seg-on-mid) 48%,
+                var(--seg-on-edge) 100%) !important;
+    background-blend-mode: normal !important;
+    border: 1px solid rgba(139, 124, 246, 0.40) !important;
+    border-radius: 7px !important;
+    padding: 0.4rem 0.85rem !important;
+    min-width: unset !important;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    font-size: 0.897rem !important;
+    text-transform: none !important;
+    color: #fff !important;
+    text-shadow: none !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+                0 1px 2px rgba(0, 0, 0, 0.45) !important;
+}
+.btn:hover:not(:disabled) {
+    filter: brightness(1.15) !important;
+    transform: none !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+                0 1px 3px rgba(0, 0, 0, 0.50),
+                0 0 12px rgba(139, 124, 246, 0.25) !important;
+}
+.btn-danger {
+    background: linear-gradient(90deg, #6d3547 0%, #562a39 48%, #6d3547 100%) !important;
+    border-color: rgba(244, 135, 155, 0.45) !important;
+    color: #ffdbe3 !important;
+}
+.btn-danger:hover:not(:disabled) { filter: brightness(1.15) !important; }
+.btn-logout {
+    background: transparent !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 6px !important;
+    color: var(--text-dim) !important;
+    font-family: var(--sans) !important;
+    box-shadow: none !important;
+    opacity: 0.8;
+}
+.btn-logout:hover:not(:disabled) { opacity: 1; transform: none !important; background: var(--panel-3) !important; }
+
+/* ---- cards ---- */
+.card {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    box-shadow: none !important;
+    padding: 1rem 1.1rem !important;
+    margin-bottom: 1rem !important;
+    overflow: hidden;
+}
+.card:hover { transform: none !important; box-shadow: none !important; }
+.card h3 {
+    position: relative;
+    background: var(--panel-head) !important;
+    margin: -1rem -1.1rem 0.9rem -1.1rem !important;
+    padding: 0.7rem 1.1rem !important;
+    border-radius: 10px 10px 0 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+    /* Panel headers share the wordmark's face. No gradient here - at this size
+       and repeated down the page it would read as noise; the serif alone is
+       enough to separate a panel title from its contents. */
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    text-transform: none !important;
+    color: var(--text) !important;
+    /* Real text-shadow, not the filter the wordmark needs: this text is a
+       solid colour, so the shadow renders normally. Kept tighter and weaker
+       than .brand because it repeats on every panel down the page. */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55),
+                 0 2px 5px rgba(0, 0, 0, 0.30) !important;
+}
+.card h3::after { display: none !important; }
+/* Only the panel TITLE is Cinzel. The header row also carries values and
+   controls ("Unrealized: -32.89", "Show entry tag", filter inputs) - those are
+   data, not headings, so they stay sans with tabular figures.
+   NOTE: this must NOT match a bare `span`. trading.html wraps its titles in a
+   plain <span> ("<span>Open Trades (<span>2</span>)</span>"), so a blanket
+   `.card h3 span` rule silently un-Cinzel'd every panel title on that page.
+   Titles are attribute-less; the data/control spans all carry a class or an
+   inline style, which is what separates them here. */
+.card h3 label,
+.card h3 a,
+.card h3 input,
+.card h3 select,
+.card h3 button,
+.card h3 span[class],
+.card h3 span[style] {
+    font-family: var(--sans) !important;
+    font-variant-numeric: tabular-nums;
+    text-shadow: none !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+}
+
+/* ---- metrics ---- */
+.metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)) !important;
+    gap: 0.6rem !important;
+}
+.metric {
+    background: var(--panel-2) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 8px !important;
+    padding: 0.8rem 0.6rem !important;
+}
+/* Metric and period tiles are read-only - no hover feedback. Each page's own
+   stylesheet lightens and lifts them on hover, so these rules pin hover back to
+   the resting state rather than being removed outright. */
+.metric:hover {
+    background: var(--panel-2) !important;
+    border-color: var(--border-2) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+.metric-label {
+    font-family: var(--sans) !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    color: var(--text-mute) !important;
+    letter-spacing: 0.11em !important;
+    margin-bottom: 0.45rem !important;
+}
+.metric-value {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: \"tnum\" 1;
+    font-family: var(--sans) !important;
+    font-size: 1.288rem !important;
+    font-weight: 600 !important;
+    color: var(--text) !important;
+}
+.pos { color: var(--pos) !important; text-shadow: none !important; }
+.neg { color: var(--neg) !important; text-shadow: none !important; }
+.neu { color: var(--neu) !important; text-shadow: none !important; }
+
+/* ---- period boxes ---- */
+.period-grid { gap: 0.6rem !important; }
+.period-box {
+    background: var(--panel-2) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 8px !important;
+    padding: 0.7rem 0.6rem !important;
+}
+.period-box:hover {
+    background: var(--panel-2) !important;
+    border-color: var(--border-2) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+.period-header {
+    font-family: var(--sans) !important;
+    font-size: 0.85rem !important;
+    color: var(--text) !important;
+    border-bottom: 1px solid var(--border-2) !important;
+}
+.period-row { font-family: var(--sans) !important; font-size: 0.85rem !important; }
+.period-row .lbl { color: var(--text-mute) !important; }
+
+/* ---- tables ---- */
+/* Sans to match the rest of the UI, but with tabular figures so the numeric
+   columns (rate, PNL, R, duration) still line up — that digit alignment is the
+   only thing monospace was buying here. */
+table {
+    font-family: var(--sans) !important;
+    font-size: 0.78rem !important;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+}
+th {
+    background: var(--panel-head) !important;
+    color: var(--text-mute) !important;
+    border-bottom: 1px solid var(--border-2) !important;
+    font-family: var(--sans) !important;
+    font-size: 0.62rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.11em !important;
+    padding: 0.55rem 0.55rem !important;
+}
+td {
+    color: var(--text) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.035) !important;
+    padding: 0.45rem 0.55rem !important;
+}
+tbody tr:hover { background: rgba(139,124,246,0.07) !important; }
+.pair-cell { color: var(--pos) !important; font-weight: 500 !important; }
+.side-long { color: var(--pos) !important; font-weight: 600 !important; }
+.side-short { color: var(--neg) !important; font-weight: 600 !important; }
+
+/* ---- badges ---- */
+.badge {
+    font-family: var(--sans) !important;
+    border-radius: 4px !important;
+    font-size: 0.75rem !important;
+    letter-spacing: 0.06em !important;
+    padding: 0.15rem 0.45rem !important;
+}
+.badge-open   { background: rgba(126,226,168,0.12) !important; color: var(--pos) !important;      border: 1px solid rgba(126,226,168,0.28) !important; }
+.badge-closed { background: rgba(139,147,163,0.10) !important; color: var(--text-dim) !important; border: 1px solid rgba(139,147,163,0.25) !important; }
+.badge-crashed { background: rgba(227,179,65,0.12) !important; color: var(--neu) !important;      border: 1px solid rgba(227,179,65,0.30) !important; }
+
+/* ---- icon buttons ---- */
+.icon-btn {
+    width: 26px !important; height: 24px !important;
+    border-radius: 5px !important;
+    background: var(--chip) !important;
+    border: 1px solid var(--chip-brd) !important;
+    color: #b9b1c9 !important;
+    font-size: 0.897rem !important;
+}
+.icon-btn:hover:not(:disabled) { background: #45475a !important; color: var(--text) !important; border-color: var(--accent) !important; transform: none !important; }
+/* Small TEXT button. Deliberately not .icon-btn, which is pinned to 26x24px
+   for single-glyph controls and clips any real label. */
+.ind-toggle {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    width: auto !important; height: auto !important;
+    padding: 0.2rem 0.6rem !important;
+    border-radius: 5px !important;
+    background: var(--chip) !important;
+    border: 1px solid var(--chip-brd) !important;
+    color: #b9b1c9 !important;
+    font-family: var(--sans) !important;
+    font-size: 0.7rem !important;
+    line-height: 1.4 !important;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ind-toggle:hover { background: #45475a !important; color: var(--text) !important; border-color: var(--accent) !important; }
+.icon-btn.success { background: rgba(126,226,168,0.12) !important; border-color: rgba(126,226,168,0.30) !important; color: var(--pos) !important; }
+.icon-btn.danger  { background: rgba(244,135,155,0.12) !important; border-color: rgba(244,135,155,0.30) !important; color: var(--neg) !important; }
+.icon-btn.info    { background: rgba(127,178,247,0.12) !important; border-color: rgba(127,178,247,0.30) !important; color: var(--info) !important; }
+.icon-btn.warn    { background: rgba(227,179,65,0.12) !important;  border-color: rgba(227,179,65,0.30) !important;  color: var(--neu) !important; }
+.icon-btn.accent  { background: var(--accent-bg) !important;       border-color: rgba(139,124,246,0.35) !important; color: var(--accent-txt) !important; }
+
+/* ---- forms ---- */
+.form-input, select, textarea {
+    background: var(--panel-2) !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 6px !important;
+    color: var(--text) !important;
+    font-family: var(--sans) !important;
+    font-size: 0.897rem !important;
+}
+select option { background: #313244; color: #e8e5ef; }
+.form-input:focus, select:focus, textarea:focus {
+    outline: none !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(139,124,246,0.18) !important;
+}
+/* Browser autofill paints its own background (#e8f0fe in Chrome/Edge) and
+   ignores `background`, which is why a filled login box went near-white on a
+   dark theme. The only reliable override is a huge inset box-shadow, plus
+   -webkit-text-fill-color for the text itself. The absurd transition delay
+   stops the yellow/blue flash from ever animating in. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset !important;
+    box-shadow: 0 0 0 1000px var(--panel-2) inset !important;
+    -webkit-text-fill-color: var(--text) !important;
+    caret-color: var(--text) !important;
+    border: 1px solid var(--border-2) !important;
+    transition: background-color 100000s ease-in-out 0s !important;
+}
+input:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset,
+                        0 0 0 2px rgba(139,124,246,0.18) !important;
+    box-shadow: 0 0 0 1000px var(--panel-2) inset,
+                0 0 0 2px rgba(139,124,246,0.18) !important;
+    border-color: var(--accent) !important;
+}
+.toggle-check {
+    border-radius: 4px !important;
+    background: var(--panel-3) !important;
+    border: 1px solid var(--border-2) !important;
+}
+.toggle-check:checked { background: rgba(126,226,168,0.15) !important; border-color: rgba(126,226,168,0.45) !important; }
+.toggle-check:checked::after { border-color: var(--pos) !important; }
+
+/* ---- segmented control: recessed track + raised active pill ---- */
+.seg-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.2rem;
+    background: var(--track);
+    border: 1px solid var(--track-brd);
+    border-radius: 9px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.seg-track > a,
+.seg-track > button {
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    border: 1px solid transparent !important;
+    border-radius: 7px !important;
+    background: transparent !important;
+    color: var(--text-dim) !important;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.seg-track > a:hover,
+.seg-track > button:hover {
+    /* sideways sheen: brighter at both edges, falling away through the centre */
+    background: linear-gradient(90deg,
+                rgba(255, 255, 255, 0.075) 0%,
+                rgba(255, 255, 255, 0.025) 50%,
+                rgba(255, 255, 255, 0.075) 100%) !important;
+    color: var(--text) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.30) !important;
+}
+.seg-track > a.active,
+.seg-track > button.active {
+    background: linear-gradient(90deg,
+                var(--seg-on-edge) 0%,
+                var(--seg-on-mid) 48%,
+                var(--seg-on-edge) 100%) !important;
+    border-color: transparent !important;
+    color: #fff !important;
+    /* top highlight + bottom emboss give the pill its raised edge, then a
+       lift shadow, a violet ring and an outer glow on top of that */
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.50),
+                0 1px 2px rgba(0, 0, 0, 0.55),
+                0 0 0 1px rgba(139, 124, 246, 0.45),
+                0 0 14px rgba(139, 124, 246, 0.28) !important;
+}
+
+/* ---- chart tab bar ---- */
+.chart-tabs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0 0 0.6rem 0;
+}
+.chart-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.32rem 0.7rem;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important; letter-spacing: 0.03em;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.chart-tab:hover { background: var(--panel-3); color: var(--text); }
+.chart-tab.active {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+    color: var(--accent-txt);
+}
+.chart-card { padding: 0.9rem 1.1rem !important; }
+
+/* ---- navbar right ---- */
+.nav-right { display: flex; gap: 0.6rem; align-items: center; }
+.nav-updated { font-size: 0.72rem; color: var(--text-mute); white-space: nowrap; }
+
+/* ---- two column layout ---- */
+.layout {
+    display: grid;
+    grid-template-columns: 396px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+@media (max-width: 1250px) { .layout { grid-template-columns: 1fr; } }
+.main { min-width: 0; }
+
+/* ---- sidebar ---- */
+.side-card { padding: 0 !important; }
+.side-tabs {
+    /* nowrap: with five tabs plus the collapse button this row is tight at
+       380px, and wrapping dropped the button onto its own line. The track
+       scrolls instead so the button stays pinned on the same row. */
+    display: flex; gap: 0.4rem; flex-wrap: nowrap; align-items: center;
+    padding: 0.5rem 0.6rem;
+    background: var(--panel-head);
+    border-bottom: 1px solid var(--border);
+}
+.side-tabs > .seg-track {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.side-tabs > .seg-track::-webkit-scrollbar { display: none; }
+.side-tab { white-space: nowrap; }
+.side-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.28rem 0.5rem;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.side-tab:hover { background: var(--panel-3); color: var(--text); }
+.side-tab.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-txt); }
+.side-body { padding: 0.8rem 0.85rem; }
+.side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.5rem; margin-bottom: 0.6rem; min-height: 1.1rem;
+}
+.side-toggle {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.826rem; color: var(--text-dim); cursor: pointer; white-space: nowrap;
+}
+.side-sub { font-size: 0.85rem; color: var(--text-mute); margin-bottom: 0.7rem; }
+.side-sub b { color: var(--text); font-weight: 600; }
+.side-h {
+    font-family: var(--sans);
+    font-size: 0.755rem; font-weight: 700;
+    letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--text-dim); margin: 0 0 0.5rem 0;
+}
+.side-empty { font-size: 0.873rem; color: var(--text-mute); padding: 1.2rem 0; text-align: center; }
+.side .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.side .pair-grid { grid-template-columns: 1fr !important; gap: 1.1rem !important; }
+/* two-up in the sidebar, same rhythm as the metric tiles - the base rule is a
+   wrapping flex row sized for the full-width layout, which stretches here */
+.side .period-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.5rem !important;
+}
+.side .period-box { min-width: 0 !important; max-width: none !important; padding: 0.6rem 0.5rem !important; }
+.side .period-header { font-size: 0.802rem !important; }
+.side .period-row { font-size: 0.779rem !important; }
+.side table { font-size: 0.85rem !important; }
+.side th { font-size: 0.75rem !important; padding: 0.45rem 0.35rem !important; }
+.side td { padding: 0.38rem 0.35rem !important; }
+
+/* ---- pair chart chrome ---- */
+.pc-tools { display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+.pc-check, .pc-chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-size: 0.85rem; color: var(--text-dim); cursor: pointer; white-space: nowrap;
+}
+.pc-sel { font-weight: 400; font-size: 0.92rem; color: var(--accent-txt); }
+.pc-sel b { font-weight: 600; color: var(--text); }
+.pc-sel a { color: var(--neu); margin-left: 0.3rem; text-decoration: underline; }
+.pc-sel a:hover { color: #f0c860; }
+.pc-ohlc {
+    display: flex; gap: 0.85rem; flex-wrap: wrap; align-items: baseline;
+    font-size: 0.873rem; color: var(--text-mute); margin-bottom: 0.5rem;
+}
+.pc-ohlc b { color: var(--text); font-weight: 600; }
+.pc-pair { color: var(--pos) !important; }
+.pc-dim { color: var(--text-mute); }
+.pc-legend { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.pc-chip {
+    background: var(--chip);
+    border: 1px solid var(--chip-brd);
+    border-radius: 999px;
+    padding: 0.18rem 0.6rem;
+}
+.pc-chip:hover { border-color: var(--accent); }
+.pc-chip input { display: none; }
+.pc-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.pc-chip.off { opacity: 0.45; }
+.pc-chip.off i { background: var(--text-mute) !important; }
+
+/* ---- selectable trade rows ---- */
+.trow { cursor: pointer; }
+.trow.sel { background: rgba(139,124,246,0.14) !important; box-shadow: inset 2px 0 0 var(--accent); }
+
+/* ---- trade detail ---- */
+.td-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.6rem 1.6rem;
+}
+.td-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.75rem; font-size: 0.885rem; padding: 0.17rem 0;
+}
+.td-row > span { color: var(--text-mute); }
+.td-row > b { font-weight: 600; color: var(--text); text-align: right; }
+.td-stats { border-left: 1px solid var(--border); padding-left: 1.1rem; }
+.td-note {
+    font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-mute); opacity: 0.7; line-height: 1.6; margin-bottom: 0.45rem;
+}
+
+/* ---- misc ---- */
+.status-pill {
+    background: var(--panel-2) !important;
+    border: 1px solid var(--border-2) !important;
+    font-family: var(--sans) !important;
+    font-size: 0.826rem !important;
+}
+.status-dot { background: var(--pos) !important; box-shadow: none !important; }
+.status-dot.stopped { background: var(--neg) !important; box-shadow: none !important; }
+.alert {
+    background: rgba(244,135,155,0.08) !important;
+    border: 1px solid rgba(244,135,155,0.30) !important;
+    border-radius: 8px !important;
+    color: var(--neg) !important;
+    font-family: var(--sans) !important;
+}
+.loading { color: var(--text-dim) !important; font-family: var(--sans) !important; }
+/* Only the loader that stands alone in the main grid column gets a panel look.
+   Scoped deliberately: .loading is also used INSIDE cards elsewhere (regime
+   analysis, MAE/MFE, coverage), where a background and border would render a
+   card within a card. */
+.main > .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 2.5rem 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.spinner { border-color: var(--border-2) !important; border-left-color: var(--accent) !important; }
+.pair-section h4 {
+    font-family: var(--sans) !important;
+    font-size: 0.779rem !important;
+    letter-spacing: 0.11em !important;
+    color: var(--text-dim) !important;
+    font-weight: 700 !important;
+    text-shadow: none !important;
+}
+.quality-bar {
+    background: rgba(255,255,255,0.07) !important;
+    border-radius: 2px !important;
+    height: 5px !important;
+}
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #313244; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #45475a; }
+
+/* ---- login page ---- */
+.login-card {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    box-shadow: none !important;
+}
+.login-header {
+    background: var(--panel-head) !important;
+    border-bottom: 1px solid var(--border) !important;
+    padding: 1.6rem 1.4rem !important;
+}
+/* Same treatment as .brand - the login screen shows the same wordmark. */
+.login-header h1 {
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important;
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f2f2f4 40%, #a8a5b0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent !important;
+    text-shadow: none !important;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+.login-header h1 span {
+    -webkit-text-fill-color: var(--text-mute);
+    color: var(--text-mute) !important;
+    font-family: var(--sans) !important;
+    letter-spacing: 0 !important;
+}
+.login-header p { color: var(--text-mute) !important; font-size: 0.873rem !important; }
+.form-group label {
+    font-family: var(--sans) !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.11em !important;
+    color: var(--text-mute) !important;
+}
+.btn-login {
+    background: linear-gradient(90deg,
+                var(--seg-on-edge) 0%,
+                var(--seg-on-mid) 48%,
+                var(--seg-on-edge) 100%) !important;
+    border: 1px solid rgba(139, 124, 246, 0.40) !important;
+    border-radius: 6px !important;
+    color: #fff !important;
+    font-family: var(--sans) !important;
+    font-size: 0.968rem !important;
+    font-weight: 600 !important;
+    text-transform: none !important;
+    letter-spacing: 0.02em !important;
+    padding: 0.7rem !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+                0 1px 2px rgba(0, 0, 0, 0.45) !important;
+    text-shadow: none !important;
+}
+.btn-login:hover:not(:disabled) {
+    filter: brightness(1.15) !important;
+    transform: none !important;
+}
+.login-error {
+    background: rgba(244,135,155,0.08) !important;
+    border: 1px solid rgba(244,135,155,0.30) !important;
+    border-radius: 6px !important;
+    color: var(--neg) !important;
+    font-family: var(--sans) !important;
+    font-size: 0.897rem !important;
+}
+.login-footer {
+    border-top: 1px solid var(--border) !important;
+    color: var(--text-mute) !important;
+    font-size: 0.85rem !important;
+}
+.login-footer a { color: var(--accent-txt) !important; }
+.spinner-small { border-color: var(--border-2) !important; border-left-color: var(--accent) !important; }
+
+/* ---- small segmented control (log panes, inline switches) ---- */
+.seg { display: inline-flex; border: 1px solid var(--border-2); border-radius: 6px; overflow: hidden; }
+.seg button {
+    background: transparent; border: none; cursor: pointer;
+    font-family: var(--sans); font-size: 0.802rem; padding: 0.24rem 0.55rem;
+    color: var(--text-dim);
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.seg button:hover { background: var(--panel-3); color: var(--text); }
+.seg button.on { background: var(--accent-bg); color: var(--accent-txt); }
+
+/* right-hand extras inside a chart tab strip (e.g. UTC/Local) */
+.chart-tabs-right { margin-left: auto; display: inline-flex; gap: 0.25rem; align-items: center; }
+.tz-btn {
+    background: transparent; border: 1px solid var(--border-2); border-radius: 5px;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif !important; letter-spacing: 0.03em; font-size: 0.779rem; padding: 0.2rem 0.5rem;
+    color: var(--text-dim); cursor: pointer;
+}
+.tz-btn:hover { background: var(--panel-3); color: var(--text); }
+.tz-btn.active {
+    background: linear-gradient(90deg,
+                var(--seg-on-edge) 0%,
+                var(--seg-on-mid) 48%,
+                var(--seg-on-edge) 100%);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+                0 0 0 1px rgba(139, 124, 246, 0.45);
+}
+
+/* ---- page-specific surfaces (backtester / datamanager) ---- */
+.metric-mini {
+    background: var(--panel-2) !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 8px !important;
+}
+.metric-mini:hover {
+    background: var(--panel-2) !important;
+    border-color: var(--border-2) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+.metric-mini-label {
+    font-family: var(--sans) !important;
+    font-size: 0.75rem !important; font-weight: 500 !important;
+    letter-spacing: 0.11em !important;
+    color: var(--text-mute) !important;
+}
+.metric-mini-value {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: \"tnum\" 1;
+    font-family: var(--sans) !important;
+    font-size: 1.12rem !important; font-weight: 600 !important;
+    color: var(--text) !important;
+}
+.exchange-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 0.6rem;
+}
+.exchange-row {
+    /* compact square-ish tile rather than a full-width bar */
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.3rem !important;
+    aspect-ratio: 1 / 0.78;
+    padding: 0.7rem 0.6rem !important;
+    margin-bottom: 0 !important;
+    text-align: center;
+    background: var(--panel-2) !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 8px !important;
+}
+.exchange-cfg { font-size: 0.72rem; color: var(--text-mute); }
+.exchange-badges { display: flex; gap: 0.3rem; flex-wrap: wrap; justify-content: center; }
+.exchange-badges .badge { font-size: 0.62rem !important; padding: 0.1rem 0.35rem !important; }
+.exchange-row:hover { background: var(--panel-3) !important; border-color: var(--accent) !important; }
+.exchange-row.active { background: var(--accent-bg) !important; border-color: var(--accent) !important; }
+.exchange-name {
+    font-family: var(--sans) !important;
+    font-size: 1.062rem !important; font-weight: 600 !important;
+    color: var(--text) !important;
+}
+
+/* ---- bots tab: one card per config (the 9-column table never fitted here) ---- */
+.bot-list {
+    display: flex; flex-direction: column; gap: 0.55rem;
+    max-height: 560px; overflow-y: auto;
+}
+.bot-card {
+    display: flex; flex-direction: column; gap: 0.5rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    padding: 0.6rem 0.65rem;
+}
+.bot-card.sel { border-color: var(--accent); background: var(--accent-bg); }
+.bot-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.bot-name {
+    font-family: var(--sans);
+    font-size: 0.78rem; font-weight: 600;
+    color: var(--pos); text-decoration: underline; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bot-name.off { opacity: 0.55; cursor: default; text-decoration-style: dotted; }
+.bot-meta { font-size: 0.68rem; color: var(--text-mute); }
+.bot-meta b { color: var(--text); font-weight: 600; margin-right: 0.35rem; }
+.bot-meta span span { margin-right: 0.3rem; }
+.bot-auto {
+    display: flex; align-items: center; gap: 0.35rem;
+    font-size: 0.68rem; color: var(--text-dim);
+    cursor: pointer; white-space: nowrap;
+}
+/* Same geometry as the login page's text boxes: roomy padding, 8px radius.
+   theme.css sets no padding on .form-input, so a bare select falls back to the
+   browser default and reads much tighter than those inputs do. */
+.bot-strat {
+    width: 100%;
+    padding: 0.72rem 0.9rem !important;
+    border-radius: 8px !important;
+    font-size: 0.92rem !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.bot-actions { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+
+/* ---- typography: sans everywhere ------------------------------------------
+   No monospace anywhere in the UI. Numeric displays get tabular figures
+   instead, which is the only thing mono was actually providing here: equal
+   digit widths so columns still line up. "zero" 1 keeps 0 slashed/dotted where
+   the face offers it, so it stays distinct from O in prices and IDs. */
+body { line-height: 1.5; letter-spacing: 0.005em; }
+td,
+.metric-value,
+.metric-mini-value,
+.period-row .val,
+.pair-cell,
+.bot-name,
+.pc-ohlc,
+.pc-sel b,
+.td-row > b,
+textarea,
+.seg-track > button.mono {
+    font-family: var(--sans) !important;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+}
+/* labels sit opposite those figures - keep them sans */
+.td-row > span,
+.period-row .lbl,
+.bot-meta { font-family: var(--sans) !important; }
+th { letter-spacing: 0.09em !important; }
+.metric-label, .metric-mini-label, .side-h, .pair-section h4 { letter-spacing: 0.09em !important; }
+
+/* ---- legibility: data cells carry most of the reading load -------------- */
+td {
+    font-weight: 500 !important;
+    line-height: 1.55 !important;
+    padding: 0.55rem 0.6rem !important;
+}
+th {
+    padding: 0.6rem 0.6rem !important;
+    line-height: 1.4 !important;
+}
+tbody tr { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.side table { font-size: 0.82rem !important; }
+.side th { font-size: 0.7rem !important; padding: 0.5rem 0.4rem !important; }
+.side td { padding: 0.45rem 0.4rem !important; }
+
+/* ---- login form fields ---------------------------------------------------
+   The login card is the one place a text field is the focal point, so these
+   get more depth than the generic .form-input: a recessed well (inset shadow
+   + slightly darker fill than the card) so the field reads as carved into the
+   panel rather than sitting flat on it. */
+.login-card .form-input {
+    background: linear-gradient(180deg, #1a1a28 0%, #21212f 100%) !important;
+    border: 1px solid var(--border-2) !important;
+    border-radius: 8px !important;
+    color: var(--text) !important;
+    padding: 0.8rem 0.95rem !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.01em;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45),
+                inset 0 -1px 0 rgba(255, 255, 255, 0.04) !important;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease !important;
+}
+.login-card .form-input::placeholder { color: var(--text-mute); opacity: 0.75; }
+.login-card .form-input:hover:not(:focus) { border-color: var(--chip-brd) !important; }
+.login-card .form-input:focus {
+    background: linear-gradient(180deg, #1d1d2c 0%, #252534 100%) !important;
+    border-color: var(--accent) !important;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.40),
+                0 0 0 3px rgba(139, 124, 246, 0.20),
+                0 0 14px rgba(139, 124, 246, 0.12) !important;
+}
+/* Autofill inside the login card: match the well, not the flat panel colour. */
+.login-card input:-webkit-autofill,
+.login-card input:-webkit-autofill:hover,
+.login-card input:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0 1000px #1e1e2c inset,
+                        inset 0 2px 4px rgba(0, 0, 0, 0.45) !important;
+    box-shadow: 0 0 0 1000px #1e1e2c inset,
+                inset 0 2px 4px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* ---- backtester run panel (backtest / pairs / hyperopt / suite) --------- */
+.run-card { padding-top: 0 !important; }
+.run-tabs {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.75rem; flex-wrap: wrap;
+    margin: 0 -1.1rem 1rem;
+    padding: 0.6rem 1.1rem;
+    background: var(--panel-head);
+    border-bottom: 1px solid var(--border);
+}
+.run-meta { font-size: 0.8rem; color: var(--text-mute); }
+/* same shape as .chart-tab, but a distinct class - the two strips coexist on
+   this page and sharing one class made "which tab is active" ambiguous */
+.run-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.32rem 0.7rem;
+    font-family: var(--sans);
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.run-note {
+    font-size: 0.82rem; color: var(--text-dim); line-height: 1.6;
+    margin: 0 0 0.9rem; max-width: 78ch;
+}
+.run-note code {
+    font-family: var(--mono); font-size: 0.78rem;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 4px; padding: 0.05rem 0.3rem; color: var(--text);
+}
+.fld {
+    display: block; margin-bottom: 0.3rem;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--text-mute);
+}
+.run-status {
+    display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.5rem;
+}
+.run-status b { color: var(--text); font-family: var(--mono); }
+.run-log {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    max-height: 320px; overflow: auto;
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.5;
+    color: var(--text-dim); margin: 0; white-space: pre-wrap;
+}
+
+/* ---- data manager: prebuilt-archive notice ----------------------------- */
+.archive-note {
+    background: rgba(139,124,246,0.08);
+    border: 1px solid rgba(139,124,246,0.30);
+    border-radius: 8px;
+    padding: 0.7rem 0.85rem;
+    margin-bottom: 0.9rem;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+}
+.archive-note b { color: var(--text); }
+.archive-note code {
+    font-family: var(--mono); font-size: 0.78rem;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 4px; padding: 0.05rem 0.3rem; color: var(--text);
+}
+.archive-src {
+    display: block;
+    font-family: var(--mono); font-size: 0.74rem;
+    color: var(--accent-txt);
+    word-break: break-all;
+    margin: 0.35rem 0;
+}
+/* controls that an archive import ignores */
+.form-input:disabled, textarea:disabled, select:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- sidebar collapse -------------------------------------------------- */
+.side-collapse {
+    margin-left: auto;
+    background: var(--chip);
+    border: 1px solid var(--chip-brd);
+    border-radius: 5px;
+    color: #b9b1c9;
+    cursor: pointer;
+    width: 26px; height: 24px;
+    font-size: 0.95rem; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.side-collapse:hover { background: #45475a; border-color: var(--accent); color: var(--text); }
+/* Collapsed: the sidebar keeps a slim rail holding just the toggle, so the
+   panel can be brought back - the main column takes the reclaimed width. */
+.layout.side-collapsed { grid-template-columns: 48px minmax(0, 1fr); }
+.layout.side-collapsed .side-body { display: none !important; }
+.layout.side-collapsed .side-tabs > .seg-track { display: none !important; }
+.layout.side-collapsed .side-tabs { justify-content: center; padding: 0.5rem 0; border-bottom: none; }
+.layout.side-collapsed .side-collapse { margin-left: 0; }
+
+/* secondary line under a metric value (e.g. the absolute drawdown under the %) */
+.metric-sub {
+    display: block;
+    margin-top: 0.15rem;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-mute);
+}
+/* .pos/.neg inside the sub-line keep their own colour, but not the parent's size */
+.metric-sub .pos, .metric-sub .neg { font-size: inherit; font-weight: 600; }

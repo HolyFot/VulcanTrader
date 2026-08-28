@@ -16,11 +16,11 @@
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
-            color: #e0e0e0;
+            color: #e8e5ef;
             min-height: 100vh;
         }
         .navbar {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            background: linear-gradient(110deg, #4c1d95 0%, #8b7cf6 45%, #7fb2f7 100%);
             padding: 1rem 2rem;
             display: flex;
             justify-content: space-between;
@@ -37,8 +37,8 @@
         }
         .nav-link:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
         .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.1), rgba(52,22,100,0.1));
-            border-color: #695ff5; box-shadow: 0 0 10px rgba(105,95,245,0.3);
+            background: linear-gradient(135deg, rgba(139,124,246,0.1), rgba(52,22,100,0.1));
+            border-color: #8b7cf6; box-shadow: 0 0 10px rgba(139,124,246,0.3);
         }
         .btn {
             background: linear-gradient(135deg, #4c17ad 0%, #341664 50%, #190538 100%);
@@ -46,9 +46,9 @@
             border-radius: 6px; padding: 0.5rem 1rem; font-weight: 500;
             cursor: pointer; transition: all 0.3s ease;
         }
-        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(105,95,245,0.3); }
+        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(139,124,246,0.3); }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .btn-danger { background: linear-gradient(135deg, #dc2626, #991b1b); }
+        .btn-danger { background: linear-gradient(135deg, #f4879b, #991b1b); }
         .btn-logout {
             background: rgba(255,255,255,0.07) !important;
             border: 1px solid rgba(255,255,255,0.15) !important;
@@ -66,7 +66,7 @@
            (job Cancel, log-panel toggles, ...) - see "Multi-bot fleet control"
            Configs table in trading.html for the original convention this
            mirrors. Deliberately NOT .btn - that class is 150px-min-width
-           Cinzel styling meant for primary CTAs, not small repeated actions. */
+           the wider primary-action button, not small repeated actions. */
         .icon-btn {
             display: inline-flex; align-items: center; justify-content: center;
             width: 30px; height: 30px; margin: 2px 2px 2px 0;
@@ -78,11 +78,32 @@
         .icon-btn:hover:not(:disabled) { filter: brightness(1.35); transform: translateY(-1px); }
         .icon-btn:active:not(:disabled) { transform: translateY(0); }
         .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .icon-btn.success { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.4); color: #10b981; }
-        .icon-btn.danger  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.4); color: #ef4444; }
-        .icon-btn.info    { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); color: #38bdf8; }
-        .icon-btn.warn    { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: #f59e0b; }
-        .icon-btn.accent  { background: rgba(105,95,245,0.16); border-color: rgba(105,95,245,0.45); color: #9089f7; }
+        .icon-btn.success { background: rgba(126,226,168,0.16); border-color: rgba(126,226,168,0.4); color: #7ee2a8; }
+        .icon-btn.danger  { background: rgba(244,135,155,0.16); border-color: rgba(244,135,155,0.4); color: #f4879b; }
+        .icon-btn.info    { background: rgba(127,178,247,0.16); border-color: rgba(127,178,247,0.4); color: #7fb2f7; }
+        .icon-btn.warn    { background: rgba(227,179,65,0.16); border-color: rgba(227,179,65,0.4); color: #e3b341; }
+        .icon-btn.accent  { background: rgba(139,124,246,0.16); border-color: rgba(139,124,246,0.45); color: #cdc4ff; }
+
+        /* Custom checkbox - same base rule as trading.html. theme.css only
+           overrides the colors and assumes this geometry already exists, so
+           without it the input falls back to a native checkbox. */
+        .toggle-check {
+            appearance: none; -webkit-appearance: none;
+            width: 17px; height: 17px; border-radius: 4px;
+            background: rgba(127,178,247,0.15); border: 1px solid rgba(127,178,247,0.45);
+            cursor: pointer; position: relative; vertical-align: middle;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .toggle-check:checked {
+            background: rgba(126,226,168,0.18); border-color: rgba(126,226,168,0.55);
+        }
+        .toggle-check:checked::after {
+            content: ''; position: absolute; left: 5px; top: 2px;
+            width: 4px; height: 8px;
+            border: solid #7ee2a8; border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+        .toggle-check:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .content { max-width: 95%; margin: 0 auto; padding: 2rem; }
 
@@ -96,22 +117,22 @@
         }
         .card:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
         .card h3 {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            background: linear-gradient(110deg, #4c1d95 0%, #8b7cf6 45%, #7fb2f7 100%);
             margin: -1.5rem -1.5rem 1rem -1.5rem;
             padding: 1rem 1.5rem;
             border-radius: 8px 8px 0 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
-            color: #e0e0e0; font-size: 1.125rem; font-weight: 600;
+            color: #e8e5ef; font-size: 1.125rem; font-weight: 600;
             text-shadow: 0 2px 4px rgba(0,0,0,0.3);
             display: flex; align-items: center; justify-content: space-between;
         }
         .form-input, select {
-            background: #1f1f2e; color: #e0e0e0;
+            background: #1a1d25; color: #e8e5ef;
             border: 1px solid rgba(255,255,255,0.1);
             border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem;
         }
-        .form-input:focus, select:focus { outline: none; border-color: #695ff5; }
-        select option { background: #1f1f2e; color: #e0e0e0; }
+        .form-input:focus, select:focus { outline: none; border-color: #8b7cf6; }
+        select option { background: #1a1d25; color: #e8e5ef; }
 
         /* metrics grid */
         .metrics-grid {
@@ -133,13 +154,13 @@
         }
         .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
         .metric-label {
-            font-size: 0.75rem; color: #a0aec0;
+            font-size: 0.75rem; color: #9891a8;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin-bottom: 0.4rem; text-align: center;
         }
-        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
+        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e8e5ef; }
         /* compact UTC/Local toggle in the hourly chart headers.
-           Deliberately NOT .btn — that class is 150px-min-width Cinzel styling. */
+           Deliberately NOT .btn — that class is the wider primary-action button. */
         .tz-btn {
             font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em;
             font-family: inherit; text-transform: uppercase;
@@ -147,17 +168,17 @@
             border-radius: 4px; cursor: pointer;
             background: rgba(255,255,255,0.05);
             border: 1px solid rgba(255,255,255,0.12);
-            color: #a0aec0; transition: all 0.15s ease;
+            color: #9891a8; transition: all 0.15s ease;
         }
         .tz-btn:hover {
-            background: rgba(105,95,245,0.18); color: #c4b5fd;
-            border-color: rgba(105,95,245,0.4);
+            background: rgba(139,124,246,0.18); color: #cdc4ff;
+            border-color: rgba(139,124,246,0.4);
         }
         .tz-btn.active {
-            background: rgba(105,95,245,0.28); border-color: #695ff5; color: #fff;
+            background: rgba(139,124,246,0.28); border-color: #8b7cf6; color: #fff;
         }
-        .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
-        .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+        .pos { color: #7ee2a8; text-shadow: 0 0 10px rgba(126,226,168,0.3); }
+        .neg { color: #f4879b; text-shadow: 0 0 10px rgba(244,135,155,0.3); }
 
         /* compact stat tiles (MAE/MFE strip) */
         .metric-mini {
@@ -169,11 +190,11 @@
             text-align: center;
         }
         .metric-mini-label {
-            font-size: 0.68rem; color: #a0aec0;
+            font-size: 0.68rem; color: #9891a8;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin-bottom: 0.25rem;
         }
-        .metric-mini-value { font-size: 1.1rem; font-weight: 700; color: #e0e0e0; }
+        .metric-mini-value { font-size: 1.1rem; font-weight: 700; color: #e8e5ef; }
 
         /* monthly/daily boxes */
         .period-grid {
@@ -190,11 +211,11 @@
             contain: layout style;
         }
         .period-box:hover {
-            box-shadow: 0 6px 20px rgba(105,95,245,0.2);
+            box-shadow: 0 6px 20px rgba(139,124,246,0.2);
             background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
         }
         .period-header {
-            font-size: 0.8rem; font-weight: 600; color: #e0e0e0;
+            font-size: 0.8rem; font-weight: 600; color: #e8e5ef;
             text-align: center;
             border-bottom: 1px solid rgba(255,255,255,0.1);
             padding-bottom: 0.4rem; margin-bottom: 0.25rem;
@@ -203,7 +224,7 @@
             display: flex; justify-content: space-between;
             font-size: 0.78rem;
         }
-        .period-row .lbl { color: #a0aec0; }
+        .period-row .lbl { color: #9891a8; }
         .period-row .val { font-weight: 600; }
 
         /* tables */
@@ -211,7 +232,7 @@
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         th {
             background: linear-gradient(135deg, #0f0f23, #1a1a3e);
-            color: #a0aec0; font-weight: 600;
+            color: #9891a8; font-weight: 600;
             text-transform: uppercase; letter-spacing: 0.05em;
             padding: 0.6rem 0.5rem; text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -221,23 +242,23 @@
         td {
             padding: 0.5rem 0.5rem;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-            color: #e0e0e0; white-space: nowrap;
+            color: #e8e5ef; white-space: nowrap;
         }
-        tbody tr:hover { background: rgba(105,95,245,0.08); }
-        .pair-cell { font-weight: 600; color: #695ff5; }
-        .side-long { color: #10b981; font-weight: 600; }
-        .side-short { color: #ef4444; font-weight: 600; }
+        tbody tr:hover { background: rgba(139,124,246,0.08); }
+        .pair-cell { font-weight: 600; color: #8b7cf6; }
+        .side-long { color: #7ee2a8; font-weight: 600; }
+        .side-short { color: #f4879b; font-weight: 600; }
 
         .alert {
             background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
-            border: 1px solid rgba(239,68,68,0.3);
+            border: 1px solid rgba(244,135,155,0.3);
             border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #fca5a5;
         }
-        .loading { text-align: center; padding: 2.5rem; color: #a0aec0; }
+        .loading { text-align: center; padding: 2.5rem; color: #9891a8; }
         .spinner {
             display: inline-block; width: 20px; height: 20px;
             border: 3px solid rgba(255,255,255,0.1);
-            border-left-color: #695ff5;
+            border-left-color: #8b7cf6;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin-right: 0.6rem; vertical-align: middle;
@@ -249,141 +270,37 @@
         }
         @media (max-width: 768px) { .pair-grid { grid-template-columns: 1fr; } }
         .pair-section h4 {
-            color: #a0aec0; font-size: 0.85rem;
+            color: #9891a8; font-size: 0.85rem;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin: 0 0 0.5rem 0;
         }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-    <style>
-        /* === VulcanTrader Pro UI overrides === */
-        body {
-            background:
-                linear-gradient(135deg, rgba(15,5,20,0.55), rgba(10,5,15,0.78)),
-                url('/static/background.jpg') center/cover fixed no-repeat,
-                linear-gradient(135deg, #1b0a14 0%, #14081a 50%, #0d0610 100%) !important;
-        }
-        .navbar {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            backdrop-filter: blur(10px) saturate(140%);
-            -webkit-backdrop-filter: blur(10px) saturate(140%);
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            position: relative;
-        }
-        .navbar::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .brand {
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            letter-spacing: 0.10em !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.75), 0 0 18px rgba(105,95,245,0.5) !important;
-        }
-        .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.15), rgba(52,22,100,0.15)) !important;
-            border-color: #695ff5 !important;
-            box-shadow: 0 0 10px rgba(105,95,245,0.35) !important;
-        }
-        .btn {
-            background: linear-gradient(135deg, rgba(76,23,173,0.88) 0%, rgba(52,22,100,0.88) 50%, rgba(25,5,56,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
-            background-blend-mode: normal, normal !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            border-radius: 0 !important;
-            padding: 12px 24px !important;
-            min-width: 150px;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            text-transform: uppercase !important;
-            letter-spacing: 0.08em !important;
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4), 0 1px 0 rgba(255,255,255,0.12) inset !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
-            color: #f5f5f5 !important;
-        }
-        .btn:hover:not(:disabled) {
-            transform: scale(1.05);
-            box-shadow: 0 12px 32px rgba(105,95,245,0.5), 0 1px 0 rgba(255,255,255,0.18) inset !important;
-            filter: drop-shadow(0 0 6px rgba(105,95,245,0.4));
-        }
-        .btn-danger { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 50%, #991b1b 100%) !important; }
-        .card {
-            background: linear-gradient(135deg, rgba(27,27,27,0.56) 0%, rgba(20,19,27,0.56) 50%, rgba(13,11,22,0.61) 100%) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            overflow: hidden;
-        }
-        .card h3 {
-            position: relative;
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 600 !important;
-            letter-spacing: 0.08em !important;
-            color: #e0e0e0 !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.6), 0 0 18px rgba(105,95,245,0.35) !important;
-        }
-        .card h3::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .metric, .period-box {
-            background: rgba(255,255,255,0.03) !important;
-            border: 1px solid rgba(255,255,255,0.05) !important;
-        }
-        .period-box:hover {
-            background: rgba(255,255,255,0.06) !important;
-            box-shadow: 0 6px 20px rgba(105,95,245,0.18) !important;
-        }
-        th {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%) !important;
-            color: #a0aec0 !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        tbody tr:hover { background: rgba(105,95,245,0.10) !important; }
-        .pair-section h4 {
-            font-family: 'Cinzel', serif !important;
-            letter-spacing: 0.08em !important;
-            color: #a0aec0 !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.6) !important;
-        }
-        .form-input, select, input[type="text"], input[type="number"], input[type="date"] {
-            background: rgba(255,255,255,0.05) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        .form-input:focus, select:focus, input:focus { border-color: #695ff5 !important; box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important; }
-        .pair-cell { color: #695ff5 !important; }
-        .chart-active-pair { background: rgba(105,95,245,0.14) !important; }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/theme.css?v=45">
 </head>
 <body>
 <div id="app">
     <nav class="navbar">
         <div style="display:flex; align-items:center;">
             <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;">v{{ version }}</span></a>
-            <div style="margin-left: 2rem;">
+            <div class="seg-track" style="margin-left: 2rem;">
                 <a href="/trading" class="nav-link">Trading</a>
                 <a href="/backtester" class="nav-link active">Backtester</a>
                 <a href="/datamanager" class="nav-link">Data Manager</a>
             </div>
         </div>
-        <div style="display:flex; gap:0.5rem; align-items:center;">
+        <div class="nav-right">
             <select v-model="selectedBacktest" @change="loadBacktest" class="form-input" style="min-width:260px;">
                 <option value="">— Select backtest result —</option>
                 <option v-for="b in backtests" :key="b.name" :value="b.name">
                     {{ b.name }} ({{ formatBytes(b.size) }})
                 </option>
             </select>
-            <button class="icon-btn info" @click="refreshList" :disabled="loading" title="Refresh">&#8635;</button>
-            <button class="btn btn-logout" @click="logout" title="Logout"
-                    style="min-width:unset; padding:8px 12px; line-height:0;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+            <button class="icon-btn" @click="refreshList" :disabled="loading" title="Refresh">&#8635;</button>
+            <button class="icon-btn" @click="logout" title="Logout">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
                      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                     <polyline points="16 17 21 12 16 7"/>
@@ -396,101 +313,380 @@
     <div class="content">
         <div v-if="error" class="alert"><strong>Error:</strong> {{ error }}</div>
 
-        <!-- === BACKTESTING === -->
-        <div class="card">
-            <h3>
-                Backtest
-                <span style="font-size:0.75rem; color:#a0aec0; font-weight:400; display:flex; align-items:center; gap:0.5rem;">
-                    {{ runningJobCount }} / {{ jobsMaxConcurrent }} running
-                    <label style="font-size:0.72rem; color:#a0aec0; margin-left:0.75rem;">Max concurrent</label>
-                    <input type="number" min="1" max="32" v-model.number="jobsMaxConcurrent"
-                           class="form-input" style="width:58px; font-size:0.8rem;"
-                           title="Maximum number of backtest jobs allowed to run simultaneously">
+        <!-- === RUN PANEL (backtest / pairs finder / hyperopt / suite) === -->
+        <div class="card run-card">
+            <div class="run-tabs">
+                <span class="seg-track">
+                    <button class="run-tab" :class="{ active: runTab === 'backtest' }" @click="runTab = 'backtest'">Backtest</button>
+                    <button class="run-tab" :class="{ active: runTab === 'pairs' }"    @click="runTab = 'pairs'">Pairs Finder</button>
+                    <button class="run-tab" :class="{ active: runTab === 'hyperopt' }" @click="runTab = 'hyperopt'">Hyperopt</button>
+                    <button class="run-tab" :class="{ active: runTab === 'suite' }"    @click="runTab = 'suite'">Suite</button>
                 </span>
-            </h3>
-            <div v-if="runError" class="alert"><strong>Error:</strong> {{ runError }}</div>
-            <!-- 5 columns for 5 children: config / strategy / timerange / engine / button.
-                 Timerange is fixed-width (it only ever holds a date range) so the run
-                 button fits on the same row instead of wrapping onto its own line. -->
-            <div style="display:grid; grid-template-columns: minmax(140px,1fr) minmax(160px,1fr) 190px 150px auto; gap:0.75rem; align-items:end;">
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
-                    <select v-model="runForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">— select config —</option>
-                        <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
-                    <select v-model="runForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">— select strategy —</option>
-                        <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
-                           title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)">Timerange</label>
-                    <input v-model="runForm.timerange" class="form-input" placeholder="20240101-20240601"
-                           title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)"
-                           style="width:100%; margin-top:0.25rem;">
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Engine</label>
-                    <select v-model="runForm.engine" class="form-input" style="width:100%; margin-top:0.25rem;"
-                            title="Python = full fidelity. Rust = fast, simplified (no DCA / callbacks / protections).">
-                        <option value="python">Python (full)</option>
-                        <option value="rust">Rust (fast)</option>
-                    </select>
-                </div>
-                <button class="btn" @click="startRun"
-                        :disabled="runSubmitting || !runForm.config || runningJobCount >= jobsMaxConcurrent">
-                    {{ runSubmitting ? 'Starting…' : 'Run Backtest' }}
-                </button>
+                <span class="run-meta">
+                    <template v-if="runTab === 'backtest'">{{ runningJobCount }} / {{ jobsMaxConcurrent }} running</template>
+                    <template v-else-if="runTab === 'hyperopt'">Bayesian parameter optimisation</template>
+                    <template v-else-if="runTab === 'suite'">Two-phase sweep over every strategy</template>
+                </span>
             </div>
 
-            <div v-if="jobs.length > 0" style="margin-top:1.25rem;">
-                <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
-                    Recent Jobs
-                </h4>
-                <div class="table-wrap" style="max-height:260px;">
-                    <table>
-                        <thead><tr>
-                            <th>Status</th><th>Config</th><th>Strategy</th><th>Timerange</th>
-                            <th>Started</th><th>Finished</th><th>Result</th><th></th>
-                        </tr></thead>
-                        <tbody>
-                            <tr v-for="j in jobs" :key="j.id"
-                                @click="selectJob(j.id)"
-                                :style="{ cursor: 'pointer', background: selectedJobId === j.id ? 'rgba(105,95,245,0.12)' : '' }">
-                                <td><span :style="{ color: jobStatusColor(j.status), fontWeight: 600 }">{{ j.status }}</span></td>
-                                <td>{{ j.config }}</td>
-                                <td>{{ j.strategy || '—' }}</td>
-                                <td>{{ j.timerange || '—' }}</td>
-                                <td>{{ formatDate(j.started_at) }}</td>
-                                <td>{{ formatDate(j.finished_at) }}</td>
-                                <td>
-                                    <a v-if="j.result_file" href="#" @click.stop.prevent="loadJobResult(j)"
-                                       style="color:#695ff5;">{{ j.result_file }}</a>
-                                    <span v-else style="color:#555;">—</span>
-                                </td>
-                                <td>
-                                    <button v-if="j.status === 'running'" class="icon-btn danger"
-                                            title="Cancel" @click.stop="cancelJob(j.id)">&#9632;</button>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+            <div v-show="runTab === 'backtest'">
+                    <div v-if="runError" class="alert"><strong>Error:</strong> {{ runError }}</div>
+                    <!-- 5 columns for 5 children: config / strategy / timerange / engine / button.
+                         Timerange is fixed-width (it only ever holds a date range) so the run
+                         button fits on the same row instead of wrapping onto its own line. -->
+                    <div style="display:grid; grid-template-columns: minmax(140px,1fr) minmax(160px,1fr) 190px 150px auto; gap:0.75rem; align-items:end;">
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
+                            <select v-model="runForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">— select config —</option>
+                                <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
+                            <select v-model="runForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">— select strategy —</option>
+                                <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;"
+                                   title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)">Timerange</label>
+                            <input v-model="runForm.timerange" class="form-input" placeholder="20240101-20240601"
+                                   title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)"
+                                   style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Engine</label>
+                            <select v-model="runForm.engine" class="form-input" style="width:100%; margin-top:0.25rem;"
+                                    title="Python = full fidelity. Rust = fast, simplified (no DCA / callbacks / protections).">
+                                <option value="python">Python (full)</option>
+                                <option value="rust">Rust (fast)</option>
+                            </select>
+                        </div>
+                        <button class="btn" @click="startRun"
+                                :disabled="runSubmitting || !runForm.config || runningJobCount >= jobsMaxConcurrent">
+                            {{ runSubmitting ? 'Starting…' : 'Run Backtest' }}
+                        </button>
+                    </div>
+
+                    <div v-if="jobs.length > 0" style="margin-top:1.25rem;">
+                        <h4 style="color:#9891a8; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
+                            Recent Jobs
+                        </h4>
+                        <div class="table-wrap" style="max-height:260px;">
+                            <table>
+                                <thead><tr>
+                                    <th>Status</th><th>Config</th><th>Strategy</th><th>Timerange</th>
+                                    <th>Started</th><th>Finished</th><th>Result</th><th></th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="j in jobs" :key="j.id"
+                                        @click="selectJob(j.id)"
+                                        :style="{ cursor: 'pointer', background: selectedJobId === j.id ? 'rgba(139,124,246,0.12)' : '' }">
+                                        <td><span :style="{ color: jobStatusColor(j.status), fontWeight: 600 }">{{ j.status }}</span></td>
+                                        <td>{{ j.config }}</td>
+                                        <td>{{ j.strategy || '—' }}</td>
+                                        <td>{{ j.timerange || '—' }}</td>
+                                        <td>{{ formatDate(j.started_at) }}</td>
+                                        <td>{{ formatDate(j.finished_at) }}</td>
+                                        <td>
+                                            <a v-if="j.result_file" href="#" @click.stop.prevent="loadJobResult(j)"
+                                               style="color:#8b7cf6;">{{ j.result_file }}</a>
+                                            <span v-else style="color:#6f6880;">—</span>
+                                        </td>
+                                        <td>
+                                            <button v-if="j.status === 'running'" class="icon-btn danger"
+                                                    title="Cancel" @click.stop="cancelJob(j.id)">&#9632;</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div v-if="selectedJob" style="margin-top:0.75rem;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#9891a8; margin-bottom:0.25rem;">
+                                <span>Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)</span>
+                                <button class="icon-btn info" @click="toggleJobLogSize"
+                                        :title="jobLogExpanded ? 'Collapse log to default height' : 'Expand log to double height'">{{ jobLogExpanded ? '▲' : '▼' }}</button>
+                            </div>
+                            <pre ref="jobLogPre"
+                                 :style="{ maxHeight: jobLogExpanded ? '560px' : '280px' }"
+                                 style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#9891a8; margin:0; white-space:pre-wrap; transition:max-height 0.2s ease;">{{ jobLogText || '(no output yet)' }}</pre>
+                        </div>
+                    </div>
+            </div>
+
+            <div v-show="runTab === 'pairs'">
+                    <div v-if="pfError" class="alert"><strong>Error:</strong> {{ pfError }}</div>
+                    <div style="display:grid; grid-template-columns: repeat(6, 1fr) auto; gap:0.6rem; align-items:end;">
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
+                            <select v-model="pfForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">— select config —</option>
+                                <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
+                            <select v-model="pfForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">(from config)</option>
+                                <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Timerange</label>
+                            <input v-model="pfForm.timerange" class="form-input" placeholder="20250101-" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Metric</label>
+                            <select v-model="pfForm.metric" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="composite">composite</option>
+                                <option value="roi">roi</option>
+                                <option value="sharpe">sharpe</option>
+                                <option value="sortino">sortino</option>
+                                <option value="calmar">calmar</option>
+                                <option value="expectancy">expectancy</option>
+                                <option value="profit_factor">profit_factor</option>
+                                <option value="win_rate">win_rate</option>
+                                <option value="lowdd">lowdd</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Top N</label>
+                            <input type="number" min="1" max="500" v-model.number="pfForm.top_n" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Workers</label>
+                            <input type="number" min="1" max="16" v-model.number="pfForm.workers" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <button class="btn" @click="startPairsFinder"
+                                :disabled="pfSubmitting || !pfForm.config || pfRunning">
+                            {{ pfSubmitting ? 'Starting…' : (pfRunning ? 'Running…' : 'Find Pairs') }}
+                        </button>
+                    </div>
+
+                    <div v-if="pfJob" style="margin-top:1rem;">
+                        <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:#9891a8;">
+                            <span>Status: <strong :style="{ color: jobStatusColor(pfJob.status) }">{{ pfJob.status }}</strong></span>
+                            <span>Progress: <strong>{{ pfJob.pf_pairs_done }}/{{ pfJob.pf_pairs_total }}</strong>
+                                <span v-if="pfJob.pf_pairs_failed" style="color:#9891a8;">({{ pfJob.pf_pairs_failed }} no-data)</span>
+                            </span>
+                            <span v-if="pfJob.pf_metric">Metric: <strong>{{ pfJob.pf_metric }}</strong></span>
+                            <span v-if="pfJob.result_file" style="color:#7ee2a8;">Saved: {{ pfJob.result_file }}</span>
+                            <button v-if="pfJob.status === 'running'" class="icon-btn danger"
+                                    title="Cancel" @click="cancelJob(pfJob.id)">&#9632;</button>
+                            <button v-if="pfTopResults.length > 0" class="btn"
+                                    style="padding:0.25rem 0.6rem; font-size:0.75rem;"
+                                    @click="copyPfWhitelist">Copy whitelist (top {{ pfForm.top_n }})</button>
+                        </div>
+                        <div v-if="pfJob.pf_pairs_total"
+                             style="margin-top:0.5rem; height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;">
+                            <div :style="{ width: ((pfJob.pf_pairs_done / pfJob.pf_pairs_total) * 100) + '%',
+                                           height: '100%', background: '#8b7cf6', transition: 'width 0.3s' }"></div>
+                        </div>
+                    </div>
+
+                    <div v-if="pfTopResults.length > 0" style="margin-top:1rem;">
+                        <div class="table-wrap" style="max-height:380px;">
+                            <table>
+                                <thead><tr>
+                                    <th>#</th><th>Pair</th><th>Trades</th>
+                                    <th>ROI %</th><th>Avg %</th><th>Win %</th>
+                                    <th>Sharpe</th><th>Sortino</th><th>Calmar</th>
+                                    <th>PF</th><th>Expect.</th><th>MaxDD %</th><th>Score</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="(r, i) in pfTopResults" :key="r.pair">
+                                        <td>{{ i + 1 }}</td>
+                                        <td>{{ r.pair }}</td>
+                                        <td>{{ r.trades }}</td>
+                                        <td :style="{ color: r.total_profit_pct >= 0 ? '#7ee2a8' : '#f4879b' }">
+                                            {{ (+r.total_profit_pct).toFixed(2) }}
+                                        </td>
+                                        <td>{{ (+r.avg_profit_pct).toFixed(2) }}</td>
+                                        <td>{{ (+r.win_rate).toFixed(1) }}</td>
+                                        <td>{{ (+r.sharpe).toFixed(2) }}</td>
+                                        <td>{{ (+r.sortino).toFixed(2) }}</td>
+                                        <td>{{ (+r.calmar).toFixed(2) }}</td>
+                                        <td>{{ (+r.profit_factor).toFixed(2) }}</td>
+                                        <td>{{ (+r.expectancy).toFixed(2) }}</td>
+                                        <td>{{ (+r.max_drawdown).toFixed(1) }}</td>
+                                        <td><strong>{{ (+r.composite_score).toFixed(1) }}</strong></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <details v-if="pfJob && pfJobLog" style="margin-top:0.75rem;">
+                        <summary style="font-size:0.75rem; color:#9891a8; cursor:pointer;">Pairs-finder log</summary>
+                        <pre style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.6rem; max-height:240px; overflow:auto; font-size:0.72rem; line-height:1.4; color:#9891a8; margin:0.4rem 0 0; white-space:pre-wrap;">{{ pfJobLog }}</pre>
+                    </details>
+            </div>
+
+            <div v-show="runTab === 'hyperopt'">
+                    <div v-if="hoError" class="alert"><strong>Error:</strong> {{ hoError }}</div>
+
+                    <!-- Row 1: config / strategy / timerange / epochs -->
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:0.6rem; align-items:end; margin-bottom:0.6rem;">
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
+                            <select v-model="hoForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">— select config —</option>
+                                <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
+                            <select v-model="hoForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="">(from config)</option>
+                                <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Timerange</label>
+                            <input v-model="hoForm.timerange" class="form-input" placeholder="20250101-" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;" title="Number of optimisation epochs to run">Epochs</label>
+                            <input type="number" min="1" max="100000" v-model.number="hoForm.epochs" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                    </div>
+
+                    <!-- Row 2: loss / spaces / jobs / min-trades -->
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:0.6rem; align-items:end; margin-bottom:0.6rem;">
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;" title="Loss function used to rank epochs">Loss function</label>
+                            <select v-model="hoForm.hyperopt_loss" class="form-input" style="width:100%; margin-top:0.25rem;">
+                                <option value="SharpeHyperOptLossDaily">SharpeHyperOptLossDaily</option>
+                                <option value="SharpeHyperOptLoss">SharpeHyperOptLoss</option>
+                                <option value="SortinoHyperOptLoss">SortinoHyperOptLoss</option>
+                                <option value="SortinoHyperOptLossDaily">SortinoHyperOptLossDaily</option>
+                                <option value="CalmarHyperOptLoss">CalmarHyperOptLoss</option>
+                                <option value="MaxDrawDownHyperOptLoss">MaxDrawDownHyperOptLoss</option>
+                                <option value="MaxDrawDownRelativeHyperOptLoss">MaxDrawDownRelativeHyperOptLoss</option>
+                                <option value="ProfitDrawDownHyperOptLoss">ProfitDrawDownHyperOptLoss</option>
+                                <option value="OnlyProfitHyperOptLoss">OnlyProfitHyperOptLoss</option>
+                                <option value="ShortTradeDurHyperOptLoss">ShortTradeDurHyperOptLoss</option>
+                                <option value="MultiMetricHyperOptLoss">MultiMetricHyperOptLoss</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;" title="Search spaces to optimise">Spaces</label>
+                            <div style="margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.35rem;">
+                                <label v-for="sp in hoSpaceOptions" :key="sp"
+                                       style="display:flex; align-items:center; gap:0.25rem; font-size:0.78rem; color:#9891a8; cursor:pointer; white-space:nowrap;">
+                                    <input type="checkbox" :value="sp" v-model="hoForm.spaces" style="accent-color:#8b7cf6;">
+                                    {{ sp }}
+                                </label>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;" title="Parallel workers (-1 = all CPUs)">Workers (jobs)</label>
+                            <input type="number" min="-1" max="64" v-model.number="hoForm.jobs" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;" title="Discard epochs with fewer trades than this">Min trades</label>
+                            <input type="number" min="1" max="10000" v-model.number="hoForm.min_trades" class="form-input" style="width:100%; margin-top:0.25rem;">
+                        </div>
+                    </div>
+
+                    <!-- Row 3: flags + submit -->
+                    <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
+                        <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#9891a8; cursor:pointer;" title="Re-run populate_indicators every epoch (slower, more accurate)">
+                            <input type="checkbox" v-model="hoForm.analyze_per_epoch" style="accent-color:#8b7cf6;">
+                            Analyze per epoch
+                        </label>
+                        <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#9891a8; cursor:pointer;" title="Print every epoch result, not just improvements">
+                            <input type="checkbox" v-model="hoForm.print_all" style="accent-color:#8b7cf6;">
+                            Print all
+                        </label>
+                        <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#9891a8; cursor:pointer;" title="Strip ANSI colour codes from output">
+                            <input type="checkbox" v-model="hoForm.no_color" style="accent-color:#8b7cf6;" :checked="true">
+                            No colour
+                        </label>
+                        <button class="btn" @click="startHyperopt"
+                                :disabled="hoSubmitting || !hoForm.config || hoRunning">
+                            {{ hoSubmitting ? 'Starting…' : (hoRunning ? 'Running…' : 'Run Hyperopt') }}
+                        </button>
+                        <button v-if="hoRunning" class="icon-btn danger"
+                                title="Cancel" @click="cancelJob(hoJobId)">&#9632;</button>
+                    </div>
+
+                    <!-- Job status + progress -->
+                    <div v-if="hoJob" style="margin-top:0.9rem;">
+                        <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:#9891a8;">
+                            <span>Status: <strong :style="{ color: jobStatusColor(hoJob.status) }">{{ hoJob.status }}</strong></span>
+                            <span v-if="hoJob.ho_epoch !== undefined">
+                                Epoch: <strong>{{ hoJob.ho_epoch }}</strong><span v-if="hoJob.ho_total"> / {{ hoJob.ho_total }}</span>
+                            </span>
+                            <span v-if="hoJob.ho_best_loss !== undefined && hoJob.ho_best_loss !== null" class="pos">
+                                Best loss: <strong>{{ (+hoJob.ho_best_loss).toFixed(4) }}</strong>
+                            </span>
+                            <span v-if="hoJob.result_file" style="color:#7ee2a8;">Done: {{ hoJob.result_file }}</span>
+                        </div>
+                        <div v-if="hoJob.ho_total && hoJob.ho_epoch"
+                             style="margin-top:0.4rem; height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;">
+                            <div :style="{ width: Math.min(100, (hoJob.ho_epoch / hoJob.ho_total) * 100) + '%',
+                                           height: '100%', background: '#8b7cf6', transition: 'width 0.3s' }"></div>
+                        </div>
+                    </div>
+
+                    <!-- Log -->
+                    <details v-if="hoJob && hoJobLog" style="margin-top:0.75rem;" :open="hoRunning">
+                        <summary style="font-size:0.75rem; color:#9891a8; cursor:pointer;">Hyperopt log</summary>
+                        <pre ref="hoLogPre" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.6rem; max-height:360px; overflow:auto; font-size:0.72rem; line-height:1.4; color:#9891a8; margin:0.4rem 0 0; white-space:pre-wrap;">{{ hoJobLog }}</pre>
+                    </details>
+            </div>
+
+            <div v-show="runTab === 'suite'">
+                <p class="run-note">
+                    Does a short pair finder, backtests them for a longer period and creates
+                    configs for ALL of your existing strategies. Chooses exchange's pairs based
+                    on the ones in your chosen config below.
+                </p>
+                <div v-if="suiteError" class="alert"><strong>Error:</strong> {{ suiteError }}</div>
+                <div style="display:grid; grid-template-columns: repeat(4, 1fr) auto; gap:0.6rem; align-items:end;">
+                    <div>
+                        <label class="fld">Config</label>
+                        <select v-model="suiteForm.config" class="form-input" style="width:100%;">
+                            <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="fld">Parallel jobs</label>
+                        <input v-model.number="suiteForm.jobs" type="number" min="1" max="32"
+                               class="form-input" style="width:100%;">
+                    </div>
+                    <div>
+                        <label class="fld">Scan days (phase 1)</label>
+                        <input v-model.number="suiteForm.scan_days" type="number" min="1" max="3650"
+                               class="form-input" style="width:100%;">
+                    </div>
+                    <div>
+                        <label class="fld">Deep days (phase 2)</label>
+                        <input v-model.number="suiteForm.deep_days" type="number" min="1" max="3650"
+                               class="form-input" style="width:100%;">
+                    </div>
+                    <button class="btn" @click="runSuite" :disabled="suiteRunning">
+                        {{ suiteRunning ? 'Running…' : 'Run Suite' }}
+                    </button>
                 </div>
 
-                <div v-if="selectedJob" style="margin-top:0.75rem;">
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem;">
-                        <span>Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)</span>
-                        <button class="icon-btn info" @click="toggleJobLogSize"
-                                :title="jobLogExpanded ? 'Collapse log to default height' : 'Expand log to double height'">{{ jobLogExpanded ? '▲' : '▼' }}</button>
+                <div v-if="suiteJob" style="margin-top:0.9rem;">
+                    <div class="run-status">
+                        <span class="badge" :class="suiteJob.status === 'running' ? 'badge-open'
+                                                  : (suiteJob.status === 'succeeded' ? 'badge-open' : 'badge-closed')">
+                            {{ suiteJob.status }}
+                        </span>
+                        <span v-if="suiteJob.suite_phase">phase: <b>{{ suiteJob.suite_phase }}</b></span>
+                        <span>config <b>{{ suiteJob.config }}</b></span>
+                        <span>jobs <b>{{ suiteJob.suite_jobs }}</b></span>
+                        <button v-if="suiteJob.status === 'running'" class="icon-btn danger"
+                                @click="cancelJob(suiteJob.id)" title="Cancel">&#9632;</button>
                     </div>
-                    <pre ref="jobLogPre"
-                         :style="{ maxHeight: jobLogExpanded ? '560px' : '280px' }"
-                         style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap; transition:max-height 0.2s ease;">{{ jobLogText || '(no output yet)' }}</pre>
+                    <pre ref="suiteLogPre" class="run-log">{{ suiteJobLog || '(no output yet)' }}</pre>
                 </div>
             </div>
         </div>
@@ -499,240 +695,9 @@
             <span class="spinner"></span> Loading backtest data...
         </div>
 
-        <!-- === PAIRS FINDER === -->
-        <div class="card">
-            <h3>Pairs Finder</h3>
-            <div v-if="pfError" class="alert"><strong>Error:</strong> {{ pfError }}</div>
-            <div style="display:grid; grid-template-columns: repeat(6, 1fr) auto; gap:0.6rem; align-items:end;">
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
-                    <select v-model="pfForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">— select config —</option>
-                        <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
-                    <select v-model="pfForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">(from config)</option>
-                        <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Timerange</label>
-                    <input v-model="pfForm.timerange" class="form-input" placeholder="20250101-" style="width:100%; margin-top:0.25rem;">
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Metric</label>
-                    <select v-model="pfForm.metric" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="composite">composite</option>
-                        <option value="roi">roi</option>
-                        <option value="sharpe">sharpe</option>
-                        <option value="sortino">sortino</option>
-                        <option value="calmar">calmar</option>
-                        <option value="expectancy">expectancy</option>
-                        <option value="profit_factor">profit_factor</option>
-                        <option value="win_rate">win_rate</option>
-                        <option value="lowdd">lowdd</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Top N</label>
-                    <input type="number" min="1" max="500" v-model.number="pfForm.top_n" class="form-input" style="width:100%; margin-top:0.25rem;">
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Workers</label>
-                    <input type="number" min="1" max="16" v-model.number="pfForm.workers" class="form-input" style="width:100%; margin-top:0.25rem;">
-                </div>
-                <button class="btn" @click="startPairsFinder"
-                        :disabled="pfSubmitting || !pfForm.config || pfRunning">
-                    {{ pfSubmitting ? 'Starting…' : (pfRunning ? 'Running…' : 'Find Pairs') }}
-                </button>
-            </div>
-
-            <div v-if="pfJob" style="margin-top:1rem;">
-                <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:#cbd5e0;">
-                    <span>Status: <strong :style="{ color: jobStatusColor(pfJob.status) }">{{ pfJob.status }}</strong></span>
-                    <span>Progress: <strong>{{ pfJob.pf_pairs_done }}/{{ pfJob.pf_pairs_total }}</strong>
-                        <span v-if="pfJob.pf_pairs_failed" style="color:#a0aec0;">({{ pfJob.pf_pairs_failed }} no-data)</span>
-                    </span>
-                    <span v-if="pfJob.pf_metric">Metric: <strong>{{ pfJob.pf_metric }}</strong></span>
-                    <span v-if="pfJob.result_file" style="color:#10b981;">Saved: {{ pfJob.result_file }}</span>
-                    <button v-if="pfJob.status === 'running'" class="icon-btn danger"
-                            title="Cancel" @click="cancelJob(pfJob.id)">&#9632;</button>
-                    <button v-if="pfTopResults.length > 0" class="btn"
-                            style="padding:0.25rem 0.6rem; font-size:0.75rem;"
-                            @click="copyPfWhitelist">Copy whitelist (top {{ pfForm.top_n }})</button>
-                </div>
-                <div v-if="pfJob.pf_pairs_total"
-                     style="margin-top:0.5rem; height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;">
-                    <div :style="{ width: ((pfJob.pf_pairs_done / pfJob.pf_pairs_total) * 100) + '%',
-                                   height: '100%', background: '#695ff5', transition: 'width 0.3s' }"></div>
-                </div>
-            </div>
-
-            <div v-if="pfTopResults.length > 0" style="margin-top:1rem;">
-                <div class="table-wrap" style="max-height:380px;">
-                    <table>
-                        <thead><tr>
-                            <th>#</th><th>Pair</th><th>Trades</th>
-                            <th>ROI %</th><th>Avg %</th><th>Win %</th>
-                            <th>Sharpe</th><th>Sortino</th><th>Calmar</th>
-                            <th>PF</th><th>Expect.</th><th>MaxDD %</th><th>Score</th>
-                        </tr></thead>
-                        <tbody>
-                            <tr v-for="(r, i) in pfTopResults" :key="r.pair">
-                                <td>{{ i + 1 }}</td>
-                                <td>{{ r.pair }}</td>
-                                <td>{{ r.trades }}</td>
-                                <td :style="{ color: r.total_profit_pct >= 0 ? '#10b981' : '#ef4444' }">
-                                    {{ (+r.total_profit_pct).toFixed(2) }}
-                                </td>
-                                <td>{{ (+r.avg_profit_pct).toFixed(2) }}</td>
-                                <td>{{ (+r.win_rate).toFixed(1) }}</td>
-                                <td>{{ (+r.sharpe).toFixed(2) }}</td>
-                                <td>{{ (+r.sortino).toFixed(2) }}</td>
-                                <td>{{ (+r.calmar).toFixed(2) }}</td>
-                                <td>{{ (+r.profit_factor).toFixed(2) }}</td>
-                                <td>{{ (+r.expectancy).toFixed(2) }}</td>
-                                <td>{{ (+r.max_drawdown).toFixed(1) }}</td>
-                                <td><strong>{{ (+r.composite_score).toFixed(1) }}</strong></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <details v-if="pfJob && pfJobLog" style="margin-top:0.75rem;">
-                <summary style="font-size:0.75rem; color:#a0aec0; cursor:pointer;">Pairs-finder log</summary>
-                <pre style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.6rem; max-height:240px; overflow:auto; font-size:0.72rem; line-height:1.4; color:#cbd5e0; margin:0.4rem 0 0; white-space:pre-wrap;">{{ pfJobLog }}</pre>
-            </details>
-        </div>
-
-        <!-- === HYPEROPT === -->
-        <div class="card">
-            <h3>
-                Hyperopt
-                <span style="font-size:0.75rem; color:#a0aec0; font-weight:400;">
-                    Bayesian parameter optimisation
-                </span>
-            </h3>
-            <div v-if="hoError" class="alert"><strong>Error:</strong> {{ hoError }}</div>
-
-            <!-- Row 1: config / strategy / timerange / epochs -->
-            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:0.6rem; align-items:end; margin-bottom:0.6rem;">
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
-                    <select v-model="hoForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">— select config —</option>
-                        <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Strategy</label>
-                    <select v-model="hoForm.strategy" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="">(from config)</option>
-                        <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Timerange</label>
-                    <input v-model="hoForm.timerange" class="form-input" placeholder="20250101-" style="width:100%; margin-top:0.25rem;">
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;" title="Number of optimisation epochs to run">Epochs</label>
-                    <input type="number" min="1" max="100000" v-model.number="hoForm.epochs" class="form-input" style="width:100%; margin-top:0.25rem;">
-                </div>
-            </div>
-
-            <!-- Row 2: loss / spaces / jobs / min-trades -->
-            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:0.6rem; align-items:end; margin-bottom:0.6rem;">
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;" title="Loss function used to rank epochs">Loss function</label>
-                    <select v-model="hoForm.hyperopt_loss" class="form-input" style="width:100%; margin-top:0.25rem;">
-                        <option value="SharpeHyperOptLossDaily">SharpeHyperOptLossDaily</option>
-                        <option value="SharpeHyperOptLoss">SharpeHyperOptLoss</option>
-                        <option value="SortinoHyperOptLoss">SortinoHyperOptLoss</option>
-                        <option value="SortinoHyperOptLossDaily">SortinoHyperOptLossDaily</option>
-                        <option value="CalmarHyperOptLoss">CalmarHyperOptLoss</option>
-                        <option value="MaxDrawDownHyperOptLoss">MaxDrawDownHyperOptLoss</option>
-                        <option value="MaxDrawDownRelativeHyperOptLoss">MaxDrawDownRelativeHyperOptLoss</option>
-                        <option value="ProfitDrawDownHyperOptLoss">ProfitDrawDownHyperOptLoss</option>
-                        <option value="OnlyProfitHyperOptLoss">OnlyProfitHyperOptLoss</option>
-                        <option value="ShortTradeDurHyperOptLoss">ShortTradeDurHyperOptLoss</option>
-                        <option value="MultiMetricHyperOptLoss">MultiMetricHyperOptLoss</option>
-                    </select>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;" title="Search spaces to optimise">Spaces</label>
-                    <div style="margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.35rem;">
-                        <label v-for="sp in hoSpaceOptions" :key="sp"
-                               style="display:flex; align-items:center; gap:0.25rem; font-size:0.78rem; color:#cbd5e0; cursor:pointer; white-space:nowrap;">
-                            <input type="checkbox" :value="sp" v-model="hoForm.spaces" style="accent-color:#695ff5;">
-                            {{ sp }}
-                        </label>
-                    </div>
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;" title="Parallel workers (-1 = all CPUs)">Workers (jobs)</label>
-                    <input type="number" min="-1" max="64" v-model.number="hoForm.jobs" class="form-input" style="width:100%; margin-top:0.25rem;">
-                </div>
-                <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;" title="Discard epochs with fewer trades than this">Min trades</label>
-                    <input type="number" min="1" max="10000" v-model.number="hoForm.min_trades" class="form-input" style="width:100%; margin-top:0.25rem;">
-                </div>
-            </div>
-
-            <!-- Row 3: flags + submit -->
-            <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
-                <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#cbd5e0; cursor:pointer;" title="Re-run populate_indicators every epoch (slower, more accurate)">
-                    <input type="checkbox" v-model="hoForm.analyze_per_epoch" style="accent-color:#695ff5;">
-                    Analyze per epoch
-                </label>
-                <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#cbd5e0; cursor:pointer;" title="Print every epoch result, not just improvements">
-                    <input type="checkbox" v-model="hoForm.print_all" style="accent-color:#695ff5;">
-                    Print all
-                </label>
-                <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:#cbd5e0; cursor:pointer;" title="Strip ANSI colour codes from output">
-                    <input type="checkbox" v-model="hoForm.no_color" style="accent-color:#695ff5;" :checked="true">
-                    No colour
-                </label>
-                <button class="btn" @click="startHyperopt"
-                        :disabled="hoSubmitting || !hoForm.config || hoRunning">
-                    {{ hoSubmitting ? 'Starting…' : (hoRunning ? 'Running…' : 'Run Hyperopt') }}
-                </button>
-                <button v-if="hoRunning" class="icon-btn danger"
-                        title="Cancel" @click="cancelJob(hoJobId)">&#9632;</button>
-            </div>
-
-            <!-- Job status + progress -->
-            <div v-if="hoJob" style="margin-top:0.9rem;">
-                <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:#cbd5e0;">
-                    <span>Status: <strong :style="{ color: jobStatusColor(hoJob.status) }">{{ hoJob.status }}</strong></span>
-                    <span v-if="hoJob.ho_epoch !== undefined">
-                        Epoch: <strong>{{ hoJob.ho_epoch }}</strong><span v-if="hoJob.ho_total"> / {{ hoJob.ho_total }}</span>
-                    </span>
-                    <span v-if="hoJob.ho_best_loss !== undefined && hoJob.ho_best_loss !== null" class="pos">
-                        Best loss: <strong>{{ (+hoJob.ho_best_loss).toFixed(4) }}</strong>
-                    </span>
-                    <span v-if="hoJob.result_file" style="color:#10b981;">Done: {{ hoJob.result_file }}</span>
-                </div>
-                <div v-if="hoJob.ho_total && hoJob.ho_epoch"
-                     style="margin-top:0.4rem; height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden;">
-                    <div :style="{ width: Math.min(100, (hoJob.ho_epoch / hoJob.ho_total) * 100) + '%',
-                                   height: '100%', background: '#695ff5', transition: 'width 0.3s' }"></div>
-                </div>
-            </div>
-
-            <!-- Log -->
-            <details v-if="hoJob && hoJobLog" style="margin-top:0.75rem;" :open="hoRunning">
-                <summary style="font-size:0.75rem; color:#a0aec0; cursor:pointer;">Hyperopt log</summary>
-                <pre ref="hoLogPre" style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.6rem; max-height:360px; overflow:auto; font-size:0.72rem; line-height:1.4; color:#cbd5e0; margin:0.4rem 0 0; white-space:pre-wrap;">{{ hoJobLog }}</pre>
-            </details>
-        </div>
 
         <div v-if="!loading && trades.length === 0 && !error" class="card">
-            <p style="color:#a0aec0; text-align:center; margin:0;">
+            <p style="color:#9891a8; text-align:center; margin:0;">
                 Select a backtest result from the dropdown above to view performance analytics.
             </p>
         </div>
@@ -749,14 +714,14 @@
                         </div>
                     </div>
                     <div class="metric">
-                        <div class="metric-label"># Trades</div>
-                        <div class="metric-value">{{ metrics.totalTrades }}</div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Wins / Losses</div>
+                        <div class="metric-label">Trades</div>
                         <div class="metric-value">
-                            <span class="pos">{{ metrics.wins }}</span> /
-                            <span class="neg">{{ metrics.losses }}</span>
+                            <span>{{ metrics.totalTrades }}</span>
+                            <span class="metric-sub">
+                                <span class="pos">{{ metrics.wins }}</span> W
+                                &middot;
+                                <span class="neg">{{ metrics.losses }}</span> L
+                            </span>
                         </div>
                     </div>
                     <div class="metric">
@@ -802,8 +767,8 @@
                     <div class="metric">
                         <div class="metric-label">Max Drawdown</div>
                         <div class="metric-value neg">
-                            {{ metrics.maxDrawdownPct.toFixed(2) }}%
-                            <span style="font-size:0.7rem; color:#a0aec0;">({{ fmt(metrics.maxDrawdownAbs) }})</span>
+                            <span>{{ metrics.maxDrawdownPct.toFixed(2) }}%</span>
+                            <span class="metric-sub">{{ fmt(metrics.maxDrawdownAbs) }}</span>
                         </div>
                     </div>
                     <div class="metric">
@@ -813,6 +778,41 @@
                     <div class="metric">
                         <div class="metric-label">Avg Trade Duration</div>
                         <div class="metric-value">{{ formatMinutes(metrics.avgDurationMin) }}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Avg Profit</div>
+                        <div class="metric-value" :class="metrics.avgProfitPct >= 0 ? 'pos' : 'neg'">
+                            <span>{{ metrics.avgProfitPct.toFixed(2) }}%</span>
+                            <span class="metric-sub">{{ fmt(metrics.avgProfit) }}</span>
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Longs vs Shorts</div>
+                        <div class="metric-value">
+                            <span class="pos">{{ metrics.longs }}</span>
+                            <span style="color:var(--text-mute);">/</span>
+                            <span class="neg">{{ metrics.shorts }}</span>
+                            <span class="metric-sub">long / short</span>
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">SQN</div>
+                        <div class="metric-value"
+                             :class="metrics.sqn == null ? '' : (metrics.sqn >= 2 ? 'pos' : (metrics.sqn < 1 ? 'neg' : ''))"
+                             :style="metrics.sqn == null ? 'color:var(--text-mute);' : ''"
+                             title="System Quality Number (Van Tharp)">
+                            {{ metrics.sqn == null ? '\u2013' : metrics.sqn.toFixed(2) }}
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Sortino</div>
+                        <div class="metric-value"
+                             :class="metrics.sortino == null ? '' : (metrics.sortino >= 0 ? 'pos' : 'neg')"
+                             :style="metrics.sortino == null ? 'color:var(--text-mute);' : ''"
+                             title="Downside-risk-adjusted return, annualised">
+                            {{ metrics.sortino == null ? '\u2013'
+                               : (isFinite(metrics.sortino) ? metrics.sortino.toFixed(2) : '\u221e') }}
+                        </div>
                     </div>
                 </div>
 
@@ -827,8 +827,8 @@
                     <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
                         <div class="metric-label" style="margin-bottom:0;">Volatility Bias</div>
                         <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
-                            <span v-if="volatilityBias && !volBiasLoading" style="font-size:0.7rem; color:#a0aec0;">
-                                Vol pair: <strong style="color:#695ff5;">{{ volatilityBias.vol_pair }}</strong>
+                            <span v-if="volatilityBias && !volBiasLoading" style="font-size:0.7rem; color:#9891a8;">
+                                Vol pair: <strong style="color:#8b7cf6;">{{ volatilityBias.vol_pair }}</strong>
                             </span>
                             <select v-model="volBiasPair" class="form-input" style="font-size:0.75rem; min-width:160px;">
                                 <option value="__all__">ALL (each pair's own vol)</option>
@@ -847,7 +847,7 @@
                     <div v-if="volBiasLoading" class="loading"><span class="spinner"></span> Running volatility analysis…</div>
 
                     <template v-if="!volatilityBias && !volBiasLoading && !volBiasError">
-                        <p style="color:#a0aec0; margin:0.5rem 0 0;">
+                        <p style="color:#9891a8; margin:0.5rem 0 0;">
                             Click <strong>Analyze</strong> to classify entries by ambient market volatility.
                         </p>
                     </template>
@@ -855,21 +855,21 @@
                     <template v-if="volatilityBias && !volBiasLoading">
                         <div class="metric-value" :class="volBiasClass">
                             {{ volatilityBias.label }}
-                            <span v-if="volatilityBias.p_value != null" style="font-size:0.7rem; color:#a0aec0;">
+                            <span v-if="volatilityBias.p_value != null" style="font-size:0.7rem; color:#9891a8;">
                                 (p = {{ volatilityBias.p_value.toFixed(3) }},
                                 {{ volatilityBias.high_points }}/4 metrics favor high-vol,
                                 n = {{ volatilityBias.n }})
                             </span>
                         </div>
                         <div v-if="volatilityBias.label === 'Inconclusive'"
-                             style="font-size:0.68rem; color:#8a92a0; margin-top:0.4rem;">
+                             style="font-size:0.68rem; color:#9891a8; margin-top:0.4rem;">
                             The gap in mean return per trade
                             ({{ volatilityBias.effect_size_pct > 0 ? '+' : '' }}{{ volatilityBias.effect_size_pct == null ? '–' : volatilityBias.effect_size_pct.toFixed(3) }}%
                             high-vol vs calm) is not distinguishable from chance at
                             p &lt; {{ volatilityBias.alpha }} — this strategy shows no
                             reliable volatility preference on this sample.
                         </div>
-                        <div v-if="volatilityBias.p_value != null" style="font-size:0.68rem; color:#8a92a0; margin-top:0.6rem;">
+                        <div v-if="volatilityBias.p_value != null" style="font-size:0.68rem; color:#9891a8; margin-top:0.6rem;">
                             High-vol entries vs calm entries (per-trade, so bucket size doesn't tilt the comparison):
                         </div>
                         <div v-if="volatilityBias.p_value != null" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-top:0.35rem;">
@@ -898,7 +898,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div v-if="volatilityBias.p_value != null" style="font-size:0.64rem; color:#6b7280; margin-top:0.5rem;">
+                        <div v-if="volatilityBias.p_value != null" style="font-size:0.64rem; color:#6f6880; margin-top:0.5rem;">
                             Cumulative over each bucket (shown for reference, not compared — these scale
                             with trade count: {{ volatilityBias.per_bucket_metrics.HIGH_VOL.trades }} high-vol
                             vs {{ volatilityBias.per_bucket_metrics.LOW_VOL.trades }} calm):
@@ -941,57 +941,52 @@
                 </div>
             </div>
 
-            <!-- === CHARTS === -->
-            <div class="card"><h3>Equity Curve</h3><div id="equityChart" style="height:380px;"></div></div>
-            <div class="card"><h3>Drawdown</h3><div id="drawdownChart" style="height:340px;"></div></div>
-            <!-- Hourly charts. Each header carries its own UTC/Local toggle, but they
-                 share `hourlyTz`, so switching one re-buckets all three. -->
-            <div class="card">
-                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
-                    <span>Hourly P&amp;L</span>
-                    <span style="display:flex; gap:0.25rem;">
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
-                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
-                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
-                                @click="setHourlyTz('local')">Local</button>
-                    </span>
-                </h3>
-                <div id="hourlyPnlChart" style="height:340px;"></div>
+            <!-- === CHARTS (tabbed) === -->
+            <!-- The three hourly charts share `hourlyTz`, so the UTC/Local switch
+                 lives on the tab strip and only shows while an hourly tab is open. -->
+            <div class="chart-tabs">
+                <span class="seg-track">
+                    <button class="chart-tab" :class="{ active: chartTab === 'equity' }"    @click="chartTab = 'equity'">Equity Curve</button>
+                    <button class="chart-tab" :class="{ active: chartTab === 'drawdown' }"  @click="chartTab = 'drawdown'">Drawdown</button>
+                    <button class="chart-tab" :class="{ active: chartTab === 'hourlyPnl' }" @click="chartTab = 'hourlyPnl'">Hourly P&amp;L</button>
+                    <button class="chart-tab" :class="{ active: chartTab === 'hourlyPf' }"  @click="chartTab = 'hourlyPf'">Hourly PF</button>
+                    <button class="chart-tab" :class="{ active: chartTab === 'hourlyDd' }"  @click="chartTab = 'hourlyDd'">Hourly Max DD</button>
+                </span>
+
+                <span class="chart-tabs-right" v-show="chartTab.indexOf('hourly') === 0">
+                    <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
+                            title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
+                    <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
+                            :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
+                            @click="setHourlyTz('local')">Local</button>
+                </span>
             </div>
-            <div class="card">
-                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
-                    <span>Hourly Profit Factor</span>
-                    <span style="display:flex; gap:0.25rem;">
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
-                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
-                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
-                                @click="setHourlyTz('local')">Local</button>
-                    </span>
-                </h3>
-                <div id="hourlyPfChart" style="height:340px;"></div>
-            </div>
-            <div class="card">
-                <h3 style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
-                    <span>Hourly Max Drawdown</span>
-                    <span style="display:flex; gap:0.25rem;">
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'utc' }"
-                                title="Bucket by UTC hour-of-day" @click="setHourlyTz('utc')">UTC</button>
-                        <button class="tz-btn" :class="{ active: hourlyTz === 'local' }"
-                                :title="'Bucket by ' + hourlyTzLabel + ' hour-of-day'"
-                                @click="setHourlyTz('local')">Local</button>
-                    </span>
-                </h3>
-                <div id="hourlyDdChart" style="height:340px;"></div>
+            <div class="card chart-card">
+                <div v-show="chartTab === 'equity'"><div id="equityChart" style="height:380px;"></div></div>
+                <div v-show="chartTab === 'drawdown'"><div id="drawdownChart" style="height:380px;"></div></div>
+                <div v-show="chartTab === 'hourlyPnl'"><div id="hourlyPnlChart" style="height:380px;"></div></div>
+                <div v-show="chartTab === 'hourlyPf'"><div id="hourlyPfChart" style="height:380px;"></div></div>
+                <div v-show="chartTab === 'hourlyDd'"><div id="hourlyDdChart" style="height:380px;"></div></div>
             </div>
 
             <!-- === BEST/WORST PAIRS === -->
             <div class="card" v-if="pairs.length > 0">
-                <h3>Best / Worst Pairs</h3>
+                <h3>
+                    Best / Worst Pairs
+                    <span style="display:flex; align-items:center; gap:0.6rem; font-weight:400;">
+                        <span style="font-size:0.8rem; color:#9891a8;">{{ pairs.length }} pairs traded</span>
+                        <select class="form-input" style="width:auto; padding:0.25rem 0.5rem; font-size:0.8rem;"
+                                v-model.number="pairsLimit" title="How many pairs to list in each table">
+                            <option :value="10">Top 10</option>
+                            <option :value="25">Top 25</option>
+                            <option :value="50">Top 50</option>
+                            <option :value="0">All pairs</option>
+                        </select>
+                    </span>
+                </h3>
                 <div class="pair-grid">
                     <div class="pair-section">
-                        <h4>Top 10 Performers</h4>
+                        <h4>Top {{ Math.min(pairsShown, pairs.length) }} Performers</h4>
                         <div class="table-wrap" style="max-height:400px;">
                             <table>
                                 <thead><tr>
@@ -1012,7 +1007,7 @@
                         </div>
                     </div>
                     <div class="pair-section">
-                        <h4>Bottom 10 Performers</h4>
+                        <h4>Bottom {{ Math.min(pairsShown, pairs.length) }} Performers</h4>
                         <div class="table-wrap" style="max-height:400px;">
                             <table>
                                 <thead><tr>
@@ -1045,7 +1040,6 @@
                             <option v-for="p in uniquePairs" :key="p" :value="p">{{ p }}</option>
                         </select>
                         <span v-if="chartLoading" class="spinner"></span>
-                        <span style="font-size:0.72rem; color:#a0aec0;">or click any trade row below</span>
                     </span>
                 </h3>
                 <div v-if="chartError" class="alert"><strong>Chart error:</strong> {{ chartError }}</div>
@@ -1056,7 +1050,13 @@
             <div class="card">
                 <h3>
                     Trades ({{ enrichedTrades.length }})
-                    <input v-model="tradeFilter" @input="tradesLimit = 20" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
+                    <span style="display:flex; align-items:center; gap:0.75rem; font-weight:400;">
+                        <label style="font-size:0.8rem; color:#9891a8; display:flex; align-items:center; gap:0.4rem; cursor:pointer; white-space:nowrap;">
+                            Show exit reason
+                            <input type="checkbox" class="toggle-check" v-model="showExitReason">
+                        </label>
+                        <input v-model="tradeFilter" @input="tradesLimit = 20" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
+                    </span>
                 </h3>
                 <div class="table-wrap">
                     <table>
@@ -1067,7 +1067,7 @@
                             <th>PnL</th><th>PnL %</th>
                             <th>R</th><th>R:R</th><th>PF</th>
                             <th>Sharpe</th><th>Expectancy R</th>
-                            <th>Exit</th>
+                            <th v-show="showExitReason">Exit</th>
                         </tr></thead>
                         <tbody>
                             <tr v-for="(t, i) in filteredTrades" :key="t.__idx"
@@ -1091,7 +1091,7 @@
                                 <td>{{ isFinite(t.__pf) ? t.__pf.toFixed(2) : '∞' }}</td>
                                 <td :class="t.__sharpe >= 0 ? 'pos' : 'neg'">{{ t.__sharpe.toFixed(2) }}</td>
                                 <td :class="t.__expectancyR >= 0 ? 'pos' : 'neg'">{{ t.__expectancyR.toFixed(3) }}</td>
-                                <td>{{ t.exit_reason || '-' }}</td>
+                                <td v-show="showExitReason">{{ t.exit_reason || '-' }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -1104,7 +1104,7 @@
                         Load all {{ filteredTradesTotal }}
                     </button>
                 </div>
-                <div v-else-if="filteredTradesTotal > 0" style="text-align:center;margin-top:0.75rem;color:#888;font-size:0.85rem;">
+                <div v-else-if="filteredTradesTotal > 0" style="text-align:center;margin-top:0.75rem;color:#9891a8;font-size:0.85rem;">
                     Showing all {{ filteredTradesTotal }} trades
                 </div>
             </div>
@@ -1114,8 +1114,8 @@
                 <h3>
                     Regime Analysis
                     <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
-                        <span v-if="regimeAnalysis && !regimeLoading" style="font-size:0.72rem; color:#a0aec0;">
-                            Regime pair: <strong style="color:#695ff5;">{{ regimeAnalysis.regime_pair }}</strong>
+                        <span v-if="regimeAnalysis && !regimeLoading" style="font-size:0.72rem; color:#9891a8;">
+                            Regime pair: <strong style="color:#8b7cf6;">{{ regimeAnalysis.regime_pair }}</strong>
                             &nbsp;·&nbsp; {{ regimeAnalysis.timeframe }}
                         </span>
                         <select v-model="regimePair" class="form-input" style="font-size:0.8rem; min-width:180px;">
@@ -1134,7 +1134,7 @@
                 <div v-if="regimeLoading" class="loading"><span class="spinner"></span> Running regime analysis…</div>
 
                 <template v-if="!regimeAnalysis && !regimeLoading && !regimeError">
-                    <p style="color:#a0aec0; text-align:center; margin:0.5rem 0 0.25rem;">
+                    <p style="color:#9891a8; text-align:center; margin:0.5rem 0 0.25rem;">
                         Click <strong>Analyze</strong> to classify market regimes and view per-regime metrics.
                     </p>
                 </template>
@@ -1147,33 +1147,29 @@
                             :style="{
                                 display:'flex', alignItems:'center', gap:'0.4rem',
                                 padding:'0.25rem 0.65rem', borderRadius:'5px', cursor:'pointer',
-                                background: selectedRegime === r ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.02)',
-                                border: '1px solid ' + (selectedRegime === r ? (regimeColors[r] || {}).solid || '#555' : 'rgba(255,255,255,0.1)'),
+                                background: selectedRegime === r ? 'var(--accent-bg)' : 'var(--chip)',
+                                border: '1px solid ' + (selectedRegime === r ? (regimeColors[r] || {}).solid || 'var(--accent)' : 'var(--chip-brd)'),
                                 opacity: selectedRegime !== null && selectedRegime !== r ? 0.3 : 1,
                                 transition: 'all 0.15s',
                             }">
-                            <div :style="{ width:'10px', height:'10px', borderRadius:'2px', background: (regimeColors[r] || {}).solid || '#888', flexShrink:0 }"></div>
-                            <span style="font-size:0.78rem; font-weight:500; letter-spacing:0.03em;" :style="{ color: (regimeColors[r] || {}).text || '#e0e0e0' }">{{ r.replace(/_/g, ' ') }}</span>
-                            <span style="font-size:0.72rem; color:#666;">({{ regimeAnalysis.per_regime_metrics[r].trades }})</span>
+                            <div :style="{ width:'10px', height:'10px', borderRadius:'2px', background: (regimeColors[r] || {}).solid || '#9891a8', flexShrink:0 }"></div>
+                            <span style="font-size:0.78rem; font-weight:500; letter-spacing:0.03em;" :style="{ color: (regimeColors[r] || {}).text || '#e8e5ef' }">{{ r.replace(/_/g, ' ') }}</span>
+                            <span style="font-size:0.72rem; color:#6f6880;">({{ regimeAnalysis.per_regime_metrics[r].trades }})</span>
                         </button>
                     </div>
 
-                    <!-- Equity by regime -->
-                    <div style="margin-bottom:1rem;">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">Equity Curve</div>
-                        <div id="regimeEquityChart" style="height:320px;"></div>
+                    <!-- Regime charts (tabbed) -->
+                    <div class="chart-tabs" style="margin-top:0.25rem;">
+                        <span class="seg-track">
+                            <button class="chart-tab" :class="{ active: regimeTab === 'equity' }"   @click="regimeTab = 'equity'">Equity Curve</button>
+                            <button class="chart-tab" :class="{ active: regimeTab === 'drawdown' }" @click="regimeTab = 'drawdown'">Drawdown</button>
+                            <button class="chart-tab" :class="{ active: regimeTab === 'pf' }"       @click="regimeTab = 'pf'">Profit Factor</button>
+                        </span>
                     </div>
-
-                    <!-- Drawdown by regime -->
-                    <div style="margin-bottom:1rem;">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">Drawdown</div>
-                        <div id="regimeDdChart" style="height:240px;"></div>
-                    </div>
-
-                    <!-- PF by regime -->
-                    <div style="margin-bottom:1.25rem;">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">Profit Factor by Regime</div>
-                        <div id="regimePfChart" style="height:220px;"></div>
+                    <div class="card chart-card" style="margin-bottom:1.25rem;">
+                        <div v-show="regimeTab === 'equity'"><div id="regimeEquityChart" style="height:320px;"></div></div>
+                        <div v-show="regimeTab === 'drawdown'"><div id="regimeDdChart" style="height:320px;"></div></div>
+                        <div v-show="regimeTab === 'pf'"><div id="regimePfChart" style="height:320px;"></div></div>
                     </div>
 
                     <!-- Per-regime metrics table -->
@@ -1225,8 +1221,8 @@
                 <h3>
                     MAE / MFE Analysis
                     <span style="display:flex; gap:0.5rem; align-items:center; font-family:system-ui; font-weight:400;">
-                        <span v-if="maeMfe && !maeMfeLoading" style="font-size:0.72rem; color:#a0aec0;">
-                            Regime pair: <strong style="color:#695ff5;">{{ maeMfe.regime_pair }}</strong>
+                        <span v-if="maeMfe && !maeMfeLoading" style="font-size:0.72rem; color:#9891a8;">
+                            Regime pair: <strong style="color:#8b7cf6;">{{ maeMfe.regime_pair }}</strong>
                             &nbsp;·&nbsp; {{ maeMfe.timeframe }}
                             &nbsp;·&nbsp; {{ (maeMfe.global || {}).total || 0 }} trades
                         </span>
@@ -1255,18 +1251,18 @@
                 <div v-if="maeMfeLoading" class="loading"><span class="spinner"></span> Computing MAE / MFE…</div>
 
                 <!-- === Explanations === -->
-                <div v-if="maeMfeHelp" style="background:rgba(105,95,245,0.07); border:1px solid rgba(105,95,245,0.25); border-radius:8px; padding:1rem 1.25rem; margin-bottom:1.25rem; font-size:0.82rem; line-height:1.55; color:#c8cdd6;">
-                    <div style="font-weight:700; color:#a78bfa; margin-bottom:0.5rem; font-size:0.9rem;">How to read this analysis</div>
-                    <p style="margin:0.3rem 0;"><strong style="color:#10b981;">MFE</strong> (Maximum Favorable Excursion) = how far price moved <em>in your favor</em> at the best point of the trade, % (leverage-adjusted). <strong style="color:#ef4444;">MAE</strong> (Maximum Adverse Excursion) = how far it moved <em>against you</em> at the worst point. Both are taken from each trade's recorded <code>min_rate</code>/<code>max_rate</code>, so they describe the heat and the runway every trade actually had, regardless of where it eventually exited.</p>
-                    <p style="margin:0.3rem 0;"><strong>Scatter (MAE → x, MFE → y).</strong> Each dot is one trade. <span style="color:#10b981;">Green = win</span>, <span style="color:#ef4444;">red = loss</span>. Dots high & to the left (high MFE, low MAE) are clean trades; dots low & to the right gave a lot of heat for little reward. The dashed <strong>MAE = MFE</strong> diagonal is the break-even line for excursions.</p>
-                    <p style="margin:0.3rem 0;"><strong>Clusters (★).</strong> K-Means groups trades by their (MAE, MFE) shape to reveal natural setup "types". The <strong style="color:#f59e0b;">dominant cluster</strong> is the one maximizing <em>expectancy × size</em> (quality × frequency), not just the biggest. <em>Note:</em> because MAE/MFE are realized outcomes, clusters naturally sort toward win/loss. A near-100% win-rate cluster is normal, not a bug.</p>
-                    <p style="margin:0.3rem 0;">The two highlighted recommendation tiles in the overall view: <strong style="color:#a78bfa;">Recommended MFE % (TP)</strong> = middle (centroid) of the dominant cluster's MFE band, so the favorable-excursion take-profit level where your best repeating setup tends to run to. <strong style="color:#ef4444;">Recommended MAE % (SL)</strong> = middle (centroid) of the dominant cluster's MAE band, the adverse-excursion stop level, the typical heat that setup endures, so a stop there shouldn't cut your good trades. Switch the <strong>View</strong> dropdown to a regime to get that regime's own recommended MFE % / MAE %.</p>
-                    <p style="margin:0.3rem 0;"><strong style="color:#a78bfa;">Recommended Per-Regime MAE / MFE %, the main output.</strong> The market at each trade's entry is classified (via regime_analysis: trend EMAs + ADX) into EXTREME_BULL…EXTREME_BEAR. For <em>each</em> regime we derive two dynamic excursion percentages from that regime's own trades: <strong style="color:#f59e0b;">Recommended MFE %</strong> = the favorable-excursion <em>take-profit</em> level, taken from the regime's MFE distribution; <strong style="color:#ef4444;">Recommended MAE %</strong> = the adverse-excursion <em>stop-loss</em> level, taken from the regime's MAE distribution. Within those distributions we pick the (MFE %, MAE %) pair that <strong>maximises expectancy</strong>, so each is grounded in real excursions and optimised, not a raw median.  The bracketed "reached by / hit by %" shows how often each level is actually touched in that regime. These are exactly the base MAE %/MFE % to use in your MAE SLs & MFE TPs. Regimes with under 30 trades are flagged <span style="color:#eab308;">⚠</span> (optimum unreliable). In-sample fits confirm with a backtest.</p>
-                    <p style="margin:0.3rem 0 0; color:#8a92a0; font-style:italic;">Caveat: MAE/MFE carry no intra-trade ordering, so we can't know whether the high or the low came first. The TP model therefore slightly over-credits TP hits (a trade could have hit its SL before reaching its MFE). Treat the numbers as a well-grounded guide, then confirm with a backtest using the chosen TP/SL.</p>
+                <div v-if="maeMfeHelp" style="background:rgba(139,124,246,0.07); border:1px solid rgba(139,124,246,0.25); border-radius:8px; padding:1rem 1.25rem; margin-bottom:1.25rem; font-size:0.82rem; line-height:1.55; color:#e8e5ef;">
+                    <div style="font-weight:700; color:#cdc4ff; margin-bottom:0.5rem; font-size:0.9rem;">How to read this analysis</div>
+                    <p style="margin:0.3rem 0;"><strong style="color:#7ee2a8;">MFE</strong> (Maximum Favorable Excursion) = how far price moved <em>in your favor</em> at the best point of the trade, % (leverage-adjusted). <strong style="color:#f4879b;">MAE</strong> (Maximum Adverse Excursion) = how far it moved <em>against you</em> at the worst point. Both are taken from each trade's recorded <code>min_rate</code>/<code>max_rate</code>, so they describe the heat and the runway every trade actually had, regardless of where it eventually exited.</p>
+                    <p style="margin:0.3rem 0;"><strong>Scatter (MAE → x, MFE → y).</strong> Each dot is one trade. <span style="color:#7ee2a8;">Green = win</span>, <span style="color:#f4879b;">red = loss</span>. Dots high & to the left (high MFE, low MAE) are clean trades; dots low & to the right gave a lot of heat for little reward. The dashed <strong>MAE = MFE</strong> diagonal is the break-even line for excursions.</p>
+                    <p style="margin:0.3rem 0;"><strong>Clusters (★).</strong> K-Means groups trades by their (MAE, MFE) shape to reveal natural setup "types". The <strong style="color:#e3b341;">dominant cluster</strong> is the one maximizing <em>expectancy × size</em> (quality × frequency), not just the biggest. <em>Note:</em> because MAE/MFE are realized outcomes, clusters naturally sort toward win/loss. A near-100% win-rate cluster is normal, not a bug.</p>
+                    <p style="margin:0.3rem 0;">The two highlighted recommendation tiles in the overall view: <strong style="color:#cdc4ff;">Recommended MFE % (TP)</strong> = middle (centroid) of the dominant cluster's MFE band, so the favorable-excursion take-profit level where your best repeating setup tends to run to. <strong style="color:#f4879b;">Recommended MAE % (SL)</strong> = middle (centroid) of the dominant cluster's MAE band, the adverse-excursion stop level, the typical heat that setup endures, so a stop there shouldn't cut your good trades. Switch the <strong>View</strong> dropdown to a regime to get that regime's own recommended MFE % / MAE %.</p>
+                    <p style="margin:0.3rem 0;"><strong style="color:#cdc4ff;">Recommended Per-Regime MAE / MFE %, the main output.</strong> The market at each trade's entry is classified (via regime_analysis: trend EMAs + ADX) into EXTREME_BULL…EXTREME_BEAR. For <em>each</em> regime we derive two dynamic excursion percentages from that regime's own trades: <strong style="color:#e3b341;">Recommended MFE %</strong> = the favorable-excursion <em>take-profit</em> level, taken from the regime's MFE distribution; <strong style="color:#f4879b;">Recommended MAE %</strong> = the adverse-excursion <em>stop-loss</em> level, taken from the regime's MAE distribution. Within those distributions we pick the (MFE %, MAE %) pair that <strong>maximises expectancy</strong>, so each is grounded in real excursions and optimised, not a raw median.  The bracketed "reached by / hit by %" shows how often each level is actually touched in that regime. These are exactly the base MAE %/MFE % to use in your MAE SLs & MFE TPs. Regimes with under 30 trades are flagged <span style="color:#e3b341;">⚠</span> (optimum unreliable). In-sample fits confirm with a backtest.</p>
+                    <p style="margin:0.3rem 0 0; color:#9891a8; font-style:italic;">Caveat: MAE/MFE carry no intra-trade ordering, so we can't know whether the high or the low came first. The TP model therefore slightly over-credits TP hits (a trade could have hit its SL before reaching its MFE). Treat the numbers as a well-grounded guide, then confirm with a backtest using the chosen TP/SL.</p>
                 </div>
 
                 <template v-if="!maeMfe && !maeMfeLoading && !maeMfeError">
-                    <p style="color:#a0aec0; text-align:center; margin:0.5rem 0 0.25rem;">
+                    <p style="color:#9891a8; text-align:center; margin:0.5rem 0 0.25rem;">
                         Click <strong>Analyze</strong> to view MAE/MFE distribution, K-Means clusters, and optimal TP/SL recommendations.
                     </p>
                 </template>
@@ -1274,14 +1270,14 @@
                 <template v-if="maeMfe && !maeMfeLoading">
                     <!-- View selector (overall vs per-regime) -->
                     <div v-if="maeMfeRegimeOptions.length" style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.85rem;">
-                        <span style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">View</span>
+                        <span style="font-size:0.78rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">View</span>
                         <select v-model="maeMfeView" class="form-input" style="font-size:0.82rem; min-width:200px;">
                             <option value="__all__">All regimes (overall)</option>
                             <option v-for="r in maeMfeRegimeOptions" :key="r" :value="r">
                                 {{ r.replace(/_/g, ' ') }} ({{ maeMfe.per_regime[r].count }} trades)
                             </option>
                         </select>
-                        <span v-if="maeMfeView !== '__all__'" style="font-size:0.72rem; color:#666;">
+                        <span v-if="maeMfeView !== '__all__'" style="font-size:0.72rem; color:#6f6880;">
                             Metrics &amp; scatter below are filtered to this regime.
                         </span>
                     </div>
@@ -1309,32 +1305,32 @@
                         <template v-if="maeMfeView === '__all__'">
                             <div class="metric-mini" style="border: 1px solid rgba(167,139,250,0.4); background:rgba(167,139,250,0.07);"
                                  title="Recommended MFE % (take-profit): middle of the dominant K-Means MFE band (chosen by expectancy × frequency)">
-                                <div class="metric-mini-label" style="color:#a78bfa;">Rec. MFE % (TP)</div>
-                                <div class="metric-mini-value" style="color:#a78bfa;">{{ maeMfe.recommended_tp != null ? maeMfe.recommended_tp.toFixed(2) + '%' : '—' }}</div>
+                                <div class="metric-mini-label" style="color:#cdc4ff;">Rec. MFE % (TP)</div>
+                                <div class="metric-mini-value" style="color:#cdc4ff;">{{ maeMfe.recommended_tp != null ? maeMfe.recommended_tp.toFixed(2) + '%' : '—' }}</div>
                             </div>
-                            <div class="metric-mini" style="border: 1px solid rgba(239,68,68,0.35); background:rgba(239,68,68,0.06);"
+                            <div class="metric-mini" style="border: 1px solid rgba(244,135,155,0.35); background:rgba(244,135,155,0.06);"
                                  title="Recommended MAE % (stop-loss): middle of the dominant K-Means MAE band (typical adverse heat of the best repeating setup)">
-                                <div class="metric-mini-label" style="color:#ef4444;">Rec. MAE % (SL)</div>
-                                <div class="metric-mini-value" style="color:#ef4444;">{{ maeMfe.recommended_sl != null ? maeMfe.recommended_sl.toFixed(2) + '%' : '—' }}</div>
+                                <div class="metric-mini-label" style="color:#f4879b;">Rec. MAE % (SL)</div>
+                                <div class="metric-mini-value" style="color:#f4879b;">{{ maeMfe.recommended_sl != null ? maeMfe.recommended_sl.toFixed(2) + '%' : '—' }}</div>
                             </div>
                         </template>
 
                         <!-- Regime view: expectancy-optimised recommendations for THIS regime -->
                         <template v-else>
-                            <div class="metric-mini" style="border: 1px solid rgba(245,158,11,0.35); background:rgba(245,158,11,0.06);"
+                            <div class="metric-mini" style="border: 1px solid rgba(227,179,65,0.35); background:rgba(227,179,65,0.06);"
                                  title="Recommended MFE % for this regime: the favorable-excursion take-profit level, from its MFE distribution at the expectancy-maximising point">
-                                <div class="metric-mini-label" style="color:#f59e0b;">Rec. MFE % (TP)</div>
-                                <div class="metric-mini-value" style="color:#f59e0b;">{{ maeMfeStat.best_tp != null ? maeMfeStat.best_tp.toFixed(2) + '%' : '—' }}</div>
+                                <div class="metric-mini-label" style="color:#e3b341;">Rec. MFE % (TP)</div>
+                                <div class="metric-mini-value" style="color:#e3b341;">{{ maeMfeStat.best_tp != null ? maeMfeStat.best_tp.toFixed(2) + '%' : '—' }}</div>
                             </div>
-                            <div class="metric-mini" style="border: 1px solid rgba(239,68,68,0.35); background:rgba(239,68,68,0.06);"
+                            <div class="metric-mini" style="border: 1px solid rgba(244,135,155,0.35); background:rgba(244,135,155,0.06);"
                                  title="Recommended MAE % for this regime: the adverse-excursion stop level, from its MAE distribution at the expectancy-maximising point">
-                                <div class="metric-mini-label" style="color:#ef4444;">Rec. MAE % (SL)</div>
-                                <div class="metric-mini-value" style="color:#ef4444;">{{ maeMfeStat.best_sl != null ? maeMfeStat.best_sl.toFixed(2) + '%' : '—' }}</div>
+                                <div class="metric-mini-label" style="color:#f4879b;">Rec. MAE % (SL)</div>
+                                <div class="metric-mini-value" style="color:#f4879b;">{{ maeMfeStat.best_sl != null ? maeMfeStat.best_sl.toFixed(2) + '%' : '—' }}</div>
                             </div>
-                            <div class="metric-mini" style="border: 1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.06);"
+                            <div class="metric-mini" style="border: 1px solid rgba(126,226,168,0.3); background:rgba(126,226,168,0.06);"
                                  title="Mean modelled per-trade outcome in R-multiples (1R = this regime's recommended MAE % stop)">
-                                <div class="metric-mini-label" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#10b981' : '#ef4444' }">Expectancy R / Trade</div>
-                                <div class="metric-mini-value" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#10b981' : '#ef4444' }">
+                                <div class="metric-mini-label" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#7ee2a8' : '#f4879b' }">Expectancy R / Trade</div>
+                                <div class="metric-mini-value" :style="{ color: (maeMfeStat.best_exp_r || 0) >= 0 ? '#7ee2a8' : '#f4879b' }">
                                     {{ maeMfeStat.best_exp_r != null ? (maeMfeStat.best_exp_r >= 0 ? '+' : '') + maeMfeStat.best_exp_r.toFixed(2) + 'R' : '—' }}
                                 </div>
                             </div>
@@ -1346,21 +1342,21 @@
                         <div v-for="c in maeMfeViewClusters" :key="c.id"
                              :style="{ display:'flex', flexDirection:'column', gap:'0.15rem', padding:'0.45rem 0.7rem',
                                        borderRadius:'6px', fontSize:'0.75rem', lineHeight:'1.3',
-                                       background: c.is_dominant ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)',
-                                       border: '1px solid ' + (c.is_dominant ? '#f59e0b' : 'rgba(255,255,255,0.1)') }">
-                            <span :style="{ color: c.is_dominant ? '#f59e0b' : '#a78bfa', fontWeight:700 }">
+                                       background: c.is_dominant ? 'rgba(227,179,65,0.12)' : 'rgba(255,255,255,0.04)',
+                                       border: '1px solid ' + (c.is_dominant ? '#e3b341' : 'rgba(255,255,255,0.1)') }">
+                            <span :style="{ color: c.is_dominant ? '#e3b341' : '#cdc4ff', fontWeight:700 }">
                                 Cluster {{ c.id }}{{ c.is_dominant ? ' ★' : '' }}
                             </span>
-                            <span style="color:#e0e0e0;">MFE <strong>{{ c.mfe.toFixed(2) }}%</strong> · MAE <strong>{{ c.mae.toFixed(2) }}%</strong></span>
-                            <span style="color:#a0aec0;">n={{ c.size }} · WR {{ c.win_rate.toFixed(1) }}% · E={{ c.expectancy_r != null ? (c.expectancy_r >= 0 ? '+' : '') + c.expectancy_r.toFixed(2) + 'R' : '—' }}</span>
+                            <span style="color:#e8e5ef;">MFE <strong>{{ c.mfe.toFixed(2) }}%</strong> · MAE <strong>{{ c.mae.toFixed(2) }}%</strong></span>
+                            <span style="color:#9891a8;">n={{ c.size }} · WR {{ c.win_rate.toFixed(1) }}% · E={{ c.expectancy_r != null ? (c.expectancy_r >= 0 ? '+' : '') + c.expectancy_r.toFixed(2) + 'R' : '—' }}</span>
                         </div>
                     </div>
 
                     <!-- MAE vs MFE scatter -->
                     <div style="margin-bottom:1.25rem;">
-                        <div style="font-size:0.78rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
+                        <div style="font-size:0.78rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">
                             MAE vs MFE Scatter
-                            <span style="text-transform:none; color:#666;"> <template v-if="maeMfeView === '__all__'">all trades; cluster centroids (stars), recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span> (dashed lines)</template><template v-else><strong :style="{ color: (regimeColors[maeMfeView] || {}).text }">{{ maeMfeView.replace(/_/g, ' ') }}</strong> trades only; this regime's cluster centroids (stars), dashed lines = this regime's recommended <span style="color:#f59e0b;">MFE %</span> &amp; <span style="color:#ef4444;">MAE %</span></template></span>
+                            <span style="text-transform:none; color:#6f6880;"> <template v-if="maeMfeView === '__all__'">all trades; cluster centroids (stars), recommended <span style="color:#e3b341;">MFE %</span> &amp; <span style="color:#f4879b;">MAE %</span> (dashed lines)</template><template v-else><strong :style="{ color: (regimeColors[maeMfeView] || {}).text }">{{ maeMfeView.replace(/_/g, ' ') }}</strong> trades only; this regime's cluster centroids (stars), dashed lines = this regime's recommended <span style="color:#e3b341;">MFE %</span> &amp; <span style="color:#f4879b;">MAE %</span></template></span>
                         </div>
                         <div id="maeMfeScatter" style="height:420px;"></div>
                     </div>
@@ -1370,7 +1366,7 @@
 
             <!-- === 3D ANALYSIS EXPLORER === -->
             <style>
-                #bt-3d-panel .axis3d-label { font-size:0.65rem; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; }
+                #bt-3d-panel .axis3d-label { font-size:0.65rem; color:#6f6880; text-transform:uppercase; letter-spacing:0.05em; }
                 #bt-3d-panel select.sel3d { font-size:0.8rem; padding:5px 8px; }
             </style>
             <div class="card" id="bt-3d-panel" v-if="enrichedTrades.length > 0">
@@ -1506,10 +1502,10 @@
                     </div>
                 </div>
                 <div id="chart-3d" style="width:100%; min-height:624px;"></div>
-                <div style="margin-top:8px; font-size:0.7rem; color:#4b5563; line-height:1.5;">
-                    One point per closed trade. <strong style="color:#5b6470;">Trade axes</strong> (MAE, MFE, Trade ROI, Duration, Leverage) are per-trade values;
-                    <strong style="color:#5b6470;">cumulative / rolling axes</strong> (Cum ROI, Win Rate, Sharpe, Sortino, Profit Factor, SNR, Expectancy R, R:R, CAGR, Max DD) are computed incrementally in trade order.
-                    Rolling metrics use the <strong style="color:#5b6470;">Window</strong> look-back. MAE / MFE are leverage-adjusted, drawn from each trade's min/max price.
+                <div style="margin-top:8px; font-size:0.7rem; color:#6f6880; line-height:1.5;">
+                    One point per closed trade. <strong style="color:#9891a8;">Trade axes</strong> (MAE, MFE, Trade ROI, Duration, Leverage) are per-trade values;
+                    <strong style="color:#9891a8;">cumulative / rolling axes</strong> (Cum ROI, Win Rate, Sharpe, Sortino, Profit Factor, SNR, Expectancy R, R:R, CAGR, Max DD) are computed incrementally in trade order.
+                    Rolling metrics use the <strong style="color:#9891a8;">Window</strong> look-back. MAE / MFE are leverage-adjusted, drawn from each trade's min/max price.
                 </div>
             </div>
 
@@ -1532,8 +1528,12 @@ createApp({
             loading: false,
             error: null,
             tradeFilter: '',
+            pairsLimit: 10,
+            showExitReason: false,
             // Timezone used to bucket the hourly charts ('utc' | 'local').
             hourlyTz: localStorage.getItem('VulcanTrader_hourlyTz') || 'utc',
+            chartTab: 'equity',
+            regimeTab: 'equity',
             tradesLimit: 20,
             startingCapital: 1000,
             // --- New-run / job runner ---
@@ -1564,6 +1564,14 @@ createApp({
             pfJob: null,
             pfResults: [],
             pfJobLog: '',
+            runTab: 'backtest',
+            suiteForm: { config: 'configHyper', jobs: 4, scan_days: 30, deep_days: 548 },
+            suiteJob: null,
+            suiteJobId: null,
+            suiteJobLog: '',
+            suiteError: null,
+            suiteSubmitting: false,
+            suitePollTimer: null,
             pfPollTimer: null,
             // --- Hyperopt ---
             hoForm: {
@@ -1598,11 +1606,11 @@ createApp({
             regimePair: '__all__',
             regimeOrder: ['EXTREME_BULL', 'BULL', 'RANGING', 'BEAR', 'EXTREME_BEAR'],
             regimeColors: {
-                'EXTREME_BULL': { solid: '#10b981', text: '#10b981', bg: 'rgba(16,185,129,0.22)' },
-                'BULL':         { solid: '#34d399', text: '#34d399', bg: 'rgba(16,185,129,0.10)' },
-                'RANGING':      { solid: '#a0aec0', text: '#a0aec0', bg: 'rgba(160,174,192,0.07)' },
-                'BEAR':         { solid: '#f87171', text: '#f87171', bg: 'rgba(239,68,68,0.10)' },
-                'EXTREME_BEAR': { solid: '#ef4444', text: '#ef4444', bg: 'rgba(239,68,68,0.22)' },
+                'EXTREME_BULL': { solid: '#7ee2a8', text: '#7ee2a8', bg: 'rgba(126,226,168,0.22)' },
+                'BULL':         { solid: '#7ee2a8', text: '#7ee2a8', bg: 'rgba(126,226,168,0.10)' },
+                'RANGING':      { solid: '#9891a8', text: '#9891a8', bg: 'rgba(139,147,163,0.07)' },
+                'BEAR':         { solid: '#f4879b', text: '#f4879b', bg: 'rgba(244,135,155,0.10)' },
+                'EXTREME_BEAR': { solid: '#f4879b', text: '#f4879b', bg: 'rgba(244,135,155,0.22)' },
             },
             // --- Volatility Bias (ambient market vol at entry, backend-derived) ---
             volatilityBias: null,
@@ -1678,7 +1686,8 @@ createApp({
                 return { winRate:0,totalTrades:0,wins:0,losses:0,totalPnl:0,roi:0,
                          sharpe:0,profitFactor:0,expectancyR:0,rr:0,cagr:0,
                          maxDrawdownPct:0,maxDrawdownAbs:0,
-                         startingCapital:this.startingCapital,avgDurationMin:0 };
+                         startingCapital:this.startingCapital,avgDurationMin:0,
+                         avgProfit:0,avgProfitPct:0,longs:0,shorts:0,sortino:null,sqn:null, };
             }
             const wins = ts.filter(t => t.__pnl > 0);
             const losses = ts.filter(t => t.__pnl < 0);
@@ -1712,11 +1721,19 @@ createApp({
                 }
             }
             const avgDurationMin = ts.reduce((s, t) => s + t.__durationMin, 0) / n;
+            const pnls = ts.map(t => t.__pnl);
+            const avgProfit = totalPnl / n;
+            const avgProfitPct = (ts.reduce((s, t) => s + (+t.__pnlPct || 0), 0) / n) * 100;
+            const shorts = ts.filter(t => t.is_short).length;
+            const longs = n - shorts;
+            const sortino = this._sortino(this._dailyReturns(ts));
+            const sqn = this._sqn(pnls);
             return {
                 winRate, totalTrades: n, wins: wins.length, losses: losses.length,
                 totalPnl, roi, sharpe, profitFactor, expectancyR, rr, cagr,
                 maxDrawdownPct: ddRes.pct, maxDrawdownAbs: ddRes.abs,
                 startingCapital: this.startingCapital, avgDurationMin,
+                avgProfit, avgProfitPct, longs, shorts, sortino, sqn,
             };
         },
         monthly() {
@@ -1759,8 +1776,9 @@ createApp({
                 sharpe: this._sharpe(this._dailyReturns(o.ts)),
             })).sort((a, b) => b.pnl - a.pnl);
         },
-        bestPairs() { return this.pairs.slice(0, 10); },
-        worstPairs() { return this.pairs.slice().reverse().slice(0, 10); },
+        pairsShown() { return this.pairsLimit > 0 ? this.pairsLimit : this.pairs.length; },
+        bestPairs() { return this.pairs.slice(0, this.pairsShown); },
+        worstPairs() { return this.pairs.slice().reverse().slice(0, this.pairsShown); },
         uniquePairs() {
             const seen = new Set();
             this.enrichedTrades.forEach(t => { if (t.pair) seen.add(t.pair); });
@@ -1797,6 +1815,10 @@ createApp({
         runningJobCount() { return this.jobs.filter(j => j.status === 'running' || j.status === 'queued').length; },
         selectedJob() { return this.jobs.find(j => j.id === this.selectedJobId) || null; },
         pfRunning() { return this.pfJob && (this.pfJob.status === 'running' || this.pfJob.status === 'queued'); },
+        suiteRunning() {
+            return this.suiteSubmitting
+                || (this.suiteJob && (this.suiteJob.status === 'running' || this.suiteJob.status === 'queued'));
+        },
         pfTopResults() {
             const r = this.pfResults || [];
             const n = Math.max(1, +this.pfForm.top_n || 15);
@@ -1821,6 +1843,17 @@ createApp({
         selectedRegime() { this.$nextTick(() => this.renderRegimeCharts()); },
         maeMfe() { this.maeMfeView = '__all__'; this.$nextTick(() => this.renderMaeMfeCharts()); },
         maeMfeView() { this.$nextTick(() => this.renderMaeMfeCharts()); },
+        chartTab(v) {
+            this.$nextTick(() => this._resizePlot({
+                equity: 'equityChart', drawdown: 'drawdownChart', hourlyPnl: 'hourlyPnlChart',
+                hourlyPf: 'hourlyPfChart', hourlyDd: 'hourlyDdChart',
+            }[v]));
+        },
+        regimeTab(v) {
+            this.$nextTick(() => this._resizePlot({
+                equity: 'regimeEquityChart', drawdown: 'regimeDdChart', pf: 'regimePfChart',
+            }[v]));
+        },
     },
     async mounted() {
         if (!this.token) { window.location.href = '/login'; return; }
@@ -1832,8 +1865,14 @@ createApp({
         await this.refreshJobs();
         this.startJobsPolling();
     },
-    beforeUnmount() { this.stopJobsPolling(); this.stopPfPolling(); },
+    beforeUnmount() { this.stopJobsPolling(); this.stopPfPolling(); this.stopSuitePolling(); },
     methods: {
+        _resizePlot(id) {
+            // a chart drawn while its tab was hidden lays out at zero width;
+            // Plotly only picks up the real container size once it is visible
+            const el = id && document.getElementById(id);
+            if (el && el.data) Plotly.Plots.resize(el);
+        },
         // ----- helpers -----
         fmt(v) { return (v >= 0 ? '+' : '') + (+v).toFixed(2); },
         fmtRate(v) { if (v == null || v === '') return '-'; const n = +v; return n < 1 ? n.toPrecision(5) : n.toFixed(4); },
@@ -1856,7 +1895,14 @@ createApp({
                 window.location.href = '/login';
                 throw new Error('Unauthorized');
             }
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            if (!r.ok) {
+                // FastAPI puts the reason in `detail` - a bare "HTTP 503" hides
+                // the actual cause (usually: no bot is running, so there is no
+                // DataProvider to read candles from).
+                let detail = '';
+                try { detail = ((await r.json()) || {}).detail || ''; } catch (_) { /* not JSON */ }
+                throw new Error(detail ? `${detail} (HTTP ${r.status})` : `HTTP ${r.status}`);
+            }
             return r.json();
         },
         logout() {
@@ -1906,8 +1952,8 @@ createApp({
             if (this.jobsPollTimer) { clearInterval(this.jobsPollTimer); this.jobsPollTimer = null; }
         },
         jobStatusColor(s) {
-            return ({ running: '#f59e0b', queued: '#a0aec0', succeeded: '#10b981',
-                     failed: '#ef4444', cancelled: '#a0aec0', error: '#ef4444' })[s] || '#e0e0e0';
+            return ({ running: '#e3b341', queued: '#9891a8', succeeded: '#7ee2a8',
+                     failed: '#f4879b', cancelled: '#9891a8', error: '#f4879b' })[s] || '#e8e5ef';
         },
         async startRun() {
             this.runError = null;
@@ -2031,6 +2077,57 @@ createApp({
             } finally {
                 this.pfSubmitting = false;
             }
+        },
+        async runSuite() {
+            this.suiteError = null;
+            this.suiteSubmitting = true;
+            try {
+                const r = await fetch('/api/suite/run', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + this.token,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        config: this.suiteForm.config,
+                        jobs: +this.suiteForm.jobs || 4,
+                        scan_days: +this.suiteForm.scan_days || 30,
+                        deep_days: +this.suiteForm.deep_days || 548,
+                    }),
+                });
+                if (r.status === 401) { this.logout(); return; }
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+                this.suiteJob = data.job;
+                this.suiteJobId = data.job.id;
+                this.startSuitePolling();
+            } catch (e) {
+                this.suiteError = e.message;
+            } finally {
+                this.suiteSubmitting = false;
+            }
+        },
+        async refreshSuiteJob() {
+            if (!this.suiteJobId) return;
+            try {
+                const j = await this.authedFetch('/api/suite/jobs/' + this.suiteJobId);
+                this.suiteJob = j;
+                this.suiteJobLog = (j.log || []).join('\n');
+                if (j.status !== 'running' && j.status !== 'queued') this.stopSuitePolling();
+                // keep the tail in view while it streams
+                this.$nextTick(() => {
+                    const el = this.$refs.suiteLogPre;
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            } catch (e) { /* poll quietly */ }
+        },
+        startSuitePolling() {
+            this.stopSuitePolling();
+            this.refreshSuiteJob();
+            this.suitePollTimer = setInterval(() => this.refreshSuiteJob(), 2000);
+        },
+        stopSuitePolling() {
+            if (this.suitePollTimer) { clearInterval(this.suitePollTimer); this.suitePollTimer = null; }
         },
         async refreshPfJob() {
             if (!this.pfJobId) return;
@@ -2252,8 +2349,8 @@ createApp({
                         width: w,
                         height: h,
                         layout: {
-                            background: { type: 'solid', color: '#0d0a14' },
-                            textColor: '#a0aec0',
+                            background: { type: 'solid', color: '#0d0f13' },
+                            textColor: '#9891a8',
                         },
                         grid: {
                             vertLines: { color: 'rgba(255,255,255,0.05)' },
@@ -2288,12 +2385,12 @@ createApp({
                 this.__lwResizeObs.observe(el);
 
                 this.__lwCandles = this.__lwChart.addCandlestickSeries({
-                    upColor: '#10b981',
-                    downColor: '#ef4444',
-                    borderUpColor: '#10b981',
-                    borderDownColor: '#ef4444',
-                    wickUpColor: '#10b981',
-                    wickDownColor: '#ef4444',
+                    upColor: '#7ee2a8',
+                    downColor: '#f4879b',
+                    borderUpColor: '#7ee2a8',
+                    borderDownColor: '#f4879b',
+                    wickUpColor: '#7ee2a8',
+                    wickDownColor: '#f4879b',
                 });
 
                 this.__lwVolume = this.__lwChart.addHistogramSeries({
@@ -2315,7 +2412,7 @@ createApp({
                 const vol = candles.map(c => ({
                     time: c.time,
                     value: +(c.volume || 0),
-                    color: c.close >= c.open ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)',
+                    color: c.close >= c.open ? 'rgba(126,226,168,0.3)' : 'rgba(244,135,155,0.3)',
                 }));
 
                 try {
@@ -2347,7 +2444,7 @@ createApp({
                     if (!isNaN(ets)) markers.push({
                         time: ets,
                         position: t.is_short ? 'aboveBar' : 'belowBar',
-                        color: t.is_short ? '#ef4444' : '#10b981',
+                        color: t.is_short ? '#f4879b' : '#7ee2a8',
                         shape: t.is_short ? 'arrowDown' : 'arrowUp',
                         text: t.enter_tag || (t.is_short ? 'S' : 'L'),
                         size: 1,
@@ -2356,7 +2453,7 @@ createApp({
                     if (!isNaN(xts)) markers.push({
                         time: xts,
                         position: t.is_short ? 'belowBar' : 'aboveBar',
-                        color: t.__pnl >= 0 ? '#10b981' : '#ef4444',
+                        color: t.__pnl >= 0 ? '#7ee2a8' : '#f4879b',
                         shape: 'circle',
                         text: (t.__pnlPct * 100 >= 0 ? '+' : '') + (t.__pnlPct * 100).toFixed(1) + '%',
                         size: 0.8,
@@ -2400,6 +2497,25 @@ createApp({
             });
             const arr = Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
             return arr.map(([, v]) => v / this.startingCapital);
+        },
+        _sortino(returns) {
+            if (returns.length < 2) return null;
+            const m = returns.reduce((s, v) => s + v, 0) / returns.length;
+            // Downside deviation: only returns below zero count as risk, which is
+            // the whole point of Sortino vs Sharpe. Divided by the FULL sample
+            // count (not just the losing days) - the standard definition.
+            const dn = returns.filter(v => v < 0);
+            if (!dn.length) return m > 0 ? Infinity : 0;
+            const dd = Math.sqrt(dn.reduce((s, v) => s + v * v, 0) / returns.length);
+            return dd > 0 ? (m / dd) * Math.sqrt(365) : null;
+        },
+        _sqn(pnls) {
+            // Van Tharp's System Quality Number: sqrt(N) * mean / stdev of the
+            // per-trade results. Needs >= 2 trades for a standard deviation.
+            if (pnls.length < 2) return null;
+            const m = pnls.reduce((s, v) => s + v, 0) / pnls.length;
+            const sd = Math.sqrt(pnls.reduce((s, v) => s + (v - m) ** 2, 0) / (pnls.length - 1));
+            return sd > 0 ? (Math.sqrt(pnls.length) * m / sd) : null;
         },
         _sharpe(returns) {
             if (returns.length < 2) return 0;
@@ -2481,7 +2597,7 @@ createApp({
                 x1: p.end,
                 y0: 0,
                 y1: 1,
-                fillcolor: (this.regimeColors[p.regime] || {}).bg || 'rgba(160,174,192,0.05)',
+                fillcolor: (this.regimeColors[p.regime] || {}).bg || 'rgba(139,147,163,0.05)',
                 line: { width: 0 },
                 layer: 'below',
             }));
@@ -2498,7 +2614,7 @@ createApp({
                 const x = [], y = [];
                 pts.forEach(p => { cum += (p.pnl || 0); x.push(new Date(p.date)); y.push(parseFloat(cum.toFixed(4))); });
                 return { x, y, type: 'scatter', mode: 'lines', name: r.replace(/_/g, ' '),
-                    line: { color: (rc[r] || {}).solid || '#a0aec0', width: this.selectedRegime ? 2 : 1.5 }, connectgaps: false };
+                    line: { color: (rc[r] || {}).solid || '#9891a8', width: this.selectedRegime ? 2 : 1.5 }, connectgaps: false };
             });
 
             const ddTraces = activeRegimes.map(r => {
@@ -2512,7 +2628,7 @@ createApp({
                     y.push(parseFloat((peak !== 0 ? ((cum - peak) / peak) * 100 : 0).toFixed(4)));
                 });
                 return { x, y, type: 'scatter', mode: 'lines', name: r.replace(/_/g, ' '),
-                    line: { color: (rc[r] || {}).solid || '#a0aec0', width: this.selectedRegime ? 2 : 1.5 }, connectgaps: false };
+                    line: { color: (rc[r] || {}).solid || '#9891a8', width: this.selectedRegime ? 2 : 1.5 }, connectgaps: false };
             });
 
             if (document.getElementById('regimeEquityChart')) {
@@ -2551,7 +2667,7 @@ createApp({
                     text: pfText,
                     textposition: 'outside',
                     marker: {
-                        color: ro.map(r => (this.regimeColors[r] || {}).solid || '#a0aec0'),
+                        color: ro.map(r => (this.regimeColors[r] || {}).solid || '#9891a8'),
                         opacity: 0.85,
                     },
                     name: 'Profit Factor',
@@ -2614,14 +2730,14 @@ createApp({
                         mode: 'markers', type: 'scatter', name: 'Loss',
                         text: losses.map(hov),
                         hoverinfo: 'text',
-                        marker: { color: 'rgba(239,68,68,0.45)', size: 5, symbol: 'circle' },
+                        marker: { color: 'rgba(244,135,155,0.45)', size: 5, symbol: 'circle' },
                     },
                     {
                         x: wins.map(r => r.mae), y: wins.map(r => r.mfe),
                         mode: 'markers', type: 'scatter', name: 'Win',
                         text: wins.map(hov),
                         hoverinfo: 'text',
-                        marker: { color: 'rgba(16,185,129,0.55)', size: 5, symbol: 'circle' },
+                        marker: { color: 'rgba(126,226,168,0.55)', size: 5, symbol: 'circle' },
                     },
                 ];
 
@@ -2646,7 +2762,7 @@ createApp({
                         marker: {
                             size: viewClusters.map(c => c.is_dominant ? 18 : 13),
                             symbol: 'star',
-                            color: viewClusters.map(c => c.is_dominant ? '#f59e0b' : '#a78bfa'),
+                            color: viewClusters.map(c => c.is_dominant ? '#e3b341' : '#cdc4ff'),
                             line: { width: 2, color: '#fff' },
                         },
                     });
@@ -2666,7 +2782,7 @@ createApp({
                     traces.push({
                         x: [0, maxVal], y: [recTp, recTp],
                         mode: 'lines', type: 'scatter', name: `${tpLabel} ${recTp.toFixed(2)}%`,
-                        line: { color: '#f59e0b', dash: 'dot', width: 1.5 },
+                        line: { color: '#e3b341', dash: 'dot', width: 1.5 },
                         hoverinfo: 'none',
                     });
                 }
@@ -2674,7 +2790,7 @@ createApp({
                     traces.push({
                         x: [recSl, recSl], y: [0, maxVal],
                         mode: 'lines', type: 'scatter', name: `${slLabel} ${recSl.toFixed(2)}%`,
-                        line: { color: '#ef4444', dash: 'dot', width: 1.5 },
+                        line: { color: '#f4879b', dash: 'dot', width: 1.5 },
                         hoverinfo: 'none',
                     });
                 }
@@ -2695,7 +2811,7 @@ createApp({
             return Object.assign({
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#e0e0e0', family: 'system-ui, sans-serif' },
+                font: { color: '#e8e5ef', family: 'system-ui, sans-serif' },
                 margin: { t: 30, r: 30, b: 50, l: 60 },
                 xaxis: { gridcolor: 'rgba(255,255,255,0.05)', fixedrange: false },
                 yaxis: { gridcolor: 'rgba(255,255,255,0.05)', fixedrange: true },
@@ -2719,8 +2835,8 @@ createApp({
             // Equity
             Plotly.react('equityChart', [{
                 x: eq.dates, y: eq.values, type: 'scatter', mode: 'lines',
-                line: { color: '#10b981', width: 2 },
-                fill: 'tozeroy', fillcolor: 'rgba(16,185,129,0.1)',
+                line: { color: '#7ee2a8', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(126,226,168,0.1)',
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Equity' } }), cfg);
 
             // Drawdown
@@ -2730,8 +2846,8 @@ createApp({
             });
             Plotly.react('drawdownChart', [{
                 x: eq.dates, y: ddVals, type: 'scatter', mode: 'lines',
-                line: { color: '#ef4444', width: 2 },
-                fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
+                line: { color: '#f4879b', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(244,135,155,0.15)',
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Drawdown %' } }), cfg);
 
             // Hourly P&L — bucketed by UTC or local hour-of-day (see hourlyTz toggle)
@@ -2756,14 +2872,14 @@ createApp({
 
             Plotly.react('hourlyPnlChart', [{
                 x: hours, y: hourly.map(h => h.pnl), type: 'bar',
-                marker: { color: hourly.map(h => h.pnl >= 0 ? '#10b981' : '#ef4444') },
+                marker: { color: hourly.map(h => h.pnl >= 0 ? '#7ee2a8' : '#f4879b') },
             }], barLayout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'PnL' } }), barCfg);
 
             Plotly.react('hourlyPfChart', [{
                 x: hours,
                 y: hourly.map(h => h.gl > 0 ? h.gw / h.gl : (h.gw > 0 ? 5 : 0)),
                 type: 'bar',
-                marker: { color: hourly.map(h => (h.gl > 0 ? h.gw / h.gl : 5) >= 1 ? '#10b981' : '#ef4444') },
+                marker: { color: hourly.map(h => (h.gl > 0 ? h.gw / h.gl : 5) >= 1 ? '#7ee2a8' : '#f4879b') },
             }], barLayout({
                 yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Profit Factor' },
                 shapes: [{ type: 'line', x0: -0.5, x1: 23.5, y0: 1, y1: 1,
@@ -2772,7 +2888,7 @@ createApp({
 
             Plotly.react('hourlyDdChart', [{
                 x: hours, y: hourly.map(h => -h.dd), type: 'bar',
-                marker: { color: '#ef4444' },
+                marker: { color: '#f4879b' },
             }], barLayout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Max DD' } }), barCfg);
         },
         // ----- 3D Analysis Explorer -----
@@ -3077,7 +3193,7 @@ function _render3DPlot() {
 
     const chartEl = document.getElementById('chart-3d');
     if (!points || points.length === 0) {
-        if (chartEl) chartEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#6b7280;font-size:0.9rem;">No data for selected axes</div>';
+        if (chartEl) chartEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:400px;color:#6f6880;font-size:0.9rem;">No data for selected axes</div>';
         return;
     }
 
@@ -3100,8 +3216,8 @@ function _render3DPlot() {
     const axStyle = {
         gridcolor:     'rgba(255,255,255,0.08)',
         zerolinecolor: 'rgba(255,255,255,0.2)',
-        tickfont:      { color: '#a0aec0', size: 10 },
-        titlefont:     { color: '#c4b5fd', size: 11 },
+        tickfont:      { color: '#9891a8', size: 10 },
+        titlefont:     { color: '#cdc4ff', size: 11 },
     };
 
     let traces = [];
@@ -3130,7 +3246,7 @@ function _render3DPlot() {
             const _axLbl = bx.bins.length < 2 ? xDef.label : yDef.label;
             const _warn = document.createElement('div');
             _warn.id = '3d-surface-warn';
-            _warn.style.cssText = 'font-size:0.72rem;color:#f59e0b;margin-top:4px;';
+            _warn.style.cssText = 'font-size:0.72rem;color:#e3b341;margin-top:4px;';
             _warn.textContent = `"${_axLbl}" has only 1 unique value - showing scatter. Try different axes.`;
             const _chartDiv = document.getElementById('chart-3d');
             if (_chartDiv && _chartDiv.nextSibling) _chartDiv.parentNode.insertBefore(_warn, _chartDiv.nextSibling);
@@ -3148,9 +3264,9 @@ function _render3DPlot() {
                     opacity:    0.85,
                     showscale:  true,
                     colorbar: {
-                        title:    { text: colorDef.label, font: { color: '#a0aec0', size: 11 } },
+                        title:    { text: colorDef.label, font: { color: '#9891a8', size: 11 } },
                         thickness: 14,
-                        tickfont:  { color: '#a0aec0', size: 9 },
+                        tickfont:  { color: '#9891a8', size: 9 },
                         len:       0.8,
                         x:         1.02,
                         xanchor:   'left',
@@ -3203,9 +3319,9 @@ function _render3DPlot() {
             x: bx.bins, y: by.bins, z: zGrid,
             colorscale,
             colorbar: {
-                title:    { text: zDef.label, font: { color: '#a0aec0', size: 11 } },
+                title:    { text: zDef.label, font: { color: '#9891a8', size: 11 } },
                 thickness: 14,
-                tickfont:  { color: '#a0aec0', size: 9 },
+                tickfont:  { color: '#9891a8', size: 9 },
                 len:       0.8,
                 x:         1.02,
                 xanchor:   'left',
@@ -3231,9 +3347,9 @@ function _render3DPlot() {
                 opacity:    0.75,
                 showscale:  true,
                 colorbar: {
-                    title:    { text: colorDef.label, font: { color: '#a0aec0', size: 11 } },
+                    title:    { text: colorDef.label, font: { color: '#9891a8', size: 11 } },
                     thickness: 14,
-                    tickfont:  { color: '#a0aec0', size: 9 },
+                    tickfont:  { color: '#9891a8', size: 9 },
                     len:       0.8,
                     x:         1.02,
                     xanchor:   'left',
@@ -3259,7 +3375,7 @@ function _render3DPlot() {
     const layout = {
         paper_bgcolor: 'transparent',
         plot_bgcolor:  'transparent',
-        font:   { color: '#a0aec0', size: 11 },
+        font:   { color: '#9891a8', size: 11 },
         margin: { t: 20, r: 140, b: 20, l: 20 },
         scene: {
             xaxis:   { ...axStyle, title: xDef.label },
@@ -3296,25 +3412,49 @@ function set3DPreset(x, y, z, type, colorBy) {
 }
 
 // Dampen scroll-wheel zoom to 35% of default Plotly sensitivity.
+// Wheel zoom for the Plotly 3D scene, driven by moving the camera ourselves.
+//
+// The previous version swallowed the wheel event on the container
+// (stopImmediatePropagation) and re-dispatched a scaled copy on that SAME
+// container. Plotly's gl3d wheel handler is bound to the inner WebGL canvas,
+// and dispatchEvent never descends to children - so the original event was
+// killed and the replacement never reached Plotly. Net effect: wheel zoom did
+// nothing at all. Driving scene.camera.eye directly avoids fighting Plotly's
+// internals and makes the step size an explicit, tunable number.
+const _3D_ZOOM_STEP = 0.055;   // fraction of camera distance per wheel notch
+const _3D_ZOOM_MIN  = 0.35;    // clamp so it cannot invert through the origin
+const _3D_ZOOM_MAX  = 6.0;     // ... or fly off into the distance
+
 function _attach3DZoomDampen(chartDiv) {
     if (!chartDiv || chartDiv._zoomDampened) return;
     chartDiv._zoomDampened = true;
-    chartDiv.addEventListener('wheel', (e) => {
-        if (e._scaled) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const ev = new WheelEvent('wheel', {
-            deltaY: e.deltaY * 0.35,
-            deltaX: e.deltaX * 0.35,
-            deltaMode: e.deltaMode,
-            bubbles: true, cancelable: true,
-            clientX: e.clientX, clientY: e.clientY,
-            screenX: e.screenX, screenY: e.screenY,
-            ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey,
+
+    let pending = null;        // coalesce bursts into one relayout per frame
+    const apply = () => {
+        pending = null;
+        const sc = chartDiv._fullLayout && chartDiv._fullLayout.scene;
+        if (!sc || !sc.camera || !sc.camera.eye) return;
+        const eye = sc.camera.eye;
+        const dist = Math.hypot(eye.x, eye.y, eye.z) || 1;
+        const next = Math.min(_3D_ZOOM_MAX, Math.max(_3D_ZOOM_MIN, dist * chartDiv._zoomFactor));
+        chartDiv._zoomFactor = 1;
+        const k = next / dist;
+        if (Math.abs(k - 1) < 1e-4) return;
+        Plotly.relayout(chartDiv, {
+            'scene.camera.eye': { x: eye.x * k, y: eye.y * k, z: eye.z * k },
         });
-        ev._scaled = true;
-        chartDiv.dispatchEvent(ev);
-    }, { capture: true, passive: false });
+    };
+
+    chartDiv.addEventListener('wheel', (e) => {
+        const sc = chartDiv._fullLayout && chartDiv._fullLayout.scene;
+        if (!sc || !sc.camera) return;          // not a 3D plot yet - leave it alone
+        e.preventDefault();                     // don't scroll the page
+        // deltaMode: 0 = pixels, 1 = lines, 2 = pages - normalise to "notches"
+        const perNotch = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100;
+        const notches = Math.max(-3, Math.min(3, e.deltaY / perNotch));
+        chartDiv._zoomFactor = (chartDiv._zoomFactor || 1) * (1 + _3D_ZOOM_STEP * notches);
+        if (pending == null) pending = requestAnimationFrame(apply);
+    }, { passive: false });
 }
 
 // Remap middle mouse button -> right mouse button inside the Plotly 3D canvas

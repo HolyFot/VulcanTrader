@@ -14,11 +14,11 @@
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
-            color: #e0e0e0;
+            color: #e8e5ef;
             min-height: 100vh;
         }
         .navbar {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            background: linear-gradient(110deg, #4c1d95 0%, #8b7cf6 45%, #7fb2f7 100%);
             padding: 1rem 2rem;
             display: flex;
             justify-content: space-between;
@@ -35,8 +35,8 @@
         }
         .nav-link:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
         .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.1), rgba(52,22,100,0.1));
-            border-color: #695ff5; box-shadow: 0 0 10px rgba(105,95,245,0.3);
+            background: linear-gradient(135deg, rgba(139,124,246,0.1), rgba(52,22,100,0.1));
+            border-color: #8b7cf6; box-shadow: 0 0 10px rgba(139,124,246,0.3);
         }
         .btn {
             background: linear-gradient(135deg, #4c17ad 0%, #341664 50%, #190538 100%);
@@ -44,9 +44,9 @@
             border-radius: 6px; padding: 0.5rem 1rem; font-weight: 500;
             cursor: pointer; transition: all 0.3s ease;
         }
-        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(105,95,245,0.3); }
+        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(139,124,246,0.3); }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .btn-danger { background: linear-gradient(135deg, #dc2626, #991b1b); }
+        .btn-danger { background: linear-gradient(135deg, #f4879b, #991b1b); }
         .btn-logout {
             background: rgba(255,255,255,0.07) !important;
             border: 1px solid rgba(255,255,255,0.15) !important;
@@ -63,7 +63,7 @@
         /* Flat, distinctly-colored icon buttons for compact/contextual actions -
            see "Multi-bot fleet control" Configs table in trading.html for the
            original convention this mirrors. Deliberately NOT .btn - that class
-           is 150px-min-width Cinzel styling meant for primary CTAs. */
+           is the wider primary-action button meant for primary CTAs. */
         .icon-btn {
             display: inline-flex; align-items: center; justify-content: center;
             width: 30px; height: 30px; margin: 2px 2px 2px 0;
@@ -75,11 +75,11 @@
         .icon-btn:hover:not(:disabled) { filter: brightness(1.35); transform: translateY(-1px); }
         .icon-btn:active:not(:disabled) { transform: translateY(0); }
         .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .icon-btn.success { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.4); color: #10b981; }
-        .icon-btn.danger  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.4); color: #ef4444; }
-        .icon-btn.info    { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); color: #38bdf8; }
-        .icon-btn.warn    { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: #f59e0b; }
-        .icon-btn.accent  { background: rgba(105,95,245,0.16); border-color: rgba(105,95,245,0.45); color: #9089f7; }
+        .icon-btn.success { background: rgba(126,226,168,0.16); border-color: rgba(126,226,168,0.4); color: #7ee2a8; }
+        .icon-btn.danger  { background: rgba(244,135,155,0.16); border-color: rgba(244,135,155,0.4); color: #f4879b; }
+        .icon-btn.info    { background: rgba(127,178,247,0.16); border-color: rgba(127,178,247,0.4); color: #7fb2f7; }
+        .icon-btn.warn    { background: rgba(227,179,65,0.16); border-color: rgba(227,179,65,0.4); color: #e3b341; }
+        .icon-btn.accent  { background: rgba(139,124,246,0.16); border-color: rgba(139,124,246,0.45); color: #cdc4ff; }
 
         .content { max-width: 95%; margin: 0 auto; padding: 2rem; }
 
@@ -93,22 +93,22 @@
         }
         .card:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
         .card h3 {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%);
+            background: linear-gradient(110deg, #4c1d95 0%, #8b7cf6 45%, #7fb2f7 100%);
             margin: -1.5rem -1.5rem 1rem -1.5rem;
             padding: 1rem 1.5rem;
             border-radius: 8px 8px 0 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
-            color: #e0e0e0; font-size: 1.125rem; font-weight: 600;
+            color: #e8e5ef; font-size: 1.125rem; font-weight: 600;
             text-shadow: 0 2px 4px rgba(0,0,0,0.3);
             display: flex; align-items: center; justify-content: space-between;
         }
         .form-input, select {
-            background: #1f1f2e; color: #e0e0e0;
+            background: #1a1d25; color: #e8e5ef;
             border: 1px solid rgba(255,255,255,0.1);
             border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem;
         }
-        .form-input:focus, select:focus { outline: none; border-color: #695ff5; }
-        select option { background: #1f1f2e; color: #e0e0e0; }
+        .form-input:focus, select:focus { outline: none; border-color: #8b7cf6; }
+        select option { background: #1a1d25; color: #e8e5ef; }
 
         .metrics-grid {
             display: grid;
@@ -126,17 +126,17 @@
         }
         .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
         .metric-label {
-            font-size: 0.75rem; color: #a0aec0;
+            font-size: 0.75rem; color: #9891a8;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin-bottom: 0.4rem; text-align: center;
         }
-        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
+        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e8e5ef; }
 
         .table-wrap { overflow-x: auto; max-height: 600px; overflow-y: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         th {
             background: linear-gradient(135deg, #0f0f23, #1a1a3e);
-            color: #a0aec0; font-weight: 600;
+            color: #9891a8; font-weight: 600;
             text-transform: uppercase; letter-spacing: 0.05em;
             padding: 0.6rem 0.5rem; text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -146,21 +146,21 @@
         td {
             padding: 0.5rem 0.5rem;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-            color: #e0e0e0; white-space: nowrap;
+            color: #e8e5ef; white-space: nowrap;
         }
-        tbody tr:hover { background: rgba(105,95,245,0.08); }
-        .pair-cell { font-weight: 600; color: #695ff5; }
+        tbody tr:hover { background: rgba(139,124,246,0.08); }
+        .pair-cell { font-weight: 600; color: #8b7cf6; }
 
         .badge {
             display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
             font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em;
         }
-        .badge-spot { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
-        .badge-futures { background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.3); }
-        .badge-funding_rate { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
-        .badge-mark, .badge-index, .badge-premiumIndex { background: rgba(160,174,192,0.15); color: #a0aec0; border: 1px solid rgba(160,174,192,0.3); }
-        .badge-yes { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
-        .badge-no { background: rgba(160,174,192,0.12); color: #6b7280; border: 1px solid rgba(160,174,192,0.2); }
+        .badge-spot { background: rgba(126,226,168,0.15); color: #7ee2a8; border: 1px solid rgba(126,226,168,0.3); }
+        .badge-futures { background: rgba(127,178,247,0.15); color: #7fb2f7; border: 1px solid rgba(127,178,247,0.3); }
+        .badge-funding_rate { background: rgba(227,179,65,0.15); color: #e3b341; border: 1px solid rgba(227,179,65,0.3); }
+        .badge-mark, .badge-index, .badge-premiumIndex { background: rgba(139,147,163,0.15); color: #9891a8; border: 1px solid rgba(139,147,163,0.3); }
+        .badge-yes { background: rgba(126,226,168,0.15); color: #7ee2a8; border: 1px solid rgba(126,226,168,0.3); }
+        .badge-no { background: rgba(139,147,163,0.12); color: #6f6880; border: 1px solid rgba(139,147,163,0.2); }
 
         .exchange-row {
             display: flex; align-items: center; justify-content: space-between;
@@ -168,20 +168,20 @@
             background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
             margin-bottom: 0.6rem; cursor: pointer; transition: all 0.2s ease;
         }
-        .exchange-row:hover { background: rgba(105,95,245,0.1); border-color: rgba(105,95,245,0.3); }
-        .exchange-row.active { background: rgba(105,95,245,0.16); border-color: #695ff5; }
+        .exchange-row:hover { background: rgba(139,124,246,0.1); border-color: rgba(139,124,246,0.3); }
+        .exchange-row.active { background: rgba(139,124,246,0.16); border-color: #8b7cf6; }
         .exchange-name { font-weight: 700; font-size: 1rem; text-transform: capitalize; }
 
         .alert {
             background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
-            border: 1px solid rgba(239,68,68,0.3);
+            border: 1px solid rgba(244,135,155,0.3);
             border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #fca5a5;
         }
-        .loading { text-align: center; padding: 2.5rem; color: #a0aec0; }
+        .loading { text-align: center; padding: 2.5rem; color: #9891a8; }
         .spinner {
             display: inline-block; width: 20px; height: 20px;
             border: 3px solid rgba(255,255,255,0.1);
-            border-left-color: #695ff5;
+            border-left-color: #8b7cf6;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin-right: 0.6rem; vertical-align: middle;
@@ -190,118 +190,23 @@
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-    <style>
-        /* === VulcanTrader Pro UI overrides === */
-        body {
-            background:
-                linear-gradient(135deg, rgba(15,5,20,0.55), rgba(10,5,15,0.78)),
-                url('/static/background.jpg') center/cover fixed no-repeat,
-                linear-gradient(135deg, #1b0a14 0%, #14081a 50%, #0d0610 100%) !important;
-        }
-        .navbar {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            backdrop-filter: blur(10px) saturate(140%);
-            -webkit-backdrop-filter: blur(10px) saturate(140%);
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            position: relative;
-        }
-        .navbar::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .brand {
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            letter-spacing: 0.10em !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.75), 0 0 18px rgba(105,95,245,0.5) !important;
-        }
-        .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.15), rgba(52,22,100,0.15)) !important;
-            border-color: #695ff5 !important;
-            box-shadow: 0 0 10px rgba(105,95,245,0.35) !important;
-        }
-        .btn {
-            background: linear-gradient(135deg, rgba(76,23,173,0.88) 0%, rgba(52,22,100,0.88) 50%, rgba(25,5,56,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
-            background-blend-mode: normal, normal !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            border-radius: 0 !important;
-            padding: 12px 24px !important;
-            min-width: 150px;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            text-transform: uppercase !important;
-            letter-spacing: 0.08em !important;
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4), 0 1px 0 rgba(255,255,255,0.12) inset !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
-            color: #f5f5f5 !important;
-        }
-        .btn:hover:not(:disabled) {
-            transform: scale(1.05);
-            box-shadow: 0 12px 32px rgba(105,95,245,0.5), 0 1px 0 rgba(255,255,255,0.18) inset !important;
-            filter: drop-shadow(0 0 6px rgba(105,95,245,0.4));
-        }
-        .btn-danger { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 50%, #991b1b 100%) !important; }
-        .card {
-            background: linear-gradient(135deg, rgba(27,27,27,0.56) 0%, rgba(20,19,27,0.56) 50%, rgba(13,11,22,0.61) 100%) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            overflow: hidden;
-        }
-        .card h3 {
-            position: relative;
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 600 !important;
-            letter-spacing: 0.08em !important;
-            color: #e0e0e0 !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.6), 0 0 18px rgba(105,95,245,0.35) !important;
-        }
-        .card h3::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .metric { background: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.05) !important; }
-        th {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%) !important;
-            color: #a0aec0 !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        tbody tr:hover { background: rgba(105,95,245,0.10) !important; }
-        .form-input, select, input[type="text"], input[type="number"], textarea {
-            background: rgba(255,255,255,0.05) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        .form-input:focus, select:focus, input:focus, textarea:focus {
-            border-color: #695ff5 !important; box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important;
-        }
-        .pair-cell { color: #695ff5 !important; }
-        .exchange-row { background: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.06) !important; }
-        .exchange-row:hover { background: rgba(105,95,245,0.12) !important; border-color: rgba(105,95,245,0.35) !important; }
-        .exchange-row.active { background: rgba(105,95,245,0.18) !important; border-color: #695ff5 !important; }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/theme.css?v=45">
 </head>
 <body>
 <div id="app">
     <nav class="navbar">
         <div style="display:flex; align-items:center;">
             <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;">v{{ version }}</span></a>
-            <div style="margin-left: 2rem;">
+            <div class="seg-track" style="margin-left: 2rem;">
                 <a href="/trading" class="nav-link">Trading</a>
                 <a href="/backtester" class="nav-link">Backtester</a>
                 <a href="/datamanager" class="nav-link active">Data Manager</a>
             </div>
         </div>
-        <div style="display:flex; gap:0.5rem; align-items:center;">
-            <button class="btn btn-logout" @click="logout" title="Logout"
-                    style="min-width:unset; padding:8px 12px; line-height:0;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+        <div class="nav-right">
+            <button class="icon-btn" @click="logout" title="Logout">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
                      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                     <polyline points="16 17 21 12 16 7"/>
@@ -318,30 +223,28 @@
         <div class="card">
             <h3>
                 Exchanges
-                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
+                <span style="font-size:0.75rem; font-weight:400; color:#9891a8;">
                     Click an exchange to view its data coverage
                 </span>
             </h3>
             <div v-if="exchangesLoading" class="loading"><span class="spinner"></span> Loading exchanges…</div>
-            <div v-else-if="exchanges.length === 0" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+            <div v-else-if="exchanges.length === 0" style="text-align:center; color:#9891a8; padding:1.5rem;">
                 No exchanges found — no configs and no downloaded data yet.
             </div>
-            <div v-else>
+            <div v-else class="exchange-grid">
                 <div v-for="ex in exchanges" :key="ex.name"
                      class="exchange-row" :class="{ active: selectedExchange === ex.name }"
                      @click="selectExchange(ex.name)">
-                    <div style="display:flex; align-items:center; gap:0.75rem;">
-                        <span class="exchange-name">{{ ex.name }}</span>
-                        <span style="font-size:0.75rem; color:#a0aec0;" v-if="ex.configs.length">
-                            {{ ex.configs.length }} config{{ ex.configs.length === 1 ? '' : 's' }}
-                        </span>
-                    </div>
-                    <div style="display:flex; gap:0.4rem;">
+                    <span class="exchange-name">{{ ex.name }}</span>
+                    <span class="exchange-cfg" v-if="ex.configs.length">
+                        {{ ex.configs.length }} config{{ ex.configs.length === 1 ? '' : 's' }}
+                    </span>
+                    <span class="exchange-badges">
                         <span class="badge" :class="ex.has_data ? 'badge-yes' : 'badge-no'">
                             {{ ex.has_data ? 'has data' : 'no data' }}
                         </span>
                         <span v-if="ex.has_futures" class="badge badge-futures">futures</span>
-                    </div>
+                    </span>
                 </div>
             </div>
         </div>
@@ -386,7 +289,7 @@
                         <div class="metric-value" style="font-size:0.95rem;">{{ fmtDate(coverage.summary.latest) }}</div>
                     </div>
                 </div>
-                <div v-if="filteredRows.length === 0" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                <div v-if="filteredRows.length === 0" style="text-align:center; color:#9891a8; padding:1.5rem;">
                     No pair/timeframe data matches this filter.
                 </div>
                 <div v-else class="table-wrap">
@@ -416,58 +319,66 @@
         <div class="card">
             <h3>
                 Download Data
-                <span style="font-size:0.75rem; font-weight:400; color:#a0aec0;">
+                <span style="font-size:0.75rem; font-weight:400; color:#9891a8;">
                     {{ runningDownloadCount }} / {{ jobsMaxConcurrent }} running
                 </span>
             </h3>
             <div v-if="downloadError" class="alert"><strong>Error:</strong> {{ downloadError }}</div>
+            <div v-if="dlIsArchive" class="archive-note">
+                <b>Hyperliquid</b> has no historical OHLCV endpoint. Its data comes as one
+                prebuilt archive, so range, pairs and timeframes below do not apply &mdash;
+                the whole dataset is imported.
+                <span class="archive-src">http://frequenthippo-dl.ddns.net/wp-content/uploads/hyperliquid_download-data.7z</span>
+                Already downloaded once? It is reused from <code>user_data/data/</code>;
+                tick <b>Erase existing data first</b> to fetch it again.
+            </div>
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:0.75rem; align-items:end;">
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Config</label>
                     <select v-model="downloadForm.config" class="form-input" style="width:100%; margin-top:0.25rem;">
                         <option value="">— select config —</option>
                         <option v-for="c in configs" :key="c.name" :value="c.name">{{ c.name }}</option>
                     </select>
                 </div>
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;"
                            title="Overrides the config's own exchange - leave blank to use the config's exchange">Exchange override</label>
                     <input v-model="downloadForm.exchange" class="form-input" placeholder="(use config's exchange)"
                            style="width:100%; margin-top:0.25rem;">
                 </div>
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Range</label>
-                    <select v-model="downloadForm.mode" class="form-input" style="width:100%; margin-top:0.25rem;">
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Range</label>
+                    <select v-model="downloadForm.mode" :disabled="dlIsArchive" class="form-input" style="width:100%; margin-top:0.25rem;">
                         <option value="timerange">Explicit timerange</option>
                         <option value="days">Days back</option>
                     </select>
                 </div>
                 <div v-if="downloadForm.mode === 'days'">
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;">Days</label>
-                    <input type="number" min="1" v-model.number="downloadForm.days" class="form-input" style="width:100%; margin-top:0.25rem;">
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;">Days</label>
+                    <input type="number" min="1" v-model.number="downloadForm.days" :disabled="dlIsArchive" class="form-input" style="width:100%; margin-top:0.25rem;">
                 </div>
                 <div v-else>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;"
                            title="Format: YYYYMMDD-YYYYMMDD (either side may be omitted)">Timerange</label>
-                    <input v-model="downloadForm.timerange" class="form-input" placeholder="20240101-20240601"
+                    <input v-model="downloadForm.timerange" :disabled="dlIsArchive" class="form-input" placeholder="20240101-20240601"
                            style="width:100%; margin-top:0.25rem;">
                 </div>
-                <label style="display:flex; align-items:center; gap:0.4rem; padding-bottom:0.5rem; cursor:pointer; font-size:0.85rem; color:#cbd5e0;">
-                    <input type="checkbox" v-model="downloadForm.erase" style="accent-color:#695ff5;">
+                <label style="display:flex; align-items:center; gap:0.4rem; padding-bottom:0.5rem; cursor:pointer; font-size:0.85rem; color:#9891a8;">
+                    <input type="checkbox" v-model="downloadForm.erase" style="accent-color:#8b7cf6;">
                     Erase existing data first
                 </label>
             </div>
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-top:0.75rem;">
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;"
                            title="Space-separated, e.g. BTC/USDT ETH/USDT - leave blank to use the config's own pairlist">Pairs (optional)</label>
-                    <textarea v-model="downloadForm.pairsText" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:monospace; font-size:0.8rem;"
+                    <textarea v-model="downloadForm.pairsText" :disabled="dlIsArchive" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:0.8rem;"
                               placeholder="Leave blank to use the config's own pairlist. Space-separated, e.g. BTC/USDT ETH/USDT"></textarea>
                 </div>
                 <div>
-                    <label style="font-size:0.72rem; color:#a0aec0; text-transform:uppercase; letter-spacing:0.05em;"
+                    <label style="font-size:0.72rem; color:#9891a8; text-transform:uppercase; letter-spacing:0.05em;"
                            title="Space-separated, e.g. 15m 1h - leave blank to use the config's own timeframe(s)">Timeframes (optional)</label>
-                    <textarea v-model="downloadForm.timeframesText" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:monospace; font-size:0.8rem;"
+                    <textarea v-model="downloadForm.timeframesText" :disabled="dlIsArchive" class="form-input" rows="2" style="width:100%; margin-top:0.25rem; font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:0.8rem;"
                               placeholder="Leave blank to use the config's own timeframe(s). Space-separated, e.g. 15m 1h"></textarea>
                 </div>
             </div>
@@ -478,7 +389,7 @@
 
             <!-- === JOBS === -->
             <div v-if="downloadJobs.length > 0" style="margin-top:1.25rem;">
-                <h4 style="color:#a0aec0; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
+                <h4 style="color:#9891a8; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 0.5rem 0;">
                     Download Jobs
                 </h4>
                 <div class="table-wrap" style="max-height:260px;">
@@ -491,7 +402,7 @@
                         <tbody>
                             <tr v-for="j in downloadJobs" :key="j.id"
                                 @click="selectJob(j.id)"
-                                :style="{ cursor: 'pointer', background: selectedJobId === j.id ? 'rgba(105,95,245,0.12)' : '' }">
+                                :style="{ cursor: 'pointer', background: selectedJobId === j.id ? 'rgba(139,124,246,0.12)' : '' }">
                                 <td><span :style="{ color: jobStatusColor(j.status), fontWeight: 600 }">{{ j.status }}</span></td>
                                 <td>{{ j.config }}</td>
                                 <td>{{ j.exchange || '(config default)' }}</td>
@@ -499,11 +410,11 @@
                                 <td style="min-width:120px;">
                                     <div style="display:flex; align-items:center; gap:0.4rem;">
                                         <div style="flex:1; height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden; min-width:60px;">
-                                            <div :style="{ width: jobProgressPct(j) + '%', height: '100%', background: '#695ff5', transition: 'width 0.3s' }"></div>
+                                            <div :style="{ width: jobProgressPct(j) + '%', height: '100%', background: '#8b7cf6', transition: 'width 0.3s' }"></div>
                                         </div>
-                                        <span style="font-size:0.72rem; color:#a0aec0; white-space:nowrap;">{{ jobProgressPct(j) }}%</span>
+                                        <span style="font-size:0.72rem; color:#9891a8; white-space:nowrap;">{{ jobProgressPct(j) }}%</span>
                                     </div>
-                                    <div v-if="j.dl_units_total" style="font-size:0.68rem; color:#6b7280;">{{ j.dl_units_done }} / {{ j.dl_units_total }}</div>
+                                    <div v-if="j.dl_units_total" style="font-size:0.68rem; color:#6f6880;">{{ j.dl_units_done }} / {{ j.dl_units_total }}</div>
                                 </td>
                                 <td>{{ jobElapsedStr(j) }}</td>
                                 <td>{{ jobEtaStr(j) }}</td>
@@ -519,16 +430,16 @@
                 </div>
 
                 <div v-if="selectedJob" style="margin-top:0.75rem;">
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#a0aec0; margin-bottom:0.25rem; flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; font-size:0.75rem; color:#9891a8; margin-bottom:0.25rem; flex-wrap:wrap;">
                         <span>Job log {{ selectedJob.id }} ({{ selectedJob.status }}<span v-if="selectedJob.exit_code !== null && selectedJob.exit_code !== undefined">, exit {{ selectedJob.exit_code }}</span>)</span>
-                        <span v-if="selectedJob.dl_units_total" style="color:#cbd5e0;">
+                        <span v-if="selectedJob.dl_units_total" style="color:#9891a8;">
                             {{ jobProgressPct(selectedJob) }}% ({{ selectedJob.dl_units_done }}/{{ selectedJob.dl_units_total }})
                             &nbsp;·&nbsp; Elapsed {{ jobElapsedStr(selectedJob) }}
                             &nbsp;·&nbsp; ETA {{ jobEtaStr(selectedJob) }}
                         </span>
                     </div>
                     <pre ref="jobLogPre"
-                         style="max-height:320px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#cbd5e0; margin:0; white-space:pre-wrap;">{{ jobLogText || '(no output yet)' }}</pre>
+                         style="max-height:320px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.75rem; overflow:auto; font-size:0.75rem; line-height:1.4; color:#9891a8; margin:0; white-space:pre-wrap;">{{ jobLogText || '(no output yet)' }}</pre>
                 </div>
             </div>
         </div>
@@ -586,6 +497,14 @@ createApp({
             return this.downloadJobs.filter(j => j.status === 'running' || j.status === 'queued').length;
         },
         selectedJob() { return this.jobs.find(j => j.id === this.selectedJobId) || null; },
+        dlExchange() {
+            if (this.downloadForm.exchange) return this.downloadForm.exchange.trim().toLowerCase();
+            const c = this.configs.find(c => c.name === this.downloadForm.config);
+            return ((c && c.exchange) || '').toLowerCase();
+        },
+        // Hyperliquid has no historical OHLCV API - the whole dataset arrives as
+        // one prebuilt archive, so none of the range/pair controls apply.
+        dlIsArchive() { return this.dlExchange === 'hyperliquid'; },
     },
     async mounted() {
         if (!this.token) { window.location.href = '/login'; return; }
@@ -614,7 +533,14 @@ createApp({
                 window.location.href = '/login';
                 throw new Error('Unauthorized');
             }
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            if (!r.ok) {
+                // FastAPI puts the reason in `detail` - a bare "HTTP 503" hides
+                // the actual cause (usually: no bot is running, so there is no
+                // DataProvider to read candles from).
+                let detail = '';
+                try { detail = ((await r.json()) || {}).detail || ''; } catch (_) { /* not JSON */ }
+                throw new Error(detail ? `${detail} (HTTP ${r.status})` : `HTTP ${r.status}`);
+            }
             return r.json();
         },
         logout() {
@@ -730,8 +656,8 @@ createApp({
             } catch (e) { /* polling: stay quiet */ }
         },
         jobStatusColor(s) {
-            return ({ running: '#f59e0b', queued: '#a0aec0', succeeded: '#10b981',
-                     failed: '#ef4444', cancelled: '#a0aec0', error: '#ef4444' })[s] || '#e0e0e0';
+            return ({ running: '#e3b341', queued: '#9891a8', succeeded: '#7ee2a8',
+                     failed: '#f4879b', cancelled: '#9891a8', error: '#f4879b' })[s] || '#e8e5ef';
         },
         jobProgressPct(j) {
             if (!j.dl_units_total) return j.status === 'succeeded' ? 100 : 0;

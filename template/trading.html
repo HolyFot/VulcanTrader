@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
     <title>VulcanTrader - Trading</title>
     <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -13,7 +14,7 @@
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1b1b1b 0%, #14131b 50%, #0d0b16 100%);
-            color: #e0e0e0;
+            color: #e8e5ef;
             min-height: 100vh;
         }
         .navbar {
@@ -34,8 +35,8 @@
         }
         .nav-link:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
         .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.1), rgba(52,22,100,0.1));
-            border-color: #695ff5; box-shadow: 0 0 10px rgba(105,95,245,0.3);
+            background: linear-gradient(135deg, rgba(139,124,246,0.1), rgba(52,22,100,0.1));
+            border-color: #8b7cf6; box-shadow: 0 0 10px rgba(139,124,246,0.3);
         }
         .btn {
             background: linear-gradient(135deg, #4c17ad 0%, #341664 50%, #190538 100%);
@@ -43,7 +44,7 @@
             border-radius: 6px; padding: 0.5rem 1rem; font-weight: 500;
             cursor: pointer; transition: all 0.3s ease;
         }
-        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(105,95,245,0.3); }
+        .btn:hover:not(:disabled) { transform: scale(1.05); box-shadow: 0 0 10px rgba(139,124,246,0.3); }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-danger { background: linear-gradient(135deg, #dc2626, #991b1b); }
 
@@ -64,16 +65,16 @@
             padding: 1rem 1.5rem;
             border-radius: 8px 8px 0 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
-            color: #e0e0e0; font-size: 1.125rem; font-weight: 600;
+            color: #e8e5ef; font-size: 1.125rem; font-weight: 600;
             text-shadow: 0 2px 4px rgba(0,0,0,0.3);
             display: flex; align-items: center; justify-content: space-between;
         }
         .form-input, select {
-            background: rgba(255,255,255,0.05); color: #e0e0e0;
+            background: rgba(255,255,255,0.05); color: #e8e5ef;
             border: 1px solid rgba(255,255,255,0.1);
             border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.9rem;
         }
-        .form-input:focus, select:focus { outline: none; border-color: #695ff5; }
+        .form-input:focus, select:focus { outline: none; border-color: #8b7cf6; }
 
         /* status pill */
         .status-pill {
@@ -82,10 +83,10 @@
             background: rgba(255,255,255,0.06);
             border: 1px solid rgba(255,255,255,0.1);
         }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981;
-            box-shadow: 0 0 8px #10b981; animation: pulse 2s infinite; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #7ee2a8;
+            box-shadow: 0 0 8px #7ee2a8; animation: pulse 2s infinite; }
         @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
-        .status-dot.stopped { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+        .status-dot.stopped { background: #f4879b; box-shadow: 0 0 8px #f4879b; }
 
         /* metrics grid */
         .metrics-grid {
@@ -103,14 +104,14 @@
         }
         .metric:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
         .metric-label {
-            font-size: 0.75rem; color: #a0aec0;
+            font-size: 0.75rem; color: #9891a8;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin-bottom: 0.4rem; text-align: center;
         }
-        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e0e0e0; }
-        .pos { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
-        .neg { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
-        .neu { color: #f59e0b; text-shadow: 0 0 10px rgba(245,158,11,0.3); }
+        .metric-value { font-size: 1.25rem; font-weight: 600; color: #e8e5ef; }
+        .pos { color: #7ee2a8; text-shadow: 0 0 10px rgba(126,226,168,0.3); }
+        .neg { color: #f4879b; text-shadow: 0 0 10px rgba(244,135,155,0.3); }
+        .neu { color: #e3b341; text-shadow: 0 0 10px rgba(227,179,65,0.3); }
 
         /* monthly/daily boxes */
         .period-grid { display: flex; flex-wrap: wrap; gap: 0.75rem; }
@@ -125,16 +126,16 @@
         }
         .period-box:hover {
             transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(105,95,245,0.15);
+            box-shadow: 0 6px 20px rgba(139,124,246,0.15);
             background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
         }
         .period-header {
-            font-size: 0.8rem; font-weight: 600; color: #e0e0e0; text-align: center;
+            font-size: 0.8rem; font-weight: 600; color: #e8e5ef; text-align: center;
             border-bottom: 1px solid rgba(255,255,255,0.1);
             padding-bottom: 0.4rem; margin-bottom: 0.25rem;
         }
         .period-row { display: flex; justify-content: space-between; font-size: 0.78rem; }
-        .period-row .lbl { color: #a0aec0; }
+        .period-row .lbl { color: #9891a8; }
         .period-row .val { font-weight: 600; }
 
         /* tables */
@@ -142,7 +143,7 @@
         table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         th {
             background: linear-gradient(135deg, #0f0f23, #1a1a3e);
-            color: #a0aec0; font-weight: 600;
+            color: #9891a8; font-weight: 600;
             text-transform: uppercase; letter-spacing: 0.05em;
             padding: 0.6rem 0.5rem; text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -152,33 +153,33 @@
         td {
             padding: 0.5rem 0.5rem;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-            color: #e0e0e0; white-space: nowrap;
+            color: #e8e5ef; white-space: nowrap;
         }
-        tbody tr:hover { background: rgba(105,95,245,0.08); }
-        .pair-cell { font-weight: 600; color: #695ff5; }
-        .side-long { color: #10b981; font-weight: 600; }
-        .side-short { color: #ef4444; font-weight: 600; }
+        tbody tr:hover { background: rgba(139,124,246,0.08); }
+        .pair-cell { font-weight: 600; color: #8b7cf6; }
+        .side-long { color: #7ee2a8; font-weight: 600; }
+        .side-short { color: #f4879b; font-weight: 600; }
         .badge {
             display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
             font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em;
         }
-        .badge-open { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
-        .badge-closed { background: rgba(160,174,192,0.15); color: #a0aec0; border: 1px solid rgba(160,174,192,0.3); }
+        .badge-open { background: rgba(126,226,168,0.15); color: #7ee2a8; border: 1px solid rgba(126,226,168,0.3); }
+        .badge-closed { background: rgba(139,147,163,0.15); color: #9891a8; border: 1px solid rgba(139,147,163,0.3); }
 
         .toggle-check {
             appearance: none; -webkit-appearance: none;
             width: 17px; height: 17px; border-radius: 4px;
-            background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.45);
+            background: rgba(127,178,247,0.15); border: 1px solid rgba(127,178,247,0.45);
             cursor: pointer; position: relative; vertical-align: middle;
             transition: background 0.15s ease, border-color 0.15s ease;
         }
         .toggle-check:checked {
-            background: rgba(16,185,129,0.18); border-color: rgba(16,185,129,0.55);
+            background: rgba(126,226,168,0.18); border-color: rgba(126,226,168,0.55);
         }
         .toggle-check:checked::after {
             content: ''; position: absolute; left: 5px; top: 2px;
             width: 4px; height: 8px;
-            border: solid #10b981; border-width: 0 2px 2px 0;
+            border: solid #7ee2a8; border-width: 0 2px 2px 0;
             transform: rotate(45deg);
         }
         .toggle-check:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -194,22 +195,22 @@
         .icon-btn:hover:not(:disabled) { filter: brightness(1.35); transform: translateY(-1px); }
         .icon-btn:active:not(:disabled) { transform: translateY(0); }
         .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .icon-btn.success { background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.4); color: #10b981; }
-        .icon-btn.danger  { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.4); color: #ef4444; }
-        .icon-btn.info    { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); color: #38bdf8; }
-        .icon-btn.warn    { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.4); color: #f59e0b; }
-        .icon-btn.accent  { background: rgba(105,95,245,0.16); border-color: rgba(105,95,245,0.45); color: #9089f7; }
+        .icon-btn.success { background: rgba(126,226,168,0.16); border-color: rgba(126,226,168,0.4); color: #7ee2a8; }
+        .icon-btn.danger  { background: rgba(244,135,155,0.16); border-color: rgba(244,135,155,0.4); color: #f4879b; }
+        .icon-btn.info    { background: rgba(127,178,247,0.16); border-color: rgba(127,178,247,0.4); color: #7fb2f7; }
+        .icon-btn.warn    { background: rgba(227,179,65,0.16); border-color: rgba(227,179,65,0.4); color: #e3b341; }
+        .icon-btn.accent  { background: rgba(139,124,246,0.16); border-color: rgba(139,124,246,0.45); color: #cdc4ff; }
 
         .alert {
             background: linear-gradient(135deg, rgba(185,28,28,0.1), rgba(127,29,29,0.1));
-            border: 1px solid rgba(239,68,68,0.3);
+            border: 1px solid rgba(244,135,155,0.3);
             border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #fca5a5;
         }
-        .loading { text-align: center; padding: 2.5rem; color: #a0aec0; }
+        .loading { text-align: center; padding: 2.5rem; color: #9891a8; }
         .spinner {
             display: inline-block; width: 20px; height: 20px;
             border: 3px solid rgba(255,255,255,0.1);
-            border-left-color: #695ff5;
+            border-left-color: #8b7cf6;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin-right: 0.6rem; vertical-align: middle;
@@ -219,7 +220,7 @@
         .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         @media (max-width: 768px) { .pair-grid { grid-template-columns: 1fr; } }
         .pair-section h4 {
-            color: #a0aec0; font-size: 0.85rem;
+            color: #9891a8; font-size: 0.85rem;
             text-transform: uppercase; letter-spacing: 0.05em;
             margin: 0 0 0.5rem 0;
         }
@@ -233,144 +234,25 @@
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
-    <style>
-        /* === VulcanTrader Pro UI overrides === */
-        body {
-            background:
-                linear-gradient(135deg, rgba(15,5,20,0.55), rgba(10,5,15,0.78)),
-                url('/static/background.jpg') center/cover fixed no-repeat,
-                linear-gradient(135deg, #1b0a14 0%, #14081a 50%, #0d0610 100%) !important;
-        }
-        .navbar {
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            backdrop-filter: blur(10px) saturate(140%);
-            -webkit-backdrop-filter: blur(10px) saturate(140%);
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            position: relative;
-        }
-        .navbar::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .brand {
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            letter-spacing: 0.10em !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.75), 0 0 18px rgba(105,95,245,0.5) !important;
-        }
-        .nav-link.active {
-            background: linear-gradient(135deg, rgba(105,95,245,0.15), rgba(52,22,100,0.15)) !important;
-            border-color: #695ff5 !important;
-            box-shadow: 0 0 10px rgba(105,95,245,0.35) !important;
-        }
-        .btn {
-            background: linear-gradient(135deg, rgba(76,23,173,0.88) 0%, rgba(52,22,100,0.88) 50%, rgba(25,5,56,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
-            background-blend-mode: normal, normal !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            border-radius: 0 !important;
-            padding: 12px 24px !important;
-            min-width: 150px;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 700 !important;
-            text-transform: uppercase !important;
-            letter-spacing: 0.08em !important;
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4), 0 1px 0 rgba(255,255,255,0.12) inset !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6);
-            color: #f5f5f5 !important;
-        }
-        .btn:hover:not(:disabled) {
-            transform: scale(1.05);
-            box-shadow: 0 12px 32px rgba(105,95,245,0.5), 0 1px 0 rgba(255,255,255,0.18) inset !important;
-            filter: drop-shadow(0 0 6px rgba(105,95,245,0.4));
-        }
-        .btn-danger {
-            background: linear-gradient(135deg, rgba(220,38,38,0.88) 0%, rgba(185,28,28,0.88) 50%, rgba(153,27,27,0.92) 100%), url('/static/buttonBG.png') center/cover no-repeat !important;
-            background-blend-mode: normal, normal !important;
-        }
-        .btn-logout {
-            background: rgba(255,255,255,0.07) !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            box-shadow: none !important;
-            min-width: unset !important;
-            border-radius: 6px !important;
-            font-family: inherit !important;
-            letter-spacing: 0 !important;
-            font-size: 1.1rem !important;
-            opacity: 0.75;
-        }
-        .btn-logout:hover:not(:disabled) { opacity: 1; transform: scale(1.1); }
-        .card {
-            background: linear-gradient(135deg, rgba(27,27,27,0.56) 0%, rgba(20,19,27,0.56) 50%, rgba(13,11,22,0.61) 100%) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.05) inset !important;
-            overflow: hidden;
-        }
-        .card h3 {
-            position: relative;
-            background: linear-gradient(110deg, #4c1d95 0%, #7c3aed 45%, #60a5fa 100%) !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-            font-family: 'Cinzel', serif !important;
-            font-weight: 600 !important;
-            letter-spacing: 0.08em !important;
-            color: #e0e0e0 !important;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.6), 0 0 18px rgba(105,95,245,0.35) !important;
-        }
-        .card h3::after {
-            content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
-            background: linear-gradient(90deg, transparent 0%, #695ff5 25%, #6666ff 50%, #695ff5 75%, transparent 100%);
-            box-shadow: 0 0 10px rgba(105,95,245,0.5);
-            pointer-events: none;
-        }
-        .metric, .period-box {
-            background: rgba(255,255,255,0.03) !important;
-            backdrop-filter: blur(8px) saturate(130%);
-            -webkit-backdrop-filter: blur(8px) saturate(130%);
-            border: 1px solid rgba(255,255,255,0.05) !important;
-        }
-        .period-box:hover {
-            background: rgba(255,255,255,0.05) !important;
-            box-shadow: 0 6px 20px rgba(105,95,245,0.15) !important;
-        }
-        th {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%) !important;
-            color: #a0aec0 !important;
-            border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        tbody tr:hover { background: rgba(105,95,245,0.10) !important; }
-        .pair-section h4 {
-            font-family: 'Cinzel', serif !important;
-            letter-spacing: 0.08em !important;
-            color: #a0aec0 !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.6) !important;
-        }
-        .form-input, select {
-            background: #1e1c2a !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-        }
-        select option { background: #1e1c2a; color: #e0e0e0; }
-        .form-input:focus, select:focus { border-color: #695ff5 !important; box-shadow: 0 0 0 3px rgba(105,95,245,0.2) !important; }
-        .pair-cell { color: #695ff5 !important; }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/theme.css?v=45">
 </head>
 <body>
 <div id="app" x-data="tradingApp()" x-init="init()">
     <nav class="navbar">
         <div style="display:flex; align-items:center;">
-            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;" x-text="status && status.version ? 'v'+status.version : 'v1.2'"></span></a>
-            <div style="margin-left: 2rem;">
+            <a href="/trading" class="brand">VulcanTrader <span style="font-size:0.6em; opacity:0.7; font-weight:400;" x-text="status && status.version ? 'v'+status.version : 'v1.3'"></span></a>
+            <div class="seg-track" style="margin-left: 2rem;">
                 <a href="/trading" class="nav-link active">Trading</a>
                 <a href="/backtester" class="nav-link">Backtester</a>
                 <a href="/datamanager" class="nav-link">Data Manager</a>
             </div>
         </div>
-        <div style="display:flex; gap:0.75rem; align-items:center;">
-            <button class="btn btn-logout" @click="logout()" title="Logout"
-                    style="min-width:unset; padding:8px 12px; line-height:0;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+        <div class="nav-right">
+            <span class="nav-updated" title="Auto-refreshes every 10s">updated <span x-text="lastUpdated || '--:--:--'"></span></span>
+            <button class="icon-btn" @click="refreshAll()" :disabled="loading" title="Refresh now">&#8635;</button>
+            <button class="icon-btn" @click="logout()" title="Logout">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
                      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                     <polyline points="16 17 21 12 16 7"/>
@@ -383,79 +265,86 @@
     <div class="content">
         <div x-show="error" class="alert"><strong>Error:</strong> <span x-text="error"></span></div>
 
-        <div x-show="loading && allTrades.length === 0" class="loading">
-            <span class="spinner"></span> Loading trades...
-        </div>
-
-        <!-- === CONFIG MANAGER === -->
-        <div class="card" style="margin-bottom:1rem;">
-            <h3>
-                <span>
-                    Bots
-                    <template x-if="viewingBot">
-                        <span style="font-size:0.75rem; font-weight:400; color:#38bdf8;">
-                            &nbsp;· viewing <span x-text="viewingBot"></span>
-                            <a href="#" @click.prevent="viewingBot = null; refreshDashboard()"
-                               style="color:#f59e0b; margin-left:0.4rem;">(back)</a>
-                        </span>
-                    </template>
-                </span>
-                <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
-                    Show non-bots
-                    <input type="checkbox" class="toggle-check" x-model="showNonBots" @change="loadMeta()">
-                </label>
-            </h3>
-            <div class="table-wrap" style="max-height:420px;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Status</th>
-                            <th>Strategy</th>
-                            <th>Auto Start</th>
-                            <th>Mode</th>
-                            <th>Exchange</th>
-                            <th>CPU</th>
-                            <th>RAM</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+        <div class="layout" :class="sideCollapsed ? 'side-collapsed' : ''">
+          <aside class="side">
+            <div class="card side-card">
+                <div class="side-tabs">
+                    <span class="seg-track">
+                        <button class="side-tab" :class="sideTab === 'bots' ? 'active' : ''" @click="sideTab = 'bots'">Bots</button>
+                        <button class="side-tab" :class="sideTab === 'metrics' ? 'active' : ''" @click="sideTab = 'metrics'">Metrics</button>
+                        <button class="side-tab" :class="sideTab === 'periods' ? 'active' : ''" @click="sideTab = 'periods'">Periods</button>
+                        <button class="side-tab" :class="sideTab === 'pairs' ? 'active' : ''" @click="sideTab = 'pairs'">Pairs</button>
+                        <button class="side-tab" :class="sideTab === 'log' ? 'active' : ''" @click="sideTab = 'log'">Log</button>
+                    </span>
+                    <button class="side-collapse" @click="sideCollapsed = !sideCollapsed"
+                            :title="sideCollapsed ? 'Show panel' : 'Hide panel'"
+                            x-text="sideCollapsed ? '»' : '«'"></button>
+                </div>
+                <div class="side-body">
+                    <div x-cloak x-show="sideTab === 'bots'">
+                        <div class="side-head">
+                            <!-- The "· viewing X (back)" line lived here. The
+                                 selected bot card already shows its own .sel
+                                 state, and clicking it again clears the filter
+                                 (see viewConfigDashboard), so the label was
+                                 redundant. The spacer slot now holds the "new
+                                 bot" button so the toggle stays on the right. -->
+                            <button class="icon-btn" @click="openNewConfig()" title="New bot config">&#43;</button>
+                            <label class="side-toggle">
+                                Show non-bots
+                                <input type="checkbox" class="toggle-check" x-model="showNonBots" @change="loadMeta()">
+                            </label>
+                        </div>
+                    <div class="bot-list">
                         <template x-for="cfg in configs" :key="cfg.name">
-                            <tr :style="viewingBot === cfg.account_name ? 'background:rgba(105,95,245,0.12);' : ''">
-                                <td style="font-weight:600; color:#10b981; text-decoration:underline;"
-                                    :style="cfg.running ? 'cursor:pointer;' : 'cursor:default; opacity:0.55;'"
-                                    :title="cfg.running ? 'Click to load this bot\'s live trades/stats' : 'Bot is not running'"
-                                    @click="viewConfigDashboard(cfg)"
-                                    x-text="cfg.name"></td>
-                                <td>
-                                    <span class="badge" :class="cfg.running ? 'badge-open' : (cfg.crashed ? 'badge-open' : 'badge-closed')"
-                                          :style="cfg.crashed ? 'background:rgba(245,158,11,0.15); color:#f59e0b; border-color:rgba(245,158,11,0.3);' : ''"
+                            <div class="bot-card" :class="viewingBot === cfg.account_name ? 'sel' : ''">
+                                <div class="bot-row">
+                                    <a href="#" class="bot-name" :class="cfg.running ? '' : 'off'"
+                                       :title="cfg.running ? 'Click to load live trades/stats for this bot' : 'Bot is not running'"
+                                       @click.prevent="viewConfigDashboard(cfg)"
+                                       x-text="cfg.name"></a>
+                                    <span class="badge"
+                                          :class="cfg.running ? 'badge-open' : (cfg.crashed ? 'badge-crashed' : 'badge-closed')"
                                           x-text="cfg.running ? 'running' : (cfg.crashed ? 'crashed' : 'stopped')"></span>
-                                </td>
-                                <td>
-                                    <select class="form-input" style="min-width:200px; font-size:0.8rem; padding:4px 6px;"
-                                            :value="cfg.strategy || ''"
-                                            @change="setConfigField(cfg, 'strategy', $event.target.value)"
-                                            :disabled="configBusy === cfg.name">
-                                        <option value="">— none —</option>
-                                        <template x-for="s in strategies" :key="s.name">
-                                            <option :value="s.name" x-text="s.name"></option>
+                                </div>
+                                <div class="bot-row bot-meta">
+                                    <span>
+                                        <b :class="cfg.dry_run ? '' : 'neg'" x-text="cfg.dry_run ? 'Paper' : 'LIVE'"></b>
+                                        <span x-text="cfg.exchange || '-'"></span>
+                                        <!-- CPU is per-bot either way (per-process for subprocess bots,
+                                             per-thread for single_process_mode ones). RAM is only
+                                             per-bot for subprocess bots - in-process bots share one
+                                             address space, so the figure is the whole dashboard
+                                             process's and is marked "shared" to say so. -->
+                                        <template x-if="cfg.running">
+                                            <span>
+                                                &middot;
+                                                <span :title="cfg.cpu_percent == null ? 'Measuring - updates on the next 10s poll'
+                                                              : (cfg.in_process ? 'CPU for this bot, measured per-thread' : 'CPU')"
+                                                      x-text="fmtCpu(cfg.cpu_percent)"></span>
+                                                <span :title="cfg.memory_mb == null ? 'Measuring - updates on the next 10s poll'
+                                                              : (cfg.in_process ? 'RAM of the whole dashboard process - in-process bots (single_process_mode) share one address space, so per-bot RAM cannot be measured separately' : 'RAM')"
+                                                      x-text="fmtMem(cfg.memory_mb) + (cfg.in_process && cfg.memory_mb != null ? ' shared' : '')"></span>
+                                            </span>
                                         </template>
-                                    </select>
-                                </td>
-                                <td style="text-align:center;">
-                                    <input type="checkbox" class="toggle-check" :checked="cfg.auto_start"
-                                           :disabled="configBusy === cfg.name"
-                                           @change="setConfigField(cfg, 'auto_start', $event.target.checked)">
-                                </td>
-                                <td x-text="cfg.dry_run ? 'Paper' : 'LIVE'" :class="cfg.dry_run ? '' : 'neg'"></td>
-                                <td x-text="cfg.exchange || '-'"></td>
-                                <td :title="cfg.running && cfg.cpu_percent == null ? 'Measuring — updates on the next 10s poll' : ''"
-                                    x-text="cfg.running ? fmtCpu(cfg.cpu_percent) : '-'"></td>
-                                <td :title="cfg.running && cfg.memory_mb == null ? 'Measuring — updates on the next 10s poll' : ''"
-                                    x-text="cfg.running ? fmtMem(cfg.memory_mb) : '-'"></td>
-                                <td style="white-space:nowrap;">
+                                    </span>
+                                    <label class="bot-auto" title="Start this bot automatically">
+                                        <input type="checkbox" class="toggle-check" :checked="cfg.auto_start"
+                                               :disabled="configBusy === cfg.name"
+                                               @change="setConfigField(cfg, 'auto_start', $event.target.checked)">
+                                        Auto
+                                    </label>
+                                </div>
+                                <select class="form-input bot-strat"
+                                        :value="cfg.strategy || ''"
+                                        @change="setConfigField(cfg, 'strategy', $event.target.value)"
+                                        :disabled="configBusy === cfg.name">
+                                    <option value="">&mdash; no strategy &mdash;</option>
+                                    <template x-for="s in strategies" :key="s.name">
+                                        <option :value="s.name" x-text="s.name"></option>
+                                    </template>
+                                </select>
+                                <div class="bot-actions">
                                     <button class="icon-btn success" @click="startConfigBot(cfg)"
                                             :disabled="configBusy === cfg.name || cfg.running || !cfg.strategy"
                                             :title="!cfg.strategy ? 'Set a strategy first' : 'Start'">&#9654;</button>
@@ -471,250 +360,496 @@
                                             :title="cfg.running ? 'Stop the bot first to rename' : 'Rename'">Aa</button>
                                     <button class="icon-btn danger" @click="deleteConfig(cfg)"
                                             :disabled="configBusy === cfg.name || cfg.running" title="Delete">&#10005;</button>
-                                </td>
-                            </tr>
+                                </div>
+                            </div>
                         </template>
-                        <tr x-show="configs.length === 0">
-                            <td colspan="9" style="text-align:center; color:#a0aec0;">No configs found.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+                        <div x-show="configs.length === 0" class="side-empty">No configs found.</div>
+                    </div>
+                    </div>
 
-        <!-- === CONFIG JSON EDITOR MODAL === -->
-        <div x-show="configEditor.open" x-cloak
-             style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:2000; display:flex; align-items:center; justify-content:center;"
-             @click.self="closeConfigEditor()">
-            <div class="card" style="width:min(720px, 92vw); max-height:85vh; display:flex; flex-direction:column; margin-bottom:0;">
-                <h3 x-text="'Edit ' + configEditor.name + '.json'"></h3>
-                <div x-show="configEditor.error" class="alert" style="margin-bottom:0.75rem;" x-text="configEditor.error"></div>
-                <textarea x-model="configEditor.content" spellcheck="false"
-                          style="flex:1; min-height:400px; width:100%; font-family:'Courier New', monospace; font-size:0.8rem;
-                                 background:rgba(0,0,0,0.35); color:#e0e0e0; border:1px solid rgba(255,255,255,0.1);
-                                 border-radius:6px; padding:0.75rem; resize:vertical;"></textarea>
-                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1rem;">
-                    <button class="btn" @click="closeConfigEditor()">Cancel</button>
-                    <button class="btn" @click="saveConfigEditor()" :disabled="configEditor.saving">
-                        <span x-text="configEditor.saving ? 'Saving…' : 'Save'"></span>
-                    </button>
+                    <div x-cloak x-show="sideTab === 'metrics'">
+                        <div class="side-sub">Closed: <b x-text="closedEnriched.length"></b> &middot; Open: <b x-text="openEnriched.length"></b></div>
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <div class="metric-label">Win Rate</div>
+                            <div class="metric-value" :class="metrics.winRate >= 50 ? 'pos' : 'neg'"
+                                 x-text="metrics.winRate.toFixed(2) + '%'"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Trades</div>
+                            <div class="metric-value">
+                                <span x-text="metrics.totalTrades"></span>
+                                <span class="metric-sub">
+                                    <span class="pos" x-text="metrics.wins"></span> W
+                                    &middot;
+                                    <span class="neg" x-text="metrics.losses"></span> L
+                                </span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">PnL</div>
+                            <div class="metric-value" :class="metrics.totalPnl >= 0 ? 'pos' : 'neg'"
+                                 x-text="fmt(metrics.totalPnl)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">ROI</div>
+                            <div class="metric-value" :class="metrics.roi >= 0 ? 'pos' : 'neg'"
+                                 x-text="metrics.roi.toFixed(2) + '%'"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Sharpe</div>
+                            <div class="metric-value" :class="metrics.sharpe >= 1 ? 'pos' : (metrics.sharpe < 0 ? 'neg' : '')"
+                                 x-text="metrics.sharpe.toFixed(2)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Profit Factor</div>
+                            <div class="metric-value" :class="metrics.profitFactor >= 1 ? 'pos' : 'neg'"
+                                 x-text="isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : '∞'"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Expectancy R</div>
+                            <div class="metric-value" :class="metrics.expectancyR >= 0 ? 'pos' : 'neg'"
+                                 x-text="metrics.expectancyR.toFixed(3)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">R : R</div>
+                            <div class="metric-value" x-text="metrics.rr.toFixed(2)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">CAGR</div>
+                            <div class="metric-value" :class="metrics.cagr >= 0 ? 'pos' : 'neg'"
+                                 x-text="metrics.cagr.toFixed(2) + '%'"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Max Drawdown</div>
+                            <div class="metric-value neg">
+                                <span x-text="metrics.maxDrawdownPct.toFixed(2) + '%'"></span>
+                                <span class="metric-sub" x-text="fmt(metrics.maxDrawdownAbs)"></span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Starting Capital</div>
+                            <div class="metric-value" x-text="fmt(metrics.startingCapital)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Avg Profit</div>
+                            <div class="metric-value" :class="metrics.avgProfitPct >= 0 ? 'pos' : 'neg'">
+                                <span x-text="metrics.avgProfitPct.toFixed(2) + '%'"></span>
+                                <span class="metric-sub" x-text="fmt(metrics.avgProfit)"></span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Longs vs Shorts</div>
+                            <div class="metric-value">
+                                <span class="pos" x-text="metrics.longs"></span>
+                                <span style="color:var(--text-mute);">/</span>
+                                <span class="neg" x-text="metrics.shorts"></span>
+                                <span class="metric-sub">long / short</span>
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">SQN</div>
+                            <div class="metric-value"
+                                 :class="metrics.sqn == null ? '' : (metrics.sqn >= 2 ? 'pos' : (metrics.sqn < 1 ? 'neg' : ''))"
+                                 :style="metrics.sqn == null ? 'color:var(--text-mute);' : ''"
+                                 :title="metrics.sqn == null ? 'Needs at least 2 closed trades' : 'System Quality Number (Van Tharp)'"
+                                 x-text="metrics.sqn == null ? '\u2013' : metrics.sqn.toFixed(2)"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Sortino</div>
+                            <div class="metric-value"
+                                 :class="metrics.sortino == null ? '' : (metrics.sortino >= 0 ? 'pos' : 'neg')"
+                                 :style="metrics.sortino == null ? 'color:var(--text-mute);' : ''"
+                                 :title="metrics.sortino == null ? 'Needs at least 2 days of returns' : 'Downside-risk-adjusted return, annualised'"
+                                 x-text="metrics.sortino == null ? '\u2013'
+                                         : (isFinite(metrics.sortino) ? metrics.sortino.toFixed(2) : '\u221e')"></div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Avg Trade Duration</div>
+                            <div class="metric-value" x-text="formatMinutes(metrics.avgDurationMin)"></div>
+                        </div>
+                    </div>
+                    </div>
+
+                    <div x-cloak x-show="sideTab === 'periods'">
+                        <template x-if="monthly.length > 0">
+                          <div>
+                            <h4 class="side-h">Monthly Performance</h4>
+                        <div class="period-grid">
+                            <template x-for="m in monthly" :key="m.label">
+                                <div class="period-box">
+                                    <div class="period-header" x-text="m.label"></div>
+                                    <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="m.trades"></span></div>
+                                    <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="m.winRate >= 50 ? 'pos' : 'neg'" x-text="m.winRate.toFixed(1) + '%'"></span></div>
+                                    <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="m.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(m.pnl)"></span></div>
+                                    <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="m.roi >= 0 ? 'pos' : 'neg'" x-text="m.roi.toFixed(2) + '%'"></span></div>
+                                    <div class="period-row"><span class="lbl">PF</span><span class="val" x-text="isFinite(m.pf) ? m.pf.toFixed(2) : '∞'"></span></div>
+                                </div>
+                            </template>
+                        </div>
+                          </div>
+                        </template>
+                        <template x-if="daily.length > 0">
+                          <div style="margin-top:1rem;">
+                            <h4 class="side-h">Daily Performance (last 30)</h4>
+                        <div class="period-grid">
+                            <template x-for="d in daily.slice(-30)" :key="d.label">
+                                <div class="period-box">
+                                    <div class="period-header" x-text="d.label"></div>
+                                    <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="d.trades"></span></div>
+                                    <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="d.winRate >= 50 ? 'pos' : 'neg'" x-text="d.winRate.toFixed(1) + '%'"></span></div>
+                                    <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="d.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(d.pnl)"></span></div>
+                                    <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="d.roi >= 0 ? 'pos' : 'neg'" x-text="d.roi.toFixed(2) + '%'"></span></div>
+                                </div>
+                            </template>
+                        </div>
+                          </div>
+                        </template>
+                        <div x-show="monthly.length === 0 && daily.length === 0" class="side-empty">No closed trades yet.</div>
+                    </div>
+
+                    <div x-cloak x-show="sideTab === 'pairs'">
+                        <div class="side-head" x-show="pairs.length > 0">
+                            <span class="side-sub" style="margin:0;">
+                                <b x-text="pairs.length"></b> pairs traded
+                            </span>
+                            <select class="form-input" style="width:auto; padding:0.25rem 0.5rem;"
+                                    x-model.number="pairsLimit" title="How many pairs to list in each table">
+                            <option :value="10">Top 10</option>
+                            <option :value="25">Top 25</option>
+                            <option :value="50">Top 50</option>
+                            <option :value="0">All pairs</option>
+                            </select>
+                        </div>
+                        <template x-if="pairs.length > 0">
+                        <div class="pair-grid">
+                            <div class="pair-section">
+                                <h4 x-text="'Top ' + Math.min(pairsShown, pairs.length) + ' Performers'"></h4>
+                                <div class="table-wrap" style="max-height:400px;">
+                                    <table>
+                                        <thead><tr>
+                                            <th>Pair</th><th>#</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>DD%</th>
+                                        </tr></thead>
+                                        <tbody>
+                                            <template x-for="p in bestPairs" :key="'b-' + p.pair">
+                                                <tr>
+                                                    <td class="pair-cell" x-text="p.pair"></td>
+                                                    <td x-text="p.trades"></td>
+                                                    <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
+                                                    <td :class="p.sharpe == null ? '' : (p.sharpe >= 0 ? 'pos' : 'neg')"
+                                                        :style="p.sharpe == null ? 'color:var(--text-mute);' : ''"
+                                                        :title="p.sharpe == null ? 'Needs at least 2 closed trades on this pair' : ''"
+                                                        x-text="p.sharpe == null ? '–' : p.sharpe.toFixed(2)"></td>
+                                                    <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
+                                                    <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
+                                                </tr>
+                                            </template>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="pair-section">
+                                <h4 x-text="'Bottom ' + Math.min(pairsShown, pairs.length) + ' Performers'"></h4>
+                                <div class="table-wrap" style="max-height:400px;">
+                                    <table>
+                                        <thead><tr>
+                                            <th>Pair</th><th>#</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>DD%</th>
+                                        </tr></thead>
+                                        <tbody>
+                                            <template x-for="p in worstPairs" :key="'w-' + p.pair">
+                                                <tr>
+                                                    <td class="pair-cell" x-text="p.pair"></td>
+                                                    <td x-text="p.trades"></td>
+                                                    <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
+                                                    <td :class="p.sharpe == null ? '' : (p.sharpe >= 0 ? 'pos' : 'neg')"
+                                                        :style="p.sharpe == null ? 'color:var(--text-mute);' : ''"
+                                                        :title="p.sharpe == null ? 'Needs at least 2 closed trades on this pair' : ''"
+                                                        x-text="p.sharpe == null ? '–' : p.sharpe.toFixed(2)"></td>
+                                                    <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
+                                                    <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
+                                                </tr>
+                                            </template>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        </template>
+                        <div x-show="pairs.length === 0" class="side-empty">No closed trades yet.</div>
+                    </div>
+                    <div x-cloak x-show="sideTab === 'log'">
+                        <div class="side-head">
+                            <span class="seg">
+                                <button @click="logTab='messages'; loadLogs()"
+                                        :class="logTab==='messages' ? 'on' : ''">Messages</button>
+                                <button @click="logTab='console'; loadConsoleLogs()"
+                                        :class="logTab==='console' ? 'on' : ''">Console</button>
+                            </span>
+                            <span style="display:flex; gap:0.35rem; align-items:center;">
+                                <template x-if="logTab==='messages'">
+                                    <select x-model="logsFilter" class="form-input" style="padding:0.2rem 0.4rem; width:auto;">
+                                        <option value="all">All</option>
+                                        <option value="trade">Trades</option>
+                                        <option value="status">Status</option>
+                                    </select>
+                                </template>
+                                <button class="icon-btn" title="Refresh"
+                                        @click="logTab==='messages' ? loadLogs() : loadConsoleLogs()">&#8635;</button>
+                            </span>
+                        </div>
+
+                        <!-- Messages tab -->
+                        <template x-if="logTab==='messages'">
+                            <div style="font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:0.78rem; max-height:400px; overflow-y:auto;
+                                        background:rgba(0,0,0,0.25); border-radius:6px; padding:0.75rem;">
+                                <template x-if="logs.length === 0">
+                                    <div style="color:#9891a8; text-align:center; padding:1rem;">No log messages yet.</div>
+                                </template>
+                                <template x-for="(m, i) in logs.filter(m => logsFilter === 'all' || (logsFilter === 'trade' && ['buy','sell','entry','exit','open_trade','close_trade','trade_cancel'].some(k => (m.type||'').toLowerCase().includes(k))) || (logsFilter === 'status' && (m.type||'').toLowerCase().includes('status') || (m.type||'').toLowerCase().includes('startup')))" :key="i">
+                                    <div style="display:flex; gap:0.75rem; border-bottom:1px solid rgba(255,255,255,0.04); padding:0.25rem 0; line-height:1.5;">
+                                        <span style="color:#9891a8; white-space:nowrap; flex-shrink:0;" x-text="m.received_at ? m.received_at.replace('T',' ').slice(0,19) : ''"></span>
+                                        <span class="badge"
+                                              :class="(m.type||'').includes('buy') || (m.type||'').includes('entry') || (m.type||'').includes('open') ? 'badge-open' : ((m.type||'').includes('sell') || (m.type||'').includes('exit') || (m.type||'').includes('close') ? 'badge-closed' : '')"
+                                              style="flex-shrink:0; align-self:flex-start;"
+                                              x-text="m.type || '?'"></span>
+                                        <span style="color:#e8e5ef; word-break:break-word;"
+                                              x-text="m.status || m.message || (m.pair ? m.pair + (m.profit_amount != null ? ' · PnL ' + (m.profit_amount >= 0 ? '+' : '') + (+m.profit_amount).toFixed(2) : '') + (m.stake_amount != null ? ' · stake ' + (+m.stake_amount).toFixed(2) : '') : JSON.stringify(m).slice(0,120))"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Console tab -->
+                        <template x-if="logTab==='console'">
+                            <div style="font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:0.75rem; max-height:400px; overflow-y:auto;
+                                        background:rgba(0,0,0,0.35); border-radius:6px; padding:0.75rem;">
+                                <template x-if="consoleLogs.length === 0">
+                                    <div style="color:#9891a8; text-align:center; padding:1rem;">No console output yet.</div>
+                                </template>
+                                <template x-for="(l, i) in consoleLogs" :key="i">
+                                    <div style="padding:0.1rem 0; line-height:1.4; white-space:pre-wrap; word-break:break-all;"
+                                         :style="l.level==='ERROR' ? 'color:#f4879b;' : l.level==='WARNING' ? 'color:#e3b341;' : l.level==='DEBUG' ? 'color:#7ee2a8;' : 'color:#e8e5ef;'"
+                                         x-text="l.line"></div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
                 </div>
             </div>
-        </div>
+          </aside>
 
-        <template x-if="allTrades.length > 0 || !loading">
-          <div>
-            <!-- === METRICS === -->
-            <div class="card">
-                <h3>
-                    Performance Metrics
-                    <span style="font-weight:400; font-size:0.8rem; color:#1a1625; text-shadow:0 1px 1px rgba(255,255,255,0.2);">
-                        Closed trades: <span x-text="closedEnriched.length"></span> · Open: <span x-text="openEnriched.length"></span>
-                    </span>
-                </h3>
-                <div class="metrics-grid">
-                    <div class="metric">
-                        <div class="metric-label">Win Rate / # Trades</div>
-                        <div class="metric-value" :class="metrics.winRate >= 50 ? 'pos' : 'neg'"
-                             x-text="metrics.winRate.toFixed(2) + '% / ' + metrics.totalTrades"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Wins / Losses</div>
-                        <div class="metric-value">
-                            <span class="pos" x-text="metrics.wins"></span> /
-                            <span class="neg" x-text="metrics.losses"></span>
-                        </div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">PnL</div>
-                        <div class="metric-value" :class="metrics.totalPnl >= 0 ? 'pos' : 'neg'"
-                             x-text="fmt(metrics.totalPnl)"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">ROI</div>
-                        <div class="metric-value" :class="metrics.roi >= 0 ? 'pos' : 'neg'"
-                             x-text="metrics.roi.toFixed(2) + '%'"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Sharpe</div>
-                        <div class="metric-value" :class="metrics.sharpe >= 1 ? 'pos' : (metrics.sharpe < 0 ? 'neg' : '')"
-                             x-text="metrics.sharpe.toFixed(2)"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Profit Factor</div>
-                        <div class="metric-value" :class="metrics.profitFactor >= 1 ? 'pos' : 'neg'"
-                             x-text="isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : '∞'"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Expectancy R</div>
-                        <div class="metric-value" :class="metrics.expectancyR >= 0 ? 'pos' : 'neg'"
-                             x-text="metrics.expectancyR.toFixed(3)"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">R : R</div>
-                        <div class="metric-value" x-text="metrics.rr.toFixed(2)"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">CAGR</div>
-                        <div class="metric-value" :class="metrics.cagr >= 0 ? 'pos' : 'neg'"
-                             x-text="metrics.cagr.toFixed(2) + '%'"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Max Drawdown</div>
-                        <div class="metric-value neg">
-                            <span x-text="metrics.maxDrawdownPct.toFixed(2) + '%'"></span>
-                            <span style="font-size:0.7rem; color:#a0aec0;">(<span x-text="fmt(metrics.maxDrawdownAbs)"></span>)</span>
-                        </div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Starting Capital</div>
-                        <div class="metric-value" x-text="fmt(metrics.startingCapital)"></div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-label">Avg Trade Duration</div>
-                        <div class="metric-value" x-text="formatMinutes(metrics.avgDurationMin)"></div>
-                    </div>
-                </div>
+          <main class="main">
+            <!-- Inside <main>, not above .layout: sitting outside the grid it
+                 pushed the whole sidebar+main row down, so the spinner appeared
+                 above the Bots/Log panel instead of beside it. -->
+            <div x-show="loading && allTrades.length === 0" class="loading">
+                <span class="spinner"></span> Loading trades...
             </div>
-
-            <!-- === MONTHLY === -->
-            <template x-if="monthly.length > 0">
-              <div class="card">
-                <h3>Monthly Performance</h3>
-                <div class="period-grid">
-                    <template x-for="m in monthly" :key="m.label">
-                        <div class="period-box">
-                            <div class="period-header" x-text="m.label"></div>
-                            <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="m.trades"></span></div>
-                            <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="m.winRate >= 50 ? 'pos' : 'neg'" x-text="m.winRate.toFixed(1) + '%'"></span></div>
-                            <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="m.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(m.pnl)"></span></div>
-                            <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="m.roi >= 0 ? 'pos' : 'neg'" x-text="m.roi.toFixed(2) + '%'"></span></div>
-                            <div class="period-row"><span class="lbl">PF</span><span class="val" x-text="isFinite(m.pf) ? m.pf.toFixed(2) : '∞'"></span></div>
-                        </div>
-                    </template>
-                </div>
-              </div>
-            </template>
-
-            <!-- === DAILY === -->
-            <template x-if="daily.length > 0">
-              <div class="card">
-                <h3>Daily Performance (last 30)</h3>
-                <div class="period-grid">
-                    <template x-for="d in daily.slice(-30)" :key="d.label">
-                        <div class="period-box">
-                            <div class="period-header" x-text="d.label"></div>
-                            <div class="period-row"><span class="lbl">Trades</span><span class="val" x-text="d.trades"></span></div>
-                            <div class="period-row"><span class="lbl">Win%</span><span class="val" :class="d.winRate >= 50 ? 'pos' : 'neg'" x-text="d.winRate.toFixed(1) + '%'"></span></div>
-                            <div class="period-row"><span class="lbl">PnL</span><span class="val" :class="d.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(d.pnl)"></span></div>
-                            <div class="period-row"><span class="lbl">ROI</span><span class="val" :class="d.roi >= 0 ? 'pos' : 'neg'" x-text="d.roi.toFixed(2) + '%'"></span></div>
-                        </div>
-                    </template>
-                </div>
-              </div>
-            </template>
-
-            <!-- === CHARTS === -->
-            <div class="card"><h3>Equity Curve</h3><div id="equityChart" style="height:380px;"></div></div>
-            <div class="card"><h3>Drawdown</h3><div id="drawdownChart" style="height:340px;"></div></div>
-            <div class="card"><h3>Hourly P&amp;L</h3><div id="hourlyPnlChart" style="height:340px;"></div></div>
-            <div class="card"><h3>Hourly Profit Factor</h3><div id="hourlyPfChart" style="height:340px;"></div></div>
-            <div class="card"><h3>Hourly Max Drawdown</h3><div id="hourlyDdChart" style="height:340px;"></div></div>
-
+            <template x-if="allTrades.length > 0 || !loading">
+              <div>
             <!-- === PAIR CHART (TradingView-style with strategy indicators) === -->
             <div class="card">
                 <h3>
-                    Pair Chart
-                    <span style="display:flex; gap:0.5rem; align-items:center;">
-                        <select x-model="chartPair" @change="loadChart()" class="form-input" style="font-size:0.8rem; min-width:160px;">
-                            <option value="">— Select pair —</option>
+                    <span>
+                        Pair Chart
+                        <template x-if="selectedTrade">
+                            <span class="pc-sel">
+                                &middot; trade <b x-text="'#' + (selectedTrade.trade_id != null ? selectedTrade.trade_id : selectedTrade.__idx)"></b>
+                                <b :class="selectedTrade.is_short ? 'neg' : 'pos'"
+                                   x-text="selectedTrade.is_short ? 'SHORT' : 'LONG'"></b>
+                                <a href="#" @click.prevent="clearSelectedTrade()">(clear)</a>
+                            </span>
+                        </template>
+                    </span>
+                    <span class="pc-tools">
+                        <button class="icon-btn" @click="panChart(-1)"    title="Pan left">&#8592;</button>
+                        <button class="icon-btn" @click="zoomChart(0.8)"  title="Zoom in">+</button>
+                        <button class="icon-btn" @click="zoomChart(1.25)" title="Zoom out">&#8722;</button>
+                        <button class="icon-btn" @click="panChart(1)"     title="Pan right">&#8594;</button>
+                        <button class="icon-btn" @click="resetChartZoom()" title="Reset zoom">&#8635;</button>
+                        <label class="pc-check" title="Keep the selected trade framed">
+                            <input type="checkbox" class="toggle-check" x-model="zoomToTrade" @change="applyTradeZoom()">
+                            Zoom to trade
+                        </label>
+                        <select x-model="chartPair" @change="loadChart()" class="form-input" style="min-width:170px;">
+                            <option value="">&mdash; Select pair &mdash;</option>
                             <template x-for="p in chartPairs" :key="p">
                                 <option :value="p" x-text="p"></option>
                             </template>
                         </select>
-                        <select x-model.number="chartLimit" @change="loadChart()" class="form-input" style="font-size:0.8rem;">
+                        <select x-model.number="chartLimit" @change="loadChart()" class="form-input">
                             <option :value="200">200 bars</option>
                             <option :value="500">500 bars</option>
                             <option :value="1000">1000 bars</option>
                             <option :value="2000">2000 bars</option>
+                            <!-- Trades can sit weeks behind the last candle; at
+                                 5m even 2000 bars only reaches ~7 days back. -->
+                            <option :value="5000">5000 bars</option>
+                            <option :value="10000">10000 bars</option>
+                            <option :value="20000">20000 bars</option>
                         </select>
                         <span x-show="chartLoading" class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span>
                     </span>
                 </h3>
-                <div x-show="chartError" class="alert" style="margin-bottom:0.75rem;" x-text="chartError"></div>
-                <div x-show="!chartPair && !chartLoading" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                <div x-show="chartError" class="alert" style="margin-bottom:0.75rem;">
+                    <span x-text="chartError"></span>
+                    <template x-if="/not running|unavailable/i.test(chartError || '')">
+                        <span style="display:block; margin-top:0.35rem; font-size:0.72rem; color:var(--text-dim);">
+                            Candles and indicators are read from a running bot's DataProvider.
+                            Start a bot on the <b>Bots</b> tab, then pick the pair again.
+                        </span>
+                    </template>
+                </div>
+                <div x-show="!chartPair && !chartLoading" style="text-align:center; color:#9891a8; padding:1.5rem;">
                     Select a pair to load candles + strategy indicators.
                 </div>
-                <div x-show="chartPair" id="pairChart" style="width:100%;"></div>
-                <div x-show="strategyInfo && chartPair" style="margin-top:0.5rem; font-size:0.75rem; color:#a0aec0; display:flex; gap:1rem; flex-wrap:wrap;">
-                    <span><strong style="color:#695ff5;" x-text="strategyInfo ? (strategyInfo.name || '?') : ''"></strong> · <span x-text="strategyInfo ? (strategyInfo.timeframe || '?') : ''"></span></span>
-                    <span x-show="chartIndicators.length">Indicators: <span x-text="chartIndicators.join(', ')"></span></span>
-                    <span x-show="chartTrades.length">Trades on chart: <span x-text="chartTrades.length"></span></span>
+                <template x-if="chartPair && ohlc">
+                    <div class="pc-ohlc">
+                        <b class="pc-pair" x-text="chartPair"></b>
+                        <span>O <b x-text="ohlc.o"></b></span>
+                        <span>H <b x-text="ohlc.h"></b></span>
+                        <span>L <b x-text="ohlc.l"></b></span>
+                        <span>C <b x-text="ohlc.c"></b></span>
+                        <b :class="ohlc.chg >= 0 ? 'pos' : 'neg'"
+                           x-text="(ohlc.chg >= 0 ? '+' : '') + ohlc.chg.toFixed(2) + '%'"></b>
+                        <span class="pc-dim">Vol <b x-text="ohlc.vol"></b></span>
+                    </div>
+                </template>
+                <div class="pc-legend" x-show="chartPair">
+                    <label class="pc-chip" :class="showCandles ? '' : 'off'">
+                        <input type="checkbox" x-model="showCandles" @change="renderPairChart()">
+                        <i style="background:#7ee2a8"></i>Candles
+                    </label>
+                    <label class="pc-chip" :class="showVolume ? '' : 'off'">
+                        <input type="checkbox" x-model="showVolume" @change="renderPairChart()">
+                        <i style="background:#9891a8"></i>Volume
+                    </label>
+                    <label class="pc-chip" :class="showEntry ? '' : 'off'">
+                        <input type="checkbox" x-model="showEntry" @change="renderPairChart()">
+                        <i style="background:#7ee2a8"></i>Entry
+                    </label>
+                    <label class="pc-chip" :class="showExit ? '' : 'off'">
+                        <input type="checkbox" x-model="showExit" @change="renderPairChart()">
+                        <i style="background:#f4879b"></i>Exit
+                    </label>
+                </div>
+                <!-- min-height only guards the zero-size case: x-show toggles
+                     display:none, and a Plotly chart drawn while hidden lays out
+                     at 0 and never re-measures itself. Kept small deliberately -
+                     layout.height governs the real size, so a large min-height
+                     just padded empty space under the chart.
+                     _observePairChart() resizes it once it becomes visible. -->
+                <div x-show="chartPair" id="pairChart" style="width:100%; min-height:200px;"></div>
+                <!-- Indicator toggle sits on its own row ABOVE the meta line.
+                     It is a text button, so it must NOT use .icon-btn - that
+                     class is locked to 26x24px for single-glyph controls and
+                     the label overflowed it. -->
+                <div x-show="chartPair && chartIndicators.length" style="margin-top:0.6rem;">
+                    <button class="ind-toggle"
+                            @click="showIndicatorList = !showIndicatorList"
+                            :title="showIndicatorList ? 'Hide indicator list' : 'Show indicator list'">
+                        <span x-text="showIndicatorList ? '&minus;' : '+'"></span>
+                        Indicators (<span x-text="chartIndicators.length"></span>)
+                    </button>
+                    <div x-show="showIndicatorList" x-text="chartIndicators.join(', ')"
+                         style="margin-top:0.4rem; font-size:0.72rem; color:#9891a8; line-height:1.6;"></div>
+                </div>
+                <div x-show="strategyInfo && chartPair" style="margin-top:0.5rem; font-size:0.72rem; color:#9891a8; display:flex; gap:1rem; flex-wrap:wrap; align-items:center;">
+                    <span><strong style="color:#8b7cf6;" x-text="strategyInfo ? (strategyInfo.name || '?') : ''"></strong> &middot; <span x-text="strategyInfo ? (strategyInfo.timeframe || '?') : ''"></span></span>
+                    <!-- Trade counts stay visible: they explain an empty chart. -->
+                    <span x-show="chartTrades.length">Trades on chart: <span x-text="chartTrades.length - chartOffChart"></span></span>
+                    <!-- Clickable: a trade can be weeks older than the loaded
+                         candles, and no bar-count in the dropdown is an obvious
+                         guess. This works out how many bars are actually needed
+                         and reloads. -->
+                    <button x-show="chartOffChart > 0" class="ind-toggle" style="color:#e3b341;"
+                            @click="fitChartToTrades()"
+                            title="Load enough candles to bring these trades onto the chart">
+                        <span x-text="chartOffChart"></span> outside window &mdash; show
+                    </button>
                 </div>
             </div>
 
-            <!-- === BEST/WORST PAIRS === -->
-            <template x-if="pairs.length > 0">
+            <!-- === TRADE DETAIL === -->
+            <template x-if="selectedTrade">
               <div class="card">
-                <h3>Best / Worst Pairs</h3>
-                <div class="pair-grid">
-                    <div class="pair-section">
-                        <h4>Top 10 Performers</h4>
-                        <div class="table-wrap" style="max-height:400px;">
-                            <table>
-                                <thead><tr>
-                                    <th>Pair</th><th>Trades</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
-                                </tr></thead>
-                                <tbody>
-                                    <template x-for="p in bestPairs" :key="'b-' + p.pair">
-                                        <tr>
-                                            <td class="pair-cell" x-text="p.pair"></td>
-                                            <td x-text="p.trades"></td>
-                                            <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
-                                            <td :class="p.sharpe >= 0 ? 'pos' : 'neg'" x-text="p.sharpe.toFixed(2)"></td>
-                                            <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
-                                            <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
-                                        </tr>
-                                    </template>
-                                </tbody>
-                            </table>
-                        </div>
+                <h3>
+                    <span>Trade Detail</span>
+                    <span style="font-weight:400; font-size:0.78rem;">
+                        <b class="pair-cell" x-text="selectedTrade.pair"></b>
+                        &middot; <b :class="selectedTrade.__pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(selectedTrade.__pnl)"></b>
+                        &middot; <b :class="selectedTrade.__pnl >= 0 ? 'pos' : 'neg'"
+                                    x-text="(selectedTrade.__pnlPct * 100).toFixed(2) + '%'"></b>
+                    </span>
+                </h3>
+                <div class="td-grid">
+                    <div class="td-col">
+                        <div class="td-row"><span>Opened</span><b x-text="formatDate(selectedTrade.open_date)"></b></div>
+                        <div class="td-row"><span>Closed</span><b x-text="selectedTrade.close_date ? formatDate(selectedTrade.close_date) : 'open'"></b></div>
+                        <div class="td-row"><span>Duration</span><b x-text="formatMinutes(selectedTrade.__durationMin)"></b></div>
+                        <div class="td-row"><span>Open rate</span><b x-text="fmtRate(selectedTrade.open_rate)"></b></div>
+                        <div class="td-row"><span>Close rate</span><b x-text="fmtRate(selectedTrade.close_rate || selectedTrade.current_rate)"></b></div>
                     </div>
-                    <div class="pair-section">
-                        <h4>Bottom 10 Performers</h4>
-                        <div class="table-wrap" style="max-height:400px;">
-                            <table>
-                                <thead><tr>
-                                    <th>Pair</th><th>Trades</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
-                                </tr></thead>
-                                <tbody>
-                                    <template x-for="p in worstPairs" :key="'w-' + p.pair">
-                                        <tr>
-                                            <td class="pair-cell" x-text="p.pair"></td>
-                                            <td x-text="p.trades"></td>
-                                            <td :class="p.pnl >= 0 ? 'pos' : 'neg'" x-text="fmt(p.pnl)"></td>
-                                            <td :class="p.sharpe >= 0 ? 'pos' : 'neg'" x-text="p.sharpe.toFixed(2)"></td>
-                                            <td x-text="isFinite(p.pf) ? p.pf.toFixed(2) : '∞'"></td>
-                                            <td class="neg" x-text="p.maxDd.toFixed(2) + '%'"></td>
-                                        </tr>
-                                    </template>
-                                </tbody>
-                            </table>
-                        </div>
+                    <div class="td-col">
+                        <div class="td-row"><span>Stake</span><b x-text="fmt(+selectedTrade.stake_amount || 0)"></b></div>
+                        <div class="td-row"><span>Leverage</span><b x-text="(+selectedTrade.leverage || 1).toFixed(1) + 'x'"></b></div>
+                        <div class="td-row"><span>R multiple</span><b :class="selectedTrade.__r >= 0 ? 'pos' : 'neg'" x-text="selectedTrade.__r.toFixed(3)"></b></div>
+                        <div class="td-row"><span>Entry quality</span>
+                            <b><span class="quality-bar"><span :style="qualityStyle(selectedTrade.__entryQ)"></span></span>
+                               <span x-text="selectedTrade.__entryQ.toFixed(0)"></span></b></div>
+                        <div class="td-row"><span>Exit quality</span>
+                            <b><template x-if="selectedTrade.__exitQ != null">
+                                 <span><span class="quality-bar"><span :style="qualityStyle(selectedTrade.__exitQ)"></span></span>
+                                 <span x-text="selectedTrade.__exitQ.toFixed(0)"></span></span>
+                               </template>
+                               <span x-show="selectedTrade.__exitQ == null" style="color:#9891a8;">-</span></b></div>
+                    </div>
+                    <div class="td-col">
+                        <div class="td-row"><span>Entry tag</span><b x-text="selectedTrade.enter_tag || '-'"></b></div>
+                        <div class="td-row"><span>Exit reason</span><b x-text="selectedTrade.exit_reason || '-'"></b></div>
+                        <div class="td-row"><span>Stop loss</span><b x-text="fmtRate(selectedTrade.stop_loss_abs != null ? selectedTrade.stop_loss_abs : selectedTrade.stop_loss)"></b></div>
+                        <div class="td-row"><span>Initial SL</span><b x-text="fmtRate(selectedTrade.initial_stop_loss_abs)"></b></div>
+                        <div class="td-row"><span>Amount</span><b x-text="selectedTrade.amount != null ? (+selectedTrade.amount).toFixed(0) : '-'"></b></div>
+                    </div>
+                    <div class="td-col td-stats">
+                        <div class="td-note">Rescaled from PnL % &mdash; not statistical measures</div>
+                        <div class="td-row"><span>R:R</span><b x-text="selectedTrade.__rr.toFixed(2)"></b></div>
+                        <div class="td-row"><span>PF</span><b x-text="isFinite(selectedTrade.__pf) ? selectedTrade.__pf.toFixed(2) : '\u221e'"></b></div>
+                        <div class="td-row"><span>Sharpe</span><b :class="selectedTrade.__sharpe >= 0 ? 'pos' : 'neg'" x-text="selectedTrade.__sharpe.toFixed(2)"></b></div>
+                        <div class="td-row"><span>Expectancy R</span><b :class="selectedTrade.__expectancyR >= 0 ? 'pos' : 'neg'" x-text="selectedTrade.__expectancyR.toFixed(3)"></b></div>
+                        <div class="td-row"><span>SNR</span><b x-text="selectedTrade.__snr.toFixed(2)"></b></div>
                     </div>
                 </div>
               </div>
             </template>
+
+            <!-- === CHARTS (tabbed) === -->
+            <div class="chart-tabs">
+                <span class="seg-track">
+                    <button class="chart-tab" :class="chartTab === 'equity'    ? 'active' : ''" @click="chartTab = 'equity'">Equity Curve</button>
+                    <button class="chart-tab" :class="chartTab === 'drawdown'  ? 'active' : ''" @click="chartTab = 'drawdown'">Drawdown</button>
+                    <button class="chart-tab" :class="chartTab === 'hourlyPnl' ? 'active' : ''" @click="chartTab = 'hourlyPnl'">Hourly P&amp;L</button>
+                    <button class="chart-tab" :class="chartTab === 'hourlyPf'  ? 'active' : ''" @click="chartTab = 'hourlyPf'">Hourly PF</button>
+                    <button class="chart-tab" :class="chartTab === 'hourlyDd'  ? 'active' : ''" @click="chartTab = 'hourlyDd'">Hourly Max DD</button>
+                </span>
+            </div>
+            <div class="card chart-card">
+                <div x-cloak x-show="chartTab === 'equity'"><div id="equityChart" style="height:380px;"></div></div>
+                <div x-cloak x-show="chartTab === 'drawdown'"><div id="drawdownChart" style="height:380px;"></div></div>
+                <div x-cloak x-show="chartTab === 'hourlyPnl'"><div id="hourlyPnlChart" style="height:380px;"></div></div>
+                <div x-cloak x-show="chartTab === 'hourlyPf'"><div id="hourlyPfChart" style="height:380px;"></div></div>
+                <div x-cloak x-show="chartTab === 'hourlyDd'"><div id="hourlyDdChart" style="height:380px;"></div></div>
+            </div>
 
             <!-- === OPEN TRADES === -->
             <div class="card">
                 <h3>
                     <span>Open Trades (<span x-text="openEnriched.length"></span>)</span>
-                    <span style="font-weight:400; font-size:0.8rem; color:#1a1625; text-shadow:0 1px 1px rgba(255,255,255,0.2);">
+                    <span style="font-weight:400; font-size:0.8rem; color:#9891a8; text-shadow:0 1px 1px rgba(255,255,255,0.2);">
                         Unrealized: <span :class="openUnrealized > 0 ? 'pos' : (openUnrealized < 0 ? 'neg' : 'neu')"
                               style="text-shadow:0 1px 1px rgba(255,255,255,0.2);" x-text="fmt(openUnrealized)"></span>
                     </span>
-                    <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <label style="font-size:0.75rem; font-weight:400; color:#9891a8; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
                         Show entry tag
                         <input type="checkbox" class="toggle-check" x-model="showEntryTag">
                     </label>
@@ -734,7 +869,7 @@
                         </tr></thead>
                         <tbody>
                             <template x-for="(t, i) in openEnriched" :key="'o-' + t.__idx">
-                                <tr>
+                                <tr class="trow" :class="isSelected(t) ? 'sel' : ''" @click="selectTrade(t)">
                                     <td x-text="i + 1"></td>
                                     <td class="pair-cell" x-text="t.pair"></td>
                                     <td :class="t.is_short ? 'side-short' : 'side-long'" x-text="t.is_short ? 'SHORT' : 'LONG'"></td>
@@ -763,14 +898,14 @@
                                                 <span x-text="t.__exitQ.toFixed(0)"></span>
                                             </span>
                                         </template>
-                                        <span x-show="t.__exitQ == null" style="color:#a0aec0;">-</span>
+                                        <span x-show="t.__exitQ == null" style="color:#9891a8;">-</span>
                                     </td>
-                                    <td x-show="showEntryTag" style="color:#a0aec0;" x-text="t.enter_tag || '-'"></td>
+                                    <td x-show="showEntryTag" style="color:#9891a8;" x-text="t.enter_tag || '-'"></td>
                                 </tr>
                             </template>
                             <template x-if="openEnriched.length === 0">
                                 <tr>
-                                    <td colspan="20" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                                    <td colspan="20" style="text-align:center; color:#9891a8; padding:1.5rem;">
                                         No open trades
                                     </td>
                                 </tr>
@@ -785,7 +920,7 @@
                 <h3>
                     <span>Closed Trades (<span x-text="closedEnriched.length"></span>)</span>
                     <input x-model="closedFilter" placeholder="Filter pair…" class="form-input" style="font-size:0.8rem;">
-                    <label style="font-size:0.75rem; font-weight:400; color:#cbd5e0; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <label style="font-size:0.75rem; font-weight:400; color:#9891a8; display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
                         Show exit reason
                         <input type="checkbox" class="toggle-check" x-model="showExitReason">
                     </label>
@@ -794,7 +929,11 @@
                     <table>
                         <thead><tr>
                             <th>#</th><th>Pair</th><th>Side</th>
-                            <th>Open</th><th>Close</th><th>Duration</th>
+                            <!-- Close datetime dropped: Open + Duration already
+                                 pin down when the trade ended, and the column
+                                 was the widest thing pushing this table into a
+                                 horizontal scroll. -->
+                            <th>Open</th><th>Duration</th>
                             <th>Open Rate</th><th>Close Rate</th>
                             <th>PnL</th><th>PnL %</th>
                             <th>R</th><th>R:R</th><th>PF</th>
@@ -804,12 +943,11 @@
                         </tr></thead>
                         <tbody>
                             <template x-for="(t, i) in filteredClosed" :key="'c-' + t.__idx">
-                                <tr>
+                                <tr class="trow" :class="isSelected(t) ? 'sel' : ''" @click="selectTrade(t)">
                                     <td x-text="i + 1"></td>
                                     <td class="pair-cell" x-text="t.pair"></td>
                                     <td :class="t.is_short ? 'side-short' : 'side-long'" x-text="t.is_short ? 'SHORT' : 'LONG'"></td>
                                     <td x-text="formatDate(t.open_date)"></td>
-                                    <td x-text="formatDate(t.close_date)"></td>
                                     <td x-text="formatMinutes(t.__durationMin)"></td>
                                     <td x-text="fmtRate(t.open_rate)"></td>
                                     <td x-text="fmtRate(t.close_rate)"></td>
@@ -829,12 +967,12 @@
                                         <span class="quality-bar"><span :style="qualityStyle(t.__exitQ)"></span></span>
                                         <span x-text="t.__exitQ.toFixed(0)"></span>
                                     </td>
-                                    <td x-show="showExitReason" style="color:#a0aec0;" x-text="t.exit_reason || '-'"></td>
+                                    <td x-show="showExitReason" style="color:#9891a8;" x-text="t.exit_reason || '-'"></td>
                                 </tr>
                             </template>
                             <template x-if="filteredClosed.length === 0">
                                 <tr>
-                                    <td colspan="19" style="text-align:center; color:#a0aec0; padding:1.5rem;">
+                                    <td colspan="18" style="text-align:center; color:#9891a8; padding:1.5rem;">
                                         No closed trades
                                     </td>
                                 </tr>
@@ -844,69 +982,63 @@
                 </div>
             </div>
 
-            <!-- === BOT LOG === -->
-            <div class="card">
-                <h3>
-                    Bot Log
-                    <span style="display:flex; gap:0.5rem; align-items:center; font-weight:400;">
-                        <!-- Tab toggle -->
-                        <span style="display:flex; border:1px solid rgba(255,255,255,0.15); border-radius:6px; overflow:hidden; font-size:0.8rem;">
-                            <button @click="logTab='messages'; loadLogs()"
-                                    :style="logTab==='messages' ? 'background:#695ff5; color:#fff;' : 'background:transparent; color:#a0aec0;'"
-                                    style="border:none; padding:0.2rem 0.6rem; cursor:pointer;">Messages</button>
-                            <button @click="logTab='console'; loadConsoleLogs()"
-                                    :style="logTab==='console' ? 'background:#695ff5; color:#fff;' : 'background:transparent; color:#a0aec0;'"
-                                    style="border:none; padding:0.2rem 0.6rem; cursor:pointer;">Console</button>
-                        </span>
-                        <!-- Messages filter (visible only on Messages tab) -->
-                        <template x-if="logTab==='messages'">
-                            <select x-model="logsFilter" class="form-input" style="font-size:0.8rem; padding:0.2rem 0.5rem; width:auto;">
-                                <option value="all">All</option>
-                                <option value="trade">Trades</option>
-                                <option value="status">Status</option>
-                            </select>
-                        </template>
-                        <button class="btn" @click="logTab==='messages' ? loadLogs() : loadConsoleLogs()" style="padding:0.3rem 0.7rem; font-size:0.8rem;">&#8635; Refresh</button>
-                    </span>
-                </h3>
+              </div>
+            </template>
+          </main>
+        </div>
 
-                <!-- Messages tab -->
-                <template x-if="logTab==='messages'">
-                    <div style="font-family:monospace; font-size:0.78rem; max-height:400px; overflow-y:auto;
-                                background:rgba(0,0,0,0.25); border-radius:6px; padding:0.75rem;">
-                        <template x-if="logs.length === 0">
-                            <div style="color:#a0aec0; text-align:center; padding:1rem;">No log messages yet.</div>
+        <!-- === NEW CONFIG MODAL === -->
+        <div x-show="newConfig.open" x-cloak
+             style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:2000; display:flex; align-items:center; justify-content:center;"
+             @click.self="closeNewConfig()">
+            <div class="card" style="width:min(420px, 92vw); margin-bottom:0;">
+                <h3>New bot config</h3>
+                <div x-show="newConfig.error" class="alert" style="margin-bottom:0.75rem;" x-text="newConfig.error"></div>
+                <label class="side-h" style="display:block;">Name</label>
+                <input type="text" class="form-input" x-model="newConfig.name" placeholder="e.g. myBinanceBot"
+                       style="width:100%; margin-bottom:0.9rem;" @keydown.enter="createConfig()">
+                <label class="side-h" style="display:block;">Start from</label>
+                <select class="form-input" x-model="newConfig.source" style="width:100%;">
+                    <option value="">&mdash; Blank &mdash;</option>
+                    <optgroup label="Your configs" x-show="configs.length">
+                        <template x-for="c in configs" :key="c.name">
+                            <option :value="c.name" x-text="c.name"></option>
                         </template>
-                        <template x-for="(m, i) in logs.filter(m => logsFilter === 'all' || (logsFilter === 'trade' && ['buy','sell','entry','exit','open_trade','close_trade','trade_cancel'].some(k => (m.type||'').toLowerCase().includes(k))) || (logsFilter === 'status' && (m.type||'').toLowerCase().includes('status') || (m.type||'').toLowerCase().includes('startup')))" :key="i">
-                            <div style="display:flex; gap:0.75rem; border-bottom:1px solid rgba(255,255,255,0.04); padding:0.25rem 0; line-height:1.5;">
-                                <span style="color:#a0aec0; white-space:nowrap; flex-shrink:0;" x-text="m.received_at ? m.received_at.replace('T',' ').slice(0,19) : ''"></span>
-                                <span class="badge"
-                                      :class="(m.type||'').includes('buy') || (m.type||'').includes('entry') || (m.type||'').includes('open') ? 'badge-open' : ((m.type||'').includes('sell') || (m.type||'').includes('exit') || (m.type||'').includes('close') ? 'badge-closed' : '')"
-                                      style="flex-shrink:0; align-self:flex-start;"
-                                      x-text="m.type || '?'"></span>
-                                <span style="color:#e0e0e0; word-break:break-word;"
-                                      x-text="m.status || m.message || (m.pair ? m.pair + (m.profit_amount != null ? ' · PnL ' + (m.profit_amount >= 0 ? '+' : '') + (+m.profit_amount).toFixed(2) : '') + (m.stake_amount != null ? ' · stake ' + (+m.stake_amount).toFixed(2) : '') : JSON.stringify(m).slice(0,120))"></span>
-                            </div>
+                    </optgroup>
+                    <optgroup label="Examples" x-show="newConfig.examples.length">
+                        <template x-for="ex in newConfig.examples" :key="ex.name">
+                            <option :value="'example:' + ex.name" x-text="ex.name + (ex.exchange ? ' (' + ex.exchange + ')' : '')"></option>
                         </template>
-                    </div>
-                </template>
-
-                <!-- Console tab -->
-                <template x-if="logTab==='console'">
-                    <div style="font-family:monospace; font-size:0.75rem; max-height:400px; overflow-y:auto;
-                                background:rgba(0,0,0,0.35); border-radius:6px; padding:0.75rem;">
-                        <template x-if="consoleLogs.length === 0">
-                            <div style="color:#a0aec0; text-align:center; padding:1rem;">No console output yet.</div>
-                        </template>
-                        <template x-for="(l, i) in consoleLogs" :key="i">
-                            <div style="padding:0.1rem 0; line-height:1.4; white-space:pre-wrap; word-break:break-all;"
-                                 :style="l.level==='ERROR' ? 'color:#fc8181;' : l.level==='WARNING' ? 'color:#f6e05e;' : l.level==='DEBUG' ? 'color:#68d391;' : 'color:#e0e0e0;'"
-                                 x-text="l.line"></div>
-                        </template>
-                    </div>
-                </template>
+                    </optgroup>
+                </select>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1.25rem;">
+                    <button class="btn" @click="closeNewConfig()">Cancel</button>
+                    <button class="btn" @click="createConfig()" :disabled="newConfig.saving || !newConfig.name.trim()">
+                        <span x-text="newConfig.saving ? 'Creating…' : 'Create'"></span>
+                    </button>
+                </div>
             </div>
-        </div></template>
+        </div>
+
+        <!-- === CONFIG JSON EDITOR MODAL === -->
+        <div x-show="configEditor.open" x-cloak
+             style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:2000; display:flex; align-items:center; justify-content:center;"
+             @click.self="closeConfigEditor()">
+            <div class="card" style="width:min(720px, 92vw); max-height:85vh; display:flex; flex-direction:column; margin-bottom:0;">
+                <h3 x-text="'Edit ' + configEditor.name + '.json'"></h3>
+                <div x-show="configEditor.error" class="alert" style="margin-bottom:0.75rem;" x-text="configEditor.error"></div>
+                <textarea x-model="configEditor.content" spellcheck="false"
+                          style="flex:1; min-height:400px; width:100%; font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:0.8rem;
+                                 background:rgba(0,0,0,0.35); color:#e8e5ef; border:1px solid rgba(255,255,255,0.1);
+                                 border-radius:6px; padding:0.75rem; resize:vertical;"></textarea>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1rem;">
+                    <button class="btn" @click="closeConfigEditor()">Cancel</button>
+                    <button class="btn" @click="saveConfigEditor()" :disabled="configEditor.saving">
+                        <span x-text="configEditor.saving ? 'Saving…' : 'Save'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -921,23 +1053,37 @@ function tradingApp() {
         error: null,
         closedFilter: '',
         startingCapital: 1000,
-        autoRefresh: true,
         _timer: null,
         strategyInfo: null,
         chartPair: '',
         chartLimit: 500,
         chartData: null,
         chartTrades: [],
+        chartOffChart: 0,   // trades older than the loaded candle window
+        showIndicatorList: false,   // indicator names collapsed by default
         chartIndicators: [],
         chartLoading: false,
         chartError: null,
         logs: [],
         logsFilter: 'all',
         logTab: 'messages',
+        chartTab: 'equity',
+        sideTab: 'bots',
+        pairsLimit: 10,
+        sideCollapsed: false,
+        selectedTrade: null,
+        zoomToTrade: true,
+        showCandles: true,
+        showVolume: true,
+        showEntry: true,
+        showExit: true,
+        chartTradesSkipped: 0,
+        lastUpdated: '',
         consoleLogs: [],
         configs: [],
         strategies: [],
         configEditor: { open: false, name: '', content: '', saving: false, error: '' },
+        newConfig: { open: false, name: '', source: '', examples: [], saving: false, error: '' },
         configBusy: '',
         viewingBot: null,
         showNonBots: false,
@@ -945,6 +1091,18 @@ function tradingApp() {
         showExitReason: false,
 
         get allTrades() { return this.openTrades.concat(this.closedTrades); },
+        get ohlc() {
+            const cs = this.chartData && this.chartData.candles;
+            if (!cs || !cs.length) return null;
+            const last = cs[cs.length - 1];
+            const prev = cs.length > 1 ? cs[cs.length - 2] : last;
+            const chg = +prev.close ? ((last.close - prev.close) / prev.close) * 100 : 0;
+            return {
+                o: this.fmtRate(last.open), h: this.fmtRate(last.high),
+                l: this.fmtRate(last.low), c: this.fmtRate(last.close),
+                chg, vol: Math.round(+last.volume || 0).toLocaleString('en-US'),
+            };
+        },
         get openEnriched() { return this.openTrades.map((t, i) => this._enrich(t, i, true)); },
         get closedEnriched() { return this.closedTrades.map((t, i) => this._enrich(t, i, false)); },
         get filteredClosed() {
@@ -960,7 +1118,8 @@ function tradingApp() {
                 return { winRate:0,totalTrades:0,wins:0,losses:0,totalPnl:0,roi:0,
                          sharpe:0,profitFactor:0,expectancyR:0,rr:0,cagr:0,
                          maxDrawdownPct:0,maxDrawdownAbs:0,
-                         startingCapital:this.startingCapital,avgDurationMin:0 };
+                         startingCapital:this.startingCapital,avgDurationMin:0,
+                         avgProfit:0,avgProfitPct:0,longs:0,shorts:0,sortino:null,sqn:null, };
             }
             // Only count trades with recorded P&L for rate/ratio metrics
             // (null profit = cancelled/unfilled orders that never settled)
@@ -993,11 +1152,19 @@ function tradingApp() {
                 }
             }
             const avgDurationMin = ts.reduce((s, t) => s + t.__durationMin, 0) / n;
+            const pnls = ts.map(t => t.__pnl);
+            const avgProfit = totalPnl / n;
+            const avgProfitPct = (ts.reduce((s, t) => s + (+t.__pnlPct || 0), 0) / n) * 100;
+            const shorts = ts.filter(t => t.is_short).length;
+            const longs = n - shorts;
+            const sortino = this._sortino(this._dailyReturns(ts));
+            const sqn = this._sqn(pnls);
             return {
                 winRate, totalTrades: n, wins: wins.length, losses: losses.length,
                 totalPnl, roi, sharpe, profitFactor, expectancyR, rr, cagr,
                 maxDrawdownPct: ddRes.pct, maxDrawdownAbs: ddRes.abs,
                 startingCapital: this.startingCapital, avgDurationMin,
+                avgProfit, avgProfitPct, longs, shorts, sortino, sqn,
             };
         },
         get monthly() {
@@ -1033,7 +1200,10 @@ function tradingApp() {
                 const sd = Math.sqrt(v);
                 // 365, not the traditional-market 252 trading-day count: crypto
                 // trades every calendar day including weekends.
-                const sharpe = sd > 0 ? (m / sd) * Math.sqrt(365) : 0;
+                // A Sharpe ratio needs a standard deviation, which needs >= 2
+                // observations. With a single trade it is undefined - returning 0
+                // rendered as "0.00", i.e. indistinguishable from a real zero.
+                const sharpe = o.pnls.length < 2 ? null : (sd > 0 ? (m / sd) * Math.sqrt(365) : 0);
                 o.ordered.sort((a, b) => a.d - b.d);
                 let eq = this.startingCapital, peak = eq, maxDd = 0;
                 o.ordered.forEach(({ p }) => {
@@ -1047,8 +1217,9 @@ function tradingApp() {
                 };
             }).sort((a, b) => b.pnl - a.pnl);
         },
-        get bestPairs() { return this.pairs.slice(0, 10); },
-        get worstPairs() { return this.pairs.slice().reverse().slice(0, 10); },
+        get pairsShown() { return this.pairsLimit > 0 ? this.pairsLimit : this.pairs.length; },
+        get bestPairs() { return this.pairs.slice(0, this.pairsShown); },
+        get worstPairs() { return this.pairs.slice().reverse().slice(0, this.pairsShown); },
         get chartPairs() {
             const set = new Set();
             this.openTrades.forEach(t => t.pair && set.add(t.pair));
@@ -1061,16 +1232,22 @@ function tradingApp() {
             if (!this.token) { window.location.href = '/login'; return; }
             await this.refreshDashboard();
             await Promise.all([
-                this.authedFetch('/api/strategy/info').then(r => { this.strategyInfo = r; }).catch(() => {}),
+                this.loadStrategyInfo(),
                 this.loadMeta(),
             ]);
-            if (this.autoRefresh) this._startTimer();
+            this._startTimer();   // auto-refresh is always on
+            // First paint: closedTrades was filled by the await above, before the
+            // watcher below existed, so nothing would draw until the 10s poll.
+            this.$nextTick(() => this.renderCharts());
             this.$watch('closedTrades', () => this.$nextTick(() => this.renderCharts()));
-            this.$watch('autoRefresh', v => v ? this._startTimer() : this._stopTimer());
+            this.$watch('chartTab', () => this.$nextTick(() => this._resizeChart()));
         },
 
         fmt(v) { return (v >= 0 ? '+' : '') + (+v).toFixed(2); },
-        fmtRate(v) { if (v == null || v === '') return '-'; const n = +v; return n < 1 ? n.toPrecision(5) : n.toFixed(4); },
+        // Prices above 1 get 2 decimals - the extra two were noise on things
+        // like 126.5100. Sub-1 pairs still need real precision (0.086475 would
+        // round to 0.09), so those keep 5 significant figures.
+        fmtRate(v) { if (v == null || v === '') return '-'; const n = +v; return n > 1 ? n.toFixed(2) : n.toPrecision(5); },
         fmtCpu(v) {
             // null = just (re)started, one poll away from a real reading
             // (see web_portal.py's _proc_stats - cpu_percent needs a delta
@@ -1086,7 +1263,13 @@ function tradingApp() {
             if (!d) return '-';
             const dt = new Date(d);
             if (isNaN(dt)) return d;
-            return dt.toISOString().replace('T', ' ').slice(0, 16);
+            // Timestamps arrive naive ("2026-08-11T23:26:00"), so they are parsed
+            // as local. toISOString() would then re-read them as UTC and shift
+            // every displayed time by the local offset - format with the same
+            // local fields instead so a naive value round-trips unchanged.
+            const p = n => String(n).padStart(2, '0');
+            return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate())
+                 + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
         },
         formatMinutes(m) {
             if (!m || !isFinite(m)) return '-';
@@ -1095,7 +1278,7 @@ function tradingApp() {
         },
         qualityStyle(q) {
             const pct = Math.max(0, Math.min(100, q));
-            const color = pct >= 70 ? '#10b981' : pct >= 40 ? '#695ff5' : '#ef4444';
+            const color = pct >= 70 ? '#7ee2a8' : pct >= 40 ? '#8b7cf6' : '#f4879b';
             return `width:${pct}%; background:${color};`;
         },
         async authedFetch(url, opts = {}) {
@@ -1108,7 +1291,14 @@ function tradingApp() {
                 window.location.href = '/login';
                 throw new Error('Unauthorized');
             }
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            if (!r.ok) {
+                // FastAPI puts the reason in `detail` - a bare "HTTP 503" hides
+                // the actual cause (usually: no bot is running, so there is no
+                // DataProvider to read candles from).
+                let detail = '';
+                try { detail = ((await r.json()) || {}).detail || ''; } catch (_) { /* not JSON */ }
+                throw new Error(detail ? `${detail} (HTTP ${r.status})` : `HTTP ${r.status}`);
+            }
             return r.json();
         },
         logout() {
@@ -1142,6 +1332,30 @@ function tradingApp() {
                 await this.loadMeta();
             } catch (e) { this.error = 'Save failed: ' + e.message; }
             finally { this.configBusy = ''; }
+        },
+        async openNewConfig() {
+            this.newConfig = { open: true, name: '', source: '', examples: [], saving: false, error: '' };
+            try {
+                const r = await this.authedFetch('/api/configs/examples');
+                this.newConfig.examples = r.examples || [];
+            } catch (e) { /* examples are a nice-to-have - blank/duplicate still work without them */ }
+        },
+        closeNewConfig() { this.newConfig.open = false; },
+        async createConfig() {
+            const name = (this.newConfig.name || '').trim();
+            if (!name) { this.newConfig.error = 'Name is required.'; return; }
+            this.newConfig.saving = true;
+            this.newConfig.error = '';
+            try {
+                await this.authedFetch('/api/configs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, source: this.newConfig.source || null }),
+                });
+                await this.loadMeta();
+                this.newConfig.open = false;
+            } catch (e) { this.newConfig.error = e.message; }
+            finally { this.newConfig.saving = false; }
         },
         async openConfigEditor(cfg) {
             this.configEditor = { open: true, name: cfg.name, content: '', saving: false, error: '' };
@@ -1270,8 +1484,14 @@ function tradingApp() {
         },
         async viewConfigDashboard(cfg) {
             if (!cfg.running) return;
-            this.viewingBot = cfg.account_name;
+            // Clicking the already-selected bot clears the filter. This is now
+            // the ONLY way back to the combined view - the "(back)" link that
+            // used to do it has been removed.
+            this.viewingBot = (this.viewingBot === cfg.account_name) ? null : cfg.account_name;
             await this.refreshDashboard();
+            // strategy/plot_config and candles both come from the viewed bot's config
+            await this.loadStrategyInfo();
+            if (this.chartPair) await this.loadChart();
         },
         async refreshDashboard(silent) {
             if (!silent) this.loading = true;
@@ -1292,6 +1512,7 @@ function tradingApp() {
                 this.closedTrades = d.closed_trades || [];
                 this.logs = (d.messages || []).slice().reverse();
                 this.consoleLogs = (d.logs || []).slice().reverse();
+                this.lastUpdated = new Date().toLocaleTimeString('en-GB', { hour12: false });
                 if (this.status && this.status.starting_capital) {
                     this.startingCapital = +this.status.starting_capital;
                 }
@@ -1377,6 +1598,25 @@ function tradingApp() {
             return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
                 .map(([, v]) => v / this.startingCapital);
         },
+        _sortino(returns) {
+            if (returns.length < 2) return null;
+            const m = returns.reduce((s, v) => s + v, 0) / returns.length;
+            // Downside deviation: only returns below zero count as risk, which is
+            // the whole point of Sortino vs Sharpe. Divided by the FULL sample
+            // count (not just the losing days) - the standard definition.
+            const dn = returns.filter(v => v < 0);
+            if (!dn.length) return m > 0 ? Infinity : 0;
+            const dd = Math.sqrt(dn.reduce((s, v) => s + v * v, 0) / returns.length);
+            return dd > 0 ? (m / dd) * Math.sqrt(365) : null;
+        },
+        _sqn(pnls) {
+            // Van Tharp's System Quality Number: sqrt(N) * mean / stdev of the
+            // per-trade results. Needs >= 2 trades for a standard deviation.
+            if (pnls.length < 2) return null;
+            const m = pnls.reduce((s, v) => s + v, 0) / pnls.length;
+            const sd = Math.sqrt(pnls.reduce((s, v) => s + (v - m) ** 2, 0) / (pnls.length - 1));
+            return sd > 0 ? (Math.sqrt(pnls.length) * m / sd) : null;
+        },
         _sharpe(returns) {
             if (returns.length < 2) return 0;
             const m = returns.reduce((s, v) => s + v, 0) / returns.length;
@@ -1409,12 +1649,52 @@ function tradingApp() {
             return Object.assign({
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#e0e0e0', family: 'system-ui, sans-serif' },
+                font: { color: '#9891a8', family: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", size: 11 },
                 margin: { t: 30, r: 30, b: 50, l: 60 },
                 xaxis: { gridcolor: 'rgba(255,255,255,0.05)' },
                 yaxis: { gridcolor: 'rgba(255,255,255,0.05)' },
                 showlegend: false,
             }, extra || {});
+        },
+        _resizeChart() {
+            // a chart drawn while its tab was hidden lays out at zero width -
+            // Plotly only picks up the real container size once it is visible
+            const ids = {
+                equity: 'equityChart', drawdown: 'drawdownChart', hourlyPnl: 'hourlyPnlChart',
+                hourlyPf: 'hourlyPfChart', hourlyDd: 'hourlyDdChart',
+            };
+            const el = document.getElementById(ids[this.chartTab]);
+            if (el && el.data) Plotly.Plots.resize(el);
+            // The pair chart suffers the same zero-size problem but lives
+            // outside the tab set, so it was never being resized here.
+            const pc = document.getElementById('pairChart');
+            if (pc && pc.data) Plotly.Plots.resize(pc);
+        },
+        _observePairChart() {
+            // Guards the "sometimes" case: the chart is drawn while its
+            // container is display:none (x-show="chartPair"), lays out at
+            // 0x0, and stays collapsed because nothing re-measures it. A
+            // ResizeObserver catches every way it can become visible again -
+            // pair selected, sidebar/panel reflow, window resize, tab switch -
+            // without polling.
+            if (this._pairChartObserver) return;
+            const el = document.getElementById('pairChart');
+            if (!el || typeof ResizeObserver === 'undefined') return;
+            let lastW = 0, lastH = 0;
+            this._pairChartObserver = new ResizeObserver(entries => {
+                for (const e of entries) {
+                    const w = Math.round(e.contentRect.width);
+                    const h = Math.round(e.contentRect.height);
+                    // Only act on a real size change. Resizing from inside a
+                    // ResizeObserver can otherwise re-trigger the observer and
+                    // spin ("ResizeObserver loop completed with undelivered
+                    // notifications").
+                    if (w === lastW && h === lastH) continue;
+                    lastW = w; lastH = h;
+                    if (w > 0 && h > 0 && el.data) Plotly.Plots.resize(el);
+                }
+            });
+            this._pairChartObserver.observe(el);
         },
         renderCharts() {
             if (this.closedEnriched.length === 0) return;
@@ -1424,8 +1704,8 @@ function tradingApp() {
 
             Plotly.react('equityChart', [{
                 x: eq.dates, y: eq.values, type: 'scatter', mode: 'lines',
-                line: { color: '#10b981', width: 2 },
-                fill: 'tozeroy', fillcolor: 'rgba(16,185,129,0.1)',
+                line: { color: '#7ee2a8', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(126,226,168,0.1)',
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Equity' } }), cfg);
 
             let peak = eq.values[0] || 0;
@@ -1435,8 +1715,8 @@ function tradingApp() {
             });
             Plotly.react('drawdownChart', [{
                 x: eq.dates, y: ddVals, type: 'scatter', mode: 'lines',
-                line: { color: '#ef4444', width: 2 },
-                fill: 'tozeroy', fillcolor: 'rgba(239,68,68,0.15)',
+                line: { color: '#f4879b', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(244,135,155,0.15)',
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Drawdown %' } }), cfg);
 
             const hourly = Array(24).fill(null).map(() => ({ pnl: 0, gw: 0, gl: 0, dd: 0, peak: 0, eq: 0 }));
@@ -1456,14 +1736,14 @@ function tradingApp() {
 
             Plotly.react('hourlyPnlChart', [{
                 x: hours, y: hourly.map(h => h.pnl), type: 'bar',
-                marker: { color: hourly.map(h => h.pnl >= 0 ? '#10b981' : '#ef4444') },
+                marker: { color: hourly.map(h => h.pnl >= 0 ? '#7ee2a8' : '#f4879b') },
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'PnL' } }), cfg);
 
             Plotly.react('hourlyPfChart', [{
                 x: hours,
                 y: hourly.map(h => h.gl > 0 ? h.gw / h.gl : (h.gw > 0 ? 5 : 0)),
                 type: 'bar',
-                marker: { color: hourly.map(h => (h.gl > 0 ? h.gw / h.gl : 5) >= 1 ? '#10b981' : '#ef4444') },
+                marker: { color: hourly.map(h => (h.gl > 0 ? h.gw / h.gl : 5) >= 1 ? '#7ee2a8' : '#f4879b') },
             }], this._layout({
                 yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Profit Factor' },
                 shapes: [{ type: 'line', x0: -0.5, x1: 23.5, y0: 1, y1: 1,
@@ -1472,8 +1752,15 @@ function tradingApp() {
 
             Plotly.react('hourlyDdChart', [{
                 x: hours, y: hourly.map(h => -h.dd), type: 'bar',
-                marker: { color: '#ef4444' },
+                marker: { color: '#f4879b' },
             }], this._layout({ yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Max DD' } }), cfg);
+
+            this.$nextTick(() => this._resizeChart());
+        },
+        async loadStrategyInfo() {
+            const q = this.viewingBot ? '?bot=' + encodeURIComponent(this.viewingBot) : '';
+            try { this.strategyInfo = await this.authedFetch('/api/strategy/info' + q); }
+            catch (_) { /* chart just loses its indicator overlays */ }
         },
         async loadChart() {
             if (!this.chartPair) {
@@ -1485,8 +1772,12 @@ function tradingApp() {
             this.chartError = null;
             try {
                 const tf = (this.strategyInfo && this.strategyInfo.timeframe) || '';
+                // Bots started from the Bots tab run as their own process, so the
+                // portal needs the account name to find that bot's config/data.
+                const botQ = this.viewingBot ? '&bot=' + encodeURIComponent(this.viewingBot) : '';
                 const url = `/api/pair/candles?pair=${encodeURIComponent(this.chartPair)}`
-                    + `&limit=${this.chartLimit}` + (tf ? `&timeframe=${encodeURIComponent(tf)}` : '');
+                    + `&limit=${this.chartLimit}` + (tf ? `&timeframe=${encodeURIComponent(tf)}` : '')
+                    + botQ;
                 const [candles, trades] = await Promise.all([
                     this.authedFetch(url),
                     this.authedFetch('/api/pair/trades?pair=' + encodeURIComponent(this.chartPair))
@@ -1494,7 +1785,11 @@ function tradingApp() {
                 ]);
                 this.chartData = candles;
                 this.chartIndicators = candles.indicators || [];
-                this.chartTrades = trades.trades || [];
+                // /api/pair/trades only sees an in-process bot; for a subprocess bot
+                // the dashboard payload already holds this account's trades.
+                this.chartTrades = (trades.trades && trades.trades.length)
+                    ? trades.trades
+                    : this.allTrades.filter(t => t.pair === this.chartPair);
                 this.$nextTick(() => this.renderPairChart());
             } catch (e) {
                 this.chartError = e.message;
@@ -1502,156 +1797,329 @@ function tradingApp() {
                 this.chartLoading = false;
             }
         },
+        isSelected(t) {
+            const s = this.selectedTrade;
+            return !!s && s.__idx === t.__idx && s.pair === t.pair && !!s.close_date === !!t.close_date;
+        },
+        selectTrade(t) {
+            this.selectedTrade = t;
+            if (t.pair && t.pair !== this.chartPair) {
+                this.chartPair = t.pair;
+                this.loadChart();      // renderPairChart() frames the trade when it lands
+            } else {
+                this.$nextTick(() => { this.renderPairChart(); });
+            }
+        },
+        clearSelectedTrade() {
+            this.selectedTrade = null;
+            this.$nextTick(() => { this.renderPairChart(); this.resetChartZoom(); });
+        },
+        // Everything handed to Plotly is a naive LOCAL-time string. The API
+        // serves candles in UTC ("2026-08-26T23:06:36Z"); plotting those
+        // directly labelled the axis in UTC, which is not where the user is.
+        // Local getters below do the conversion, and _toPlot() is the single
+        // door every timestamp goes through on its way to the chart.
+        _plotTime(ms) {
+            const d = new Date(ms), p = n => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+                 + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+        },
+        _toPlot(dateLike) {
+            const ms = this._utcMs(dateLike);
+            return isNaN(ms) ? dateLike : this._plotTime(ms);
+        },
+        _tfMinutes() {
+            const tf = (this.strategyInfo && this.strategyInfo.timeframe) || '5m';
+            const m = /^(\d+)\s*([mhdwM])$/.exec(String(tf).trim());
+            if (!m) return 5;
+            return (+m[1]) * ({ m: 1, h: 60, d: 1440, w: 10080, M: 43200 }[m[2]] || 1);
+        },
+        // Load enough candles to reach the oldest trade on this pair. Trades
+        // are routinely weeks behind the last candle (one AAVE trade sat 33
+        // days back), which no entry in the bar-count dropdown would cover, so
+        // the count is derived from the actual gap rather than guessed.
+        fitChartToTrades() {
+            const cs = this.chartData && this.chartData.candles;
+            if (!cs || !cs.length || !this.chartTrades.length) return;
+            const newest = this._utcMs(cs[cs.length - 1].date);
+            let oldest = newest;
+            for (const t of this.chartTrades) {
+                for (const d of [t.open_date, t.close_date]) {
+                    const ms = d ? this._utcMs(d) : NaN;
+                    if (!isNaN(ms)) oldest = Math.min(oldest, ms);
+                }
+            }
+            const perBarMs = this._tfMinutes() * 60000;
+            const needed = Math.ceil((newest - oldest) / perBarMs) + 25;   // pad so it isn't flush to the edge
+            const want = Math.min(Math.max(needed, 200), 20000);
+            if (want <= this.chartLimit) return;   // already covered; nothing to do
+            this.chartLimit = want;
+            this.loadChart();
+        },
+        // ---- Pair chart: TradingView lightweight-charts (same as backtester) ----
+        _lwSec(dateLike) {
+            // candles arrive as UTC ISO strings; lightweight-charts wants epoch seconds
+            const ms = this._utcMs(dateLike);
+            return isNaN(ms) ? null : Math.floor(ms / 1000);
+        },
+        _destroyPairChart() {
+            if (this.__lwResizeObs) {
+                try { this.__lwResizeObs.disconnect(); } catch (e) {}
+                this.__lwResizeObs = null;
+            }
+            if (this.__lwChart) {
+                try { this.__lwChart.remove(); } catch (e) {}
+                this.__lwChart = null;
+                this.__lwCandles = null;
+                this.__lwVolume = null;
+                this.__lwLines = [];
+                this.__lwEntryLine = null;
+            }
+        },
+        _chartEl() { return this.__lwChart || null; },
+        applyTradeZoom() {
+            const chart = this.__lwChart;
+            if (!chart) return;
+            const t = this.selectedTrade;
+            if (!t || !this.zoomToTrade) return this.resetChartZoom();
+            const a = this._utcMs(t.open_date);
+            const b = t.close_date ? this._utcMs(t.close_date) : Date.now();
+            if (isNaN(a) || isNaN(b)) return;
+            // a scalped trade can be shorter than one bar - keep a floor so the
+            // window never collapses to a single candle
+            const pad = Math.max((b - a) * 0.75, 45 * 60 * 1000);
+            try {
+                chart.timeScale().setVisibleRange({
+                    from: Math.floor((a - pad) / 1000),
+                    to: Math.floor((b + pad) / 1000),
+                });
+            } catch (e) { /* range outside loaded data */ }
+        },
+        resetChartZoom() {
+            if (this.__lwChart) { try { this.__lwChart.timeScale().fitContent(); } catch (e) {} }
+        },
+        _visLogical() {
+            const chart = this.__lwChart;
+            if (!chart) return null;
+            const r = chart.timeScale().getVisibleLogicalRange();
+            return (r && r.to > r.from) ? { chart, from: r.from, to: r.to } : null;
+        },
+        panChart(dir) {
+            const v = this._visLogical();
+            if (!v) return;
+            const shift = (v.to - v.from) * 0.25 * dir;
+            v.chart.timeScale().setVisibleLogicalRange({ from: v.from + shift, to: v.to + shift });
+        },
+        zoomChart(factor) {
+            const v = this._visLogical();
+            if (!v) return;
+            const mid = (v.from + v.to) / 2, half = ((v.to - v.from) * factor) / 2;
+            v.chart.timeScale().setVisibleLogicalRange({ from: mid - half, to: mid + half });
+        },
         renderPairChart() {
             const data = this.chartData;
+            const el = document.getElementById('pairChart');
+            if (!el) return;
             if (!data || !data.candles || data.candles.length === 0) {
-                Plotly.purge('pairChart');
+                this._destroyPairChart();
                 return;
             }
+            if (typeof LightweightCharts === 'undefined') {
+                this.chartError = 'lightweight-charts failed to load';
+                return;
+            }
+            this._destroyPairChart();
+
+            // autoSize can report 0 mid-layout, so size explicitly
+            const w = el.clientWidth || el.offsetWidth || 900;
+            try {
+                this.__lwChart = LightweightCharts.createChart(el, {
+                    width: w,
+                    height: 520,
+                    layout: {
+                        background: { type: 'solid', color: 'rgba(0,0,0,0)' },
+                        textColor: '#a9a3bd',
+                    },
+                    grid: {
+                        vertLines: { color: 'rgba(255,255,255,0.05)' },
+                        horzLines: { color: 'rgba(255,255,255,0.05)' },
+                    },
+                    timeScale: {
+                        timeVisible: true,
+                        secondsVisible: false,
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        rightOffset: 5,
+                    },
+                    rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' },
+                    crosshair: { mode: 1 },
+                    // wheel zooms the time axis; click+drag pans
+                    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+                    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: false } },
+                });
+            } catch (err) {
+                this.chartError = 'Chart init failed: ' + err.message;
+                return;
+            }
+            const chart = this.__lwChart;
+            this.__lwLines = [];
+
+            this.__lwResizeObs = new ResizeObserver(entries => {
+                for (const e of entries) {
+                    try { chart.applyOptions({ width: Math.floor(e.contentRect.width) }); } catch (_) {}
+                }
+            });
+            this.__lwResizeObs.observe(el);
+
             const candles = data.candles;
-            const dates = candles.map(c => c.date);
-            const plot_config = (this.strategyInfo && this.strategyInfo.plot_config) || { main_plot: {}, subplots: {} };
+            const ohlc = [], vol = [];
+            for (const c of candles) {
+                const t = this._lwSec(c.date);
+                if (t == null) continue;
+                ohlc.push({ time: t, open: +c.open, high: +c.high, low: +c.low, close: +c.close });
+                vol.push({
+                    time: t,
+                    value: +(c.volume || 0),
+                    color: +c.close >= +c.open ? 'rgba(126,226,168,0.3)' : 'rgba(244,135,155,0.3)',
+                });
+            }
+
+            if (this.showCandles) {
+                this.__lwCandles = chart.addCandlestickSeries({
+                    upColor: '#7ee2a8', downColor: '#f4879b',
+                    borderUpColor: '#7ee2a8', borderDownColor: '#f4879b',
+                    wickUpColor: '#7ee2a8', wickDownColor: '#f4879b',
+                });
+                try { this.__lwCandles.setData(ohlc); } catch (err) {
+                    this.chartError = 'Chart data error: ' + err.message; return;
+                }
+            }
+            if (this.showVolume) {
+                this.__lwVolume = chart.addHistogramSeries({
+                    priceFormat: { type: 'volume' }, priceScaleId: 'vol',
+                });
+                this.__lwVolume.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+                try { this.__lwVolume.setData(vol); } catch (e) {}
+            }
+
+            // strategy overlays declared by plot_config.main_plot
+            const plot_config = (this.strategyInfo && this.strategyInfo.plot_config) || {};
             const mainPlot = plot_config.main_plot || {};
-            const subplots = plot_config.subplots || {};
-
-            const subplotNames = Object.keys(subplots);
-            const totalRows = 2 + subplotNames.length;
-
-            const heights = [0.55, 0.12];
-            const remaining = Math.max(0.05, (1 - 0.55 - 0.12) - 0.04);
-            const perSub = subplotNames.length ? (remaining / subplotNames.length) : 0;
-            for (let i = 0; i < subplotNames.length; i++) heights.push(perSub);
-
-            const traces = [];
-
-            traces.push({
-                x: dates,
-                open: candles.map(c => c.open),
-                high: candles.map(c => c.high),
-                low: candles.map(c => c.low),
-                close: candles.map(c => c.close),
-                type: 'candlestick',
-                name: this.chartPair,
-                increasing: { line: { color: '#10b981' }, fillcolor: 'rgba(16,185,129,0.6)' },
-                decreasing: { line: { color: '#ef4444' }, fillcolor: 'rgba(239,68,68,0.6)' },
-                xaxis: 'x', yaxis: 'y',
-            });
-
-            const palette = ['#695ff5', '#10b981', '#f59e0b', '#06b6d4', '#ec4899', '#8b5cf6', '#84cc16'];
+            const palette = ['#8b7cf6', '#7ee2a8', '#e3b341', '#5fd0e0', '#e879a8', '#b8e06a'];
             let pi = 0;
-            const addLine = (col, opts, axisX, axisY) => {
-                if (!candles[0] || !(col in candles[0])) return;
+            for (const [col, opts] of Object.entries(mainPlot)) {
+                if (!candles[0] || !(col in candles[0])) continue;
                 const color = (opts && opts.color) || palette[pi++ % palette.length];
-                const dash = (opts && opts.type === 'bar') ? null : 'solid';
-                traces.push({
-                    x: dates,
-                    y: candles.map(c => c[col]),
-                    type: (opts && opts.type === 'bar') ? 'bar' : 'scatter',
-                    mode: 'lines',
-                    name: col,
-                    line: { color, width: 1.4, dash },
-                    marker: (opts && opts.type === 'bar') ? { color } : undefined,
-                    xaxis: axisX, yaxis: axisY,
-                });
-            };
-            for (const [col, opts] of Object.entries(mainPlot)) addLine(col, opts, 'x', 'y');
-
-            traces.push({
-                x: dates,
-                y: candles.map(c => c.volume),
-                type: 'bar',
-                name: 'volume',
-                marker: { color: candles.map(c => c.close >= c.open ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)') },
-                xaxis: 'x', yaxis: 'y2',
-            });
-
-            subplotNames.forEach((name, idx) => {
-                const row = 3 + idx;
-                const ax = `y${row}`;
-                const cols = subplots[name] || {};
-                for (const [col, opts] of Object.entries(cols)) addLine(col, opts, 'x', ax);
-            });
-
-            const entriesX = [], entriesY = [], entriesText = [], entryColors = [];
-            const exitsX = [], exitsY = [], exitsText = [], exitColors = [];
-            this.chartTrades.forEach(t => {
-                if (t.open_date && t.open_rate != null) {
-                    entriesX.push(this._normaliseDate(t.open_date));
-                    entriesY.push(+t.open_rate);
-                    entriesText.push(`${t.is_short ? 'SHORT' : 'LONG'} entry${t.enter_tag ? ' · ' + t.enter_tag : ''}`);
-                    entryColors.push(t.is_short ? '#ef4444' : '#10b981');
+                const series = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+                const pts = [];
+                for (const c of candles) {
+                    const t = this._lwSec(c.date), v = c[col];
+                    if (t != null && v != null && isFinite(v)) pts.push({ time: t, value: +v });
                 }
-                if (t.close_date && t.close_rate != null) {
-                    exitsX.push(this._normaliseDate(t.close_date));
-                    exitsY.push(+t.close_rate);
-                    exitsText.push(`Exit · ${t.exit_reason || '-'}`);
-                    exitColors.push(+(t.profit_abs ?? 0) >= 0 ? '#10b981' : '#ef4444');
-                }
-            });
-            if (entriesX.length) {
-                traces.push({
-                    x: entriesX, y: entriesY, mode: 'markers', type: 'scatter',
-                    name: 'Entry', text: entriesText,
-                    marker: { symbol: 'triangle-up', size: 10, color: entryColors },
-                    xaxis: 'x', yaxis: 'y',
-                });
-            }
-            if (exitsX.length) {
-                traces.push({
-                    x: exitsX, y: exitsY, mode: 'markers', type: 'scatter',
-                    name: 'Exit', text: exitsText,
-                    marker: { symbol: 'triangle-down', size: 10, color: exitColors },
-                    xaxis: 'x', yaxis: 'y',
-                });
+                try { series.setData(pts); this.__lwLines.push(series); } catch (e) {}
             }
 
-            const layout = {
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#e0e0e0', family: 'system-ui, sans-serif' },
-                margin: { t: 20, r: 30, b: 30, l: 60 },
-                grid: { rows: totalRows, columns: 1, roworder: 'top to bottom',
-                        subplots: [['xy'], ['xy2'], ...subplotNames.map((_, i) => [`xy${3 + i}`])] },
-                xaxis: {
-                    gridcolor: 'rgba(255,255,255,0.05)',
-                    rangeslider: { visible: false },
-                    type: 'date',
-                },
-                yaxis: { domain: [1 - heights[0], 1], gridcolor: 'rgba(255,255,255,0.05)', title: 'Price' },
-                yaxis2: { domain: [1 - heights[0] - heights[1], 1 - heights[0] - 0.005],
-                          gridcolor: 'rgba(255,255,255,0.05)', title: 'Vol' },
-            };
-            let acc = heights[0] + heights[1];
-            subplotNames.forEach((name, idx) => {
-                const h = heights[2 + idx];
-                const top = 1 - acc - 0.01;
-                const bot = top - h;
-                acc += h + 0.01;
-                layout[`yaxis${3 + idx}`] = {
-                    domain: [Math.max(0, bot), Math.max(0.05, top)],
-                    gridcolor: 'rgba(255,255,255,0.05)',
-                    title: name,
-                };
-            });
+            // entry/exit markers for the trades on this pair
+            const markerHost = this.__lwCandles || this.__lwLines[0] || null;
+            if (markerHost && ohlc.length) {
+                // Trades routinely sit outside the loaded candle window. Without
+                // this guard every one of them clamps onto the first bar and the
+                // markers pile up on the left edge at prices far off the chart.
+                const tMin = ohlc[0].time, tMax = ohlc[ohlc.length - 1].time;
+                const inWindow = ts => ts != null && ts >= tMin && ts <= tMax;
+                const markers = [];
+                let skipped = 0;
+                for (const t of this.chartTrades) {
+                    if (this.showEntry) {
+                        const ets = this._lwSec(t.open_date);
+                        if (!inWindow(ets)) skipped++;
+                        else markers.push({
+                            time: ets,
+                            position: t.is_short ? 'aboveBar' : 'belowBar',
+                            color: t.is_short ? '#f4879b' : '#7ee2a8',
+                            shape: t.is_short ? 'arrowDown' : 'arrowUp',
+                            text: t.enter_tag || (t.is_short ? 'S' : 'L'),
+                            size: 1,
+                        });
+                    }
+                    if (this.showExit && t.close_date) {
+                        const xts = this._lwSec(t.close_date);
+                        const pnl = +(t.profit_abs ?? t.close_profit_abs ?? 0);
+                        const pct = +(t.profit_ratio ?? t.close_profit ?? 0) * 100;
+                        if (inWindow(xts)) markers.push({
+                            time: xts,
+                            position: t.is_short ? 'belowBar' : 'aboveBar',
+                            color: pnl >= 0 ? '#7ee2a8' : '#f4879b',
+                            shape: 'circle',
+                            text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%',
+                            size: 0.8,
+                        });
+                    }
+                }
+                markers.sort((a, b) => a.time - b.time);
+                try { markerHost.setMarkers(markers); } catch (e) {}
+                this.chartTradesSkipped = skipped;
+            }
 
-            Plotly.react('pairChart', traces, layout,
-                { responsive: true, displaylogo: false, scrollZoom: true });
+            // horizontal line at the selected trade's entry price
+            const sel = this.selectedTrade;
+            if (sel && sel.open_rate != null && this.__lwCandles) {
+                try {
+                    this.__lwEntryLine = this.__lwCandles.createPriceLine({
+                        price: +sel.open_rate,
+                        color: 'rgba(255,255,255,0.45)',
+                        lineWidth: 1,
+                        lineStyle: 2,           // dotted
+                        axisLabelVisible: true,
+                        title: 'entry',
+                    });
+                } catch (e) {}
+            }
+
+            chart.timeScale().fitContent();
+            if (sel && this.zoomToTrade) this.applyTradeZoom();
+        },
+        // Snap a trade timestamp onto the nearest candle at or before it.
+        // Returns null when the trade falls OUTSIDE the loaded candle window,
+        // and callers must skip those: the old code seeded `best` with
+        // candles[0].date, so every trade older than the window silently
+        // clamped to the first candle and the markers piled up on the left
+        // edge, each drawn at its own long-past price far below the visible
+        // range.
+        // Trade timestamps and candle timestamps arrive in DIFFERENT formats:
+        //   candles: "2026-08-26T23:06:36Z"  -> Date() reads it as UTC
+        //   trades : "2026-08-26 23:06:36"   -> Date() reads it as LOCAL
+        // Both are really UTC, so comparing them raw shifts every trade by the
+        // machine's offset and threw trades outside the candle window
+        // ("Trades on chart: 0, 5 outside window"). Normalise before comparing.
+        _utcMs(d) {
+            if (d == null) return NaN;
+            if (typeof d === 'string') {
+                const s = d.trim();
+                if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(s)) {
+                    return new Date(s.replace(' ', 'T') + 'Z').getTime();
+                }
+            }
+            return new Date(d).getTime();
         },
         _normaliseDate(d) {
             if (!this.chartData) return d;
-            const target = new Date(d).getTime();
+            const target = this._utcMs(d);
             if (isNaN(target)) return d;
             const candles = this.chartData.candles;
             if (!candles.length) return d;
+            const firstT = this._utcMs(candles[0].date);
+            const lastT = this._utcMs(candles[candles.length - 1].date);
+            if (target < firstT) return null;          // before the window: not on this chart
+            if (target > lastT) return this._toPlot(candles[candles.length - 1].date);  // still-forming bar
             let lo = 0, hi = candles.length - 1, best = candles[0].date;
             while (lo <= hi) {
                 const mid = (lo + hi) >> 1;
-                const t = new Date(candles[mid].date).getTime();
+                const t = this._utcMs(candles[mid].date);
                 if (t === target) { best = candles[mid].date; break; }
                 if (t < target) { best = candles[mid].date; lo = mid + 1; }
                 else { hi = mid - 1; }
             }
-            return best;
+            return this._toPlot(best);
         },
     };
 }
