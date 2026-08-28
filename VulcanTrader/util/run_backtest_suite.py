@@ -67,9 +67,11 @@ def _scan_classes(strategies_dir: Path) -> tuple[dict[str, set[str]], dict[str, 
     for py_file in sorted(strategies_dir.rglob("*.py")):
         if "__pycache__" in py_file.parts:
             continue
+        if not py_file.is_file():
+            continue  # a directory can match *.py by name alone (seen under Github/ clones)
         try:
             tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
-        except SyntaxError:
+        except (SyntaxError, OSError):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):

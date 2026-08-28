@@ -120,6 +120,15 @@ class IStrategy(ABC, HyperStrategyMixin):
     # Number of seconds after which the candle will no longer result in a buy on expired candles
     ignore_buying_expired_candle_after: int = 0
 
+    # Minutes before a pair's underlying market expires/resolves at which point
+    # confirm_trade_entry() refuses new entries and custom_exit() force-exits any
+    # open position for that pair. Only meaningful for exchanges that expose a
+    # market "expiry" (currently Polymarket, where this is the prediction
+    # market's resolution date) - a no-op for ordinary spot/perp markets, which
+    # have no expiry, so this is safe to leave at its default on any exchange.
+    # Set to a negative number to disable this check entirely.
+    market_end_buffer_minutes: int = 60
+
     # Disable checking the dataframe (converts the error into a warning message)
     disable_dataframe_checks: bool = False
 
@@ -383,7 +392,20 @@ class IStrategy(ABC, HyperStrategyMixin):
         :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
         :return bool: When True is returned, then the buy-order is placed on the exchange.
             False aborts the process
+
+        Default implementation refuses entry when the pair's market is within
+        `market_end_buffer_minutes` of expiring (see minutes_to_market_end()) -
+        a no-op on exchanges without market expiry. If you override this
+        method, call `super().confirm_trade_entry(...)` (or
+        `self.minutes_to_market_end(pair, current_time)` yourself) to keep
+        that protection.
         """
+        if self._market_ending_within_buffer(pair, current_time):
+            logger.info(
+                f"{pair}: refusing new entry - market is within "
+                f"{self.market_end_buffer_minutes}m of its end/resolution."
+            )
+            return False
         return True
 
     def confirm_trade_exit(
@@ -614,7 +636,16 @@ class IStrategy(ABC, HyperStrategyMixin):
         :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
         :return: To execute exit, return a string with custom exit reason or True. Otherwise return
         None or False.
+
+        Default implementation force-exits when the pair's market is within
+        `market_end_buffer_minutes` of expiring (see minutes_to_market_end()) -
+        a no-op on exchanges without market expiry. If you override this
+        method, call `super().custom_exit(...)` (or
+        `self.minutes_to_market_end(pair, current_time)` yourself) to keep
+        that protection.
         """
+        if self._market_ending_within_buffer(pair, current_time):
+            return "market_ending_soon"
         return self.custom_sell(pair, trade, current_time, current_rate, current_profit, **kwargs)
 
     def custom_stake_amount(
@@ -1398,6 +1429,38 @@ class IStrategy(ABC, HyperStrategyMixin):
             f"enter={enter_long} enter_tag_value={enter_tag}"
         )
         return enter_signal, enter_tag
+
+    def minutes_to_market_end(self, pair: str, current_time: datetime) -> float | None:
+        """
+        Minutes remaining until `pair`'s underlying market expires/resolves, or
+        None if the exchange has no notion of market expiry (every exchange
+        except Polymarket-style prediction markets) or the info isn't
+        available. Negative once the market has already ended.
+        Backs the default confirm_trade_entry()/custom_exit() behavior driven
+        by `market_end_buffer_minutes` - exposed as a public method so a
+        strategy overriding those hooks can still call this directly.
+        """
+        try:
+            market = self.dp.market(pair)
+        except Exception:
+            # Never let this optional safety check take down the signal
+            # pipeline for exchanges/configs where dp/market lookup isn't
+            # available (e.g. certain non-live runmodes).
+            return None
+        if not market:
+            return None
+        expiry_ms = market.get("expiry")
+        if not expiry_ms:
+            return None
+        expiry_dt = datetime.fromtimestamp(expiry_ms / 1000, tz=UTC)
+        now = current_time if current_time.tzinfo else current_time.replace(tzinfo=UTC)
+        return (expiry_dt - now).total_seconds() / 60
+
+    def _market_ending_within_buffer(self, pair: str, current_time: datetime) -> bool:
+        if self.market_end_buffer_minutes < 0:
+            return False
+        minutes_left = self.minutes_to_market_end(pair, current_time)
+        return minutes_left is not None and minutes_left <= self.market_end_buffer_minutes
 
     def ignore_expired_candle(
         self, latest_date: datetime, current_time: datetime, timeframe_seconds: int, enter: bool

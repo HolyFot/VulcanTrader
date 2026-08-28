@@ -10,7 +10,6 @@ from VulcanTrader.exchange.exchange import Exchange
 # isort: on
 from VulcanTrader.exchange.binance import Binance, Binanceus, Binanceusdm
 from VulcanTrader.exchange.bitget import Bitget
-from VulcanTrader.exchange.bitmart import Bitmart
 from VulcanTrader.exchange.bitpanda import Bitpanda
 from VulcanTrader.exchange.bitunix import Bitunix
 from VulcanTrader.exchange.bybit import Bybit
@@ -47,3 +46,4 @@ from VulcanTrader.exchange.hyperliquid import Hyperliquid
 from VulcanTrader.exchange.kraken import Kraken
 from VulcanTrader.exchange.kucoin import Kucoin
 from VulcanTrader.exchange.okx import Okx
+from VulcanTrader.exchange.polymarket import Polymarket

@@ -150,8 +150,12 @@ class IResolver:
             if any(p.startswith((".", "__")) for p in rel_parts[:-1]):
                 logger.debug("Ignoring %s", entry)
                 continue
-            if entry.is_symlink() and not entry.is_file():
-                logger.debug("Ignoring broken symlink %s", entry)
+            # Covers broken symlinks and, less obviously, a *directory* whose
+            # own name ends in .py (rglob("*.py") matches those too) - reading
+            # one raises PermissionError on Windows and takes down the whole
+            # resolve. user_data/strategies/Github/ contains such a directory.
+            if not entry.is_file():
+                logger.debug("Ignoring non-file %s", entry)
                 continue
             module_path = entry.resolve()
             if entry.read_text(encoding="utf-8").find(f"class {object_name}(") == -1:

@@ -318,6 +318,7 @@ class VulcanTraderBot(LoggingMixin):
             # wins if explicitly set.
             host = ds_config.get("host") or self.config.get("data_server_ip", "127.0.0.1")
             port = int(ds_config.get("port") or self.config.get("data_server_port", 8720))
+            bind_host = self._resolve_data_server_bind_host()
             subserver_port = int(ds_config.get("subserver_port", 8721))
             auto_start = bool(
                 ds_config.get("auto_start", self.config.get("auto_start_data_server", True))
@@ -334,6 +335,12 @@ class VulcanTraderBot(LoggingMixin):
             timeframe = self.config.get("timeframe") or getattr(self.strategy, "timeframe", "15m")
             master_up = ensure_master_running(
                 host, port, config_path, subserver_port=subserver_port,
+                # What a master launched BY THIS BOT binds to - separate from
+                # `host` above, which is only where this bot dials. Defaults to
+                # loopback; set data_server.bind_host (or the fleet-wide
+                # data_server_bind_ip) to "0.0.0.0" to accept remote bots and
+                # subservers. No-op when a master is already running.
+                bind_host=bind_host,
                 extra_args=["--exchange", self.config["exchange"]["name"], "--timeframes", timeframe],
                 show_terminal=bool(ds_config.get("show_terminal", False)),
                 tmux=bool(ds_config.get("tmux", False)),
@@ -369,6 +376,32 @@ class VulcanTraderBot(LoggingMixin):
                 "exchange polling only."
             )
             return None
+
+    def _resolve_data_server_bind_host(self) -> str:
+        """What interface a data_server master launched by THIS bot should bind
+        its two listening sockets to.
+
+        Deliberately a separate setting from ``data_server.host`` (which is only
+        where this bot DIALS): the two are different questions with different
+        safe defaults, and conflating them is why remote access never worked on
+        the auto-launch path - ``ensure_master_running`` used to bind whatever
+        it dialed, so an auto-launched master was loopback-only regardless of
+        what the written ``data_server.json`` said.
+
+        Per-bot ``data_server.bind_host`` wins, then the fleet-wide
+        ``data_server_bind_ip`` from ``system.json``, then ``127.0.0.1``. The
+        default stays loopback on purpose: both master ports are
+        unauthenticated plain TCP (the subserver port accepts pushes that land
+        in the cache and on disk), so widening them is something an operator
+        opts into for a trusted network, never something a bot's presence turns
+        on by itself.
+        """
+        ds_config = self.config.get("data_server", {}) or {}
+        return str(
+            ds_config.get("bind_host")
+            or self.config.get("data_server_bind_ip")
+            or "127.0.0.1"
+        )
 
     def _write_data_server_config(self) -> str:
         """Write data_server's own small, dedicated config format (see the
@@ -429,14 +462,20 @@ class VulcanTraderBot(LoggingMixin):
             "is_subserver": False,
             # This bot is writing a config for a MASTER (is_subserver always
             # False here - a trading bot never runs as a subserver), so
-            # "master_host" means "what to bind", hence the "0.0.0.0" (every
-            # interface) default - deliberately different from the "127.0.0.1"
-            # default `_setup_data_server_client` uses for this SAME
-            # `data_server.host` config key when it dials its own client
-            # connection to that just-launched master a few lines below.
-            # Both read the same key; the fallback differs because bind and
-            # dial are different questions with different safe defaults.
-            "master_host": ds_config.get("host", "0.0.0.0"),
+            # "master_host" means "what to BIND" - which is
+            # `data_server.bind_host`, NOT `data_server.host` (that one is only
+            # where this bot dials). See _resolve_data_server_bind_host.
+            #
+            # This used to write `data_server.host` here, defaulted to
+            # "0.0.0.0", which read as "the master binds every interface" and
+            # was wrong twice over: it reused the dial key for a bind question,
+            # and it never took effect anyway, because ensure_master_running
+            # passes an explicit --host that overrides whatever this file says.
+            # Both now resolve from the same bind_host, so the written file and
+            # the actual bind can't disagree - which matters for a master a
+            # human later restarts straight from this file (run-dataserver.bat
+            # with no HOST set), where the file IS the only source of truth.
+            "master_host": self._resolve_data_server_bind_host(),
             "master_port": int(ds_config.get("port", 8720)),
             "subserver_port": int(ds_config.get("subserver_port", 8721)),
             # Read fresh from THIS bot's config on every write (see this
@@ -1934,7 +1973,7 @@ class VulcanTraderBot(LoggingMixin):
 
         funding_fees = self.exchange.get_funding_fees(
             pair=pair,
-            amount=amount + trade.amount if trade else amount,
+            amount=trade.amount if trade else amount,
             is_short=is_short,
             open_date=trade.date_last_filled_utc if trade else open_date,
         )
@@ -2785,7 +2824,7 @@ class VulcanTraderBot(LoggingMixin):
         :param price: Limit price of the potential new order
         :param amount: Quantity of assets of the potential new order
         :param side: Side of the potential new order
-        :return: True if an existing similar order was found
+        :return: True if an existing similar order was found or if cancellation failed.
         """
         if trade.has_open_orders:
             oo = trade.select_order(side, True)
@@ -2804,7 +2843,10 @@ class VulcanTraderBot(LoggingMixin):
                 True,
             )
             Trade.commit()
-            return False
+            # Cancellation may be refused, in which case the order
+            # remains open. As such, it's safer to return has_open_orders here rather than a
+            # hard False.
+            return trade.has_open_orders
 
         return False
 

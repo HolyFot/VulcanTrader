@@ -111,9 +111,11 @@ trade history.
 Dashboard login, Discord, and Telegram settings live once here instead of in
 every config. A bot config can still override one key just for itself.
 
-`data_server.json` is different — it's auto-managed, don't hand-edit it. To
-change the data server's window/tmux behavior, set that on a bot config's
-own `data_server` block instead.
+`data_server.json` is different — it's auto-managed, don't hand-edit it (it
+gets overwritten every time a bot starts). To change the data server's
+window/tmux behavior, or what address it binds to, set that on a bot config's
+own `data_server` block, or fleet-wide in `system.json` — see
+[Serving bots on other machines](#serving-bots-on-other-machines-binding-for-outside-traffic).
 
 ### Running the whole fleet in one process (`single_process_mode`)
 
@@ -151,26 +153,84 @@ the first one finishes binding, **both** spawn their own master, and you end
 up with two processes independently hammering the exchange for the same
 pairs — a real cause of chronic rate-limit errors and stale candles.
 
-`run-datamaster.bat` / `run-datamaster.sh` start the master as its own
+`run-dataserver.bat` / `run-dataserver.sh` start the master as its own
 standalone, explicitly-managed process, refusing to start if something is
 already listening on its port. Run it once, before starting the fleet:
 
 Windows:
 
 ```powershell
-.\run-datamaster.bat
+.\run-dataserver.bat
 ```
 
 Linux / macOS:
 
 ```bash
-./run-datamaster.sh
+./run-dataserver.sh
 ```
 
 Override `CONFIG` / `EXCHANGE` / `HOST` / `PORT` / `SUBSERVER_PORT` /
 `TIMEFRAMES` via environment variables if you're not running the default
-`hyperliquid`, 15m, `127.0.0.1:8720` setup. Pair it with `run-subserver.bat`
-/ `.sh` on a second machine to add collection capacity.
+`hyperliquid`, 15m, `127.0.0.1:8720` setup.
+
+### Serving bots on other machines (binding for outside traffic)
+
+By default the master binds `127.0.0.1` — only bots and subservers on the
+**same machine** can reach it. To serve a fleet spread across several boxes,
+bind it wider.
+
+**If you start the master explicitly**, set `HOST`:
+
+```powershell
+set HOST=0.0.0.0
+.\run-dataserver.bat
+```
+
+```bash
+HOST=0.0.0.0 ./run-dataserver.sh
+```
+
+**If you let a bot auto-launch it**, set `bind_host` on that bot's own
+`data_server` block, or `data_server_bind_ip` in `system.json` to apply it
+fleet-wide:
+
+```jsonc
+{
+  "data_server_bind_ip": "0.0.0.0",   // what the master BINDS to
+  "data_server_ip": "127.0.0.1",      // what local bots DIAL
+  "data_server_port": 8720
+}
+```
+
+Those are two different questions, so they're two different settings:
+`data_server_bind_ip` is which interface the master listens on;
+`data_server_ip` is the address a bot connects to. Accepted bind values are
+`127.0.0.1` (local only, the default), `0.0.0.0` (every interface), or a
+single interface IP like `10.0.0.5`.
+
+Bots on **other** machines then point `data_server_ip` at the master's real
+LAN address and turn `auto_start_data_server` off, so they connect to the
+shared master instead of each spawning a useless local one:
+
+```jsonc
+{
+  "data_server_ip": "192.168.1.50",
+  "data_server_port": 8720,
+  "auto_start_data_server": false
+}
+```
+
+> [!WARNING]
+> Both master ports are **unauthenticated plain TCP**. Anything that can
+> reach the client port (8720) can steer what the master collects; anything
+> that can reach the subserver port (8721) can push candles into its cache
+> **and onto disk**, into the same feather files the backtester reads. Only
+> bind beyond loopback on a private/trusted network, or firewall both ports.
+> The master logs a warning at startup whenever it binds non-loopback.
+
+Pair this with `run-subserver.bat` / `.sh` on a second machine to add
+collection capacity — a subserver dials the master's `subserver_port`, so
+the master has to be bound somewhere that machine can actually reach.
 
 ### Managing configs from the dashboard
 

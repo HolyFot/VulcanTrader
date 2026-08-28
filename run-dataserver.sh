@@ -15,14 +15,26 @@
 #  a second one. Two masters fighting over the same exchange budget is what
 #  caused the fleet-wide rate-limit storm this script exists to prevent.
 #
+#  HOST is the interface the master BINDS to, and is what decides whether
+#  other machines can reach it:
+#      HOST=127.0.0.1   (default) local bots/subservers only
+#      HOST=0.0.0.0     every interface - remote bots and subservers can connect
+#      HOST=10.0.0.5    that one interface only
+#  Neither port authenticates anything: whatever can reach PORT can steer what
+#  this master collects, and whatever can reach SUBSERVER_PORT can push candles
+#  into its cache and onto disk. Only bind wide on a trusted/private network,
+#  or firewall both ports. Bots on other machines then point at this host via
+#  system.json's "data_server_ip".
+#
 #  Tip: wrap this in tmux for unattended hosting:
-#       tmux new -s DataMaster './run-datamaster.sh'
+#       tmux new -s DataMaster './run-dataserver.sh'
+#       HOST=0.0.0.0 tmux new -s DataMaster './run-dataserver.sh'
 # ---------------------------------------------------------------------------
 set -euo pipefail
 cd "$(dirname "$0")"
 
 if [[ ! -f .venv/bin/activate ]]; then
-    echo "[run-datamaster] .venv not found - run ./install.sh first." >&2
+    echo "[run-dataserver] .venv not found - run ./install.sh first." >&2
     exit 1
 fi
 # shellcheck disable=SC1091
@@ -45,11 +57,11 @@ s = socket.socket()
 s.settimeout(1.5)
 sys.exit(0 if s.connect_ex(('$probe_host', $PORT)) == 0 else 1)
 "; then
-    echo "[run-datamaster] Something is already listening on $HOST:$PORT - refusing to start a second master." >&2
+    echo "[run-dataserver] Something is already listening on $HOST:$PORT - refusing to start a second master." >&2
     exit 1
 fi
 
-echo "[run-datamaster] config=$CONFIG exchange=$EXCHANGE host=$HOST port=$PORT subserver-port=$SUBSERVER_PORT timeframes=$TIMEFRAMES"
+echo "[run-dataserver] config=$CONFIG exchange=$EXCHANGE host=$HOST port=$PORT subserver-port=$SUBSERVER_PORT timeframes=$TIMEFRAMES"
 exec python -m VulcanTrader.data_server \
     --mode master \
     -c "$CONFIG" \

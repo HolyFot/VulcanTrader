@@ -832,6 +832,15 @@ CONF_SCHEMA = {
             "minimum": 1,
             "maximum": 65535,
         },
+        "data_server_bind_ip": {
+            "description": (
+                "Fleet-wide (system.json). Interface an auto-launched data_server master "
+                "BINDS to - distinct from data_server_ip, which is where bots dial. "
+                "Default 127.0.0.1 (local only); \"0.0.0.0\" accepts remote bots/subservers. "
+                "Both master ports are unauthenticated - only widen on a trusted network."
+            ),
+            "type": "string",
+        },
         "data_server": {
             "description": "Per-bot data_server settings, overriding the system.json-wide defaults above.",
             "type": "object",
@@ -850,7 +859,15 @@ CONF_SCHEMA = {
                     "default": True,
                 },
                 "host": {
-                    "description": "Host the data_server master listens on / clients connect to.",
+                    "description": "Host this bot DIALS to reach the data_server master. Default 127.0.0.1.",
+                    "type": "string",
+                },
+                "bind_host": {
+                    "description": (
+                        "Interface a master auto-launched by this bot BINDS to (per-bot override "
+                        "of data_server_bind_ip). Default 127.0.0.1 (local only); \"0.0.0.0\" "
+                        "accepts remote bots/subservers. Unauthenticated - trusted networks only."
+                    ),
                     "type": "string",
                 },
                 "port": {

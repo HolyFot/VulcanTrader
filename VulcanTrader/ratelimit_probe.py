@@ -93,7 +93,7 @@ DEFAULT_PROFILE = {"trading_mode": "spot", "margin_mode": ""}
 
 # Other exchange modules present in VulcanTrader/exchange/ - only probed with --all.
 OTHER_EXCHANGES = [
-    "bitget", "bitmart", "bitpanda", "coinex", "cryptocom", "hitbtc", "kraken", "kucoin",
+    "bitget", "bitpanda", "coinex", "cryptocom", "hitbtc", "kraken", "kucoin",
 ]
 
 # Drift's own Data API (data.api.drift.trade) is CloudFront/WAF-fronted and returns a

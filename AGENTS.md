@@ -340,15 +340,30 @@ There is **no** `src/strategies/` — strategy ports were removed; strategies li
 in Python. The `Strategy` trait and `&dyn Strategy` engine interface remain but
 are exercised only by the crate's own Rust tests.
 
-**The engine is reachable from Python** via `backtest -c … --engine rust` (and
-the portal's Engine dropdown). Flow: `backtesting.py::backtest()` branches to
-`_backtest_rust()` when `config["engine"]=="rust"` → `VulcanTrader/rust_backtest.py`
-computes the strategy's signals the normal way, calls the bridge's
-`run_backtest` (`src/python.rs` → `cpu_engine::unified_backtest`) per pair/
-direction, and formats trades into the standard `BT_DATA_COLUMNS` DataFrame so
-`generate_backtest_stats` + the portal work unchanged. It's a fast, **simplified**
-simulator (single position per pair, fixed sizing, no `leverage()`/`custom_*`
-callbacks / DCA / protections) — see `rust_backtest.py` for the caveats.
+**`--engine rust -c …` (and the portal's Engine dropdown) does NOT call into the
+Rust crate's `run_backtest` bridge function today**, despite the name — that
+function, and the three Rust-side simulation loops it fronts
+(`unified_backtest_pythonstyle`, `unified_backtest_pythonstyle_joint`,
+`sweep_dir` in `cpu_engine.rs`), are reachable only from the crate's own
+`cargo test`; nothing in the Python codebase calls them (verified by grepping
+`rust_backtest.py`/`backtesting.py`/`web_portal.py`/`bot.py`). Flow:
+`backtesting.py::backtest()` branches to `_backtest_rust()` when
+`config["engine"]=="rust"` → `VulcanTrader/rust_backtest.py::run_rust_backtest()`
+computes the strategy's signals the normal way, then runs them through
+`_joint_multi_pair_backtest()` — a ~1300-line **pure-Python** bar-by-bar
+simulator in that same file (the only real Rust call left in it,
+`vri.calculate_standard_indicators`, is gated behind a documented-vestigial
+`atr_stop_enabled` flag) — and formats trades into the standard
+`BT_DATA_COLUMNS` DataFrame so `generate_backtest_stats` + the portal work
+unchanged. Unlike the Rust-side loops, this Python simulator DOES invoke
+`leverage()`/`custom_stake_amount()`/`confirm_trade_entry()`/`custom_exit()`/
+`custom_stoploss()` per trade, with a real `self.dp` wired to the same
+`Exchange`/`DataProvider` the plain Python engine uses — see `_confirm_entry()`/
+`do_exit_check()` in `rust_backtest.py` for exactly where. `trading_mode: "spot"`
+is handled too (`can_short` forced `False`, all funding/mark-price machinery
+skipped) — this has been exercised end-to-end against real non-crypto exchange
+data (Polymarket, prices bounded [0,1]) and produces identical trade-by-trade
+results to `--engine python` on the same data.
 
 ### Feature gating (important)
 
@@ -377,8 +392,12 @@ ATR 14, …) — a strategy needing a tunable period must compute that one itsel
 
 `src/python.rs` also exposes `run_backtest(open, high, low, close, volume, rsi,
 macd_hist, bb_pos, atr, cci, entry_signals, exit_signals, direction,
-config_json)` — the `--engine rust` path (see above). `config_json` maps to
-`UnifiedBacktestConfig` fields (which now derive `serde::Deserialize`, `#[serde(default)]`).
+config_json)` — a bridge to the Rust-side `unified_backtest*` loops. **Not
+currently the live `--engine rust` path** (see above) — nothing in the Python
+codebase calls it today; it exists for the crate's own `cargo test` and as a
+ready-made faster-path if `_joint_multi_pair_backtest`'s pure-Python loop ever
+becomes a bottleneck. `config_json` maps to `UnifiedBacktestConfig` fields
+(which now derive `serde::Deserialize`, `#[serde(default)]`).
 
 ### Limit-order simulation
 
@@ -637,7 +656,48 @@ the same way per-bot configs do for trade subprocesses (`ensure_master_
 running()` in data_server.py, via `util/proc_launch.py::launch_detached()`
 for the tmux case) — but set them on the launching bot's own `"data_server"`
 config block (config_schema.py), not by hand-editing this file, since it's
-fully overwritten on every bot startup.
+fully overwritten on every bot startup. Same for `master_host` — see below.
+
+### data_server: bind address vs dial address
+
+Two different questions, two different settings. Conflating them is what
+kept remote access from working at all before this split existed:
+
+| Setting | Question | Default |
+|---|---|---|
+| `data_server.bind_host` (per-bot) / `data_server_bind_ip` (system.json) | which interface a master **launched by this bot** listens on | `127.0.0.1` |
+| `data_server.host` (per-bot) / `data_server_ip` (system.json) | which address a bot **dials** to reach a master | `127.0.0.1` |
+
+`ensure_master_running(host, port, ..., bind_host=...)` keeps them separate:
+`connect_host` (probe + dial, with `0.0.0.0`/`""` normalized to loopback
+because dialing a wildcard is meaningless) and `listen_host` (`bind_host or
+connect_host`, passed as the spawned master's `--host`). It used to pass
+`connect_host` as `--host`, so an auto-launched master was **always**
+loopback-only no matter what `data_server.json`'s `master_host` said — the
+config field was written but never took effect, because the CLI flag wins in
+`main()`. Remote access only worked via an explicitly-run
+`run-dataserver.bat`/`.sh` with `HOST` set.
+
+`_write_data_server_config()` and the `ensure_master_running()` call now both
+resolve through `trader_bot.py::_resolve_data_server_bind_host()`, so the
+written file and the actual bind can never disagree. That matters because
+the file *is* the only source of truth for a master a human later restarts
+straight from it (`run-dataserver.bat` with no `HOST` set).
+
+Accepted bind values: `127.0.0.1` (local only), `0.0.0.0` (every interface),
+or a single interface IP. `MasterServer.start()` logs a WARNING whenever it
+binds non-loopback — deliberate config, so a warning rather than an error,
+but it must be visible: **neither port authenticates anything.** The client
+port accepts `register_interest` (any reachable peer can steer what this
+master collects) and the subserver port accepts `push_ohlcv`/`push_trades`,
+which `DataCache.merge_*` writes into the feather files the backtester
+reads. A hostile subserver connection can poison on-disk history. Private
+networks or firewalled ports only.
+
+Multi-machine fleets: master binds `0.0.0.0`; remote bots set
+`data_server_ip` to its LAN address **and** `auto_start_data_server: false`,
+otherwise each remote bot spawns its own useless local master when its first
+probe of a not-yet-reachable address fails.
 
 ### Account naming (how a config's bot is identified while running)
 

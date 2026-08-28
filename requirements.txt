@@ -18,9 +18,30 @@ ft-pandas-ta==0.3.16
 ta-lib==0.6.8
 technical==1.6.0
 
-ccxt==4.5.58
-cryptography==48.0.1
-aiohttp==3.14.1
+# As of 4.5.66 ccxt hard-pins its own transitive deps instead of using >=
+# floors, so bumping ccxt now drags aiohttp/certifi/cryptography/requests/
+# urllib3/orjson with it. Anything below that ccxt is pinned to elsewhere in
+# this file is a ResolutionImpossible, not a warning - re-check those pins
+# together whenever this line moves. 4.5.76 wants:
+#   aiohttp>=3.14.3,<3.15   certifi==2026.6.17   cryptography>=50,<51
+#   requests>=2.32,<3       urllib3==2.7.0       orjson==3.11.9
+# and adds aiohttp-fast-zlib / zlib-ng / winloop (Windows) as new hard deps.
+ccxt==4.5.76
+# >=50,<51 required by ccxt 4.5.76 (was 48.0.1).
+cryptography==50.0.1
+# Polymarket live order signing (EIP-712) + CLOB API key derivation - see
+# VulcanTrader/exchange/polymarket.py's live-trading section. Not needed for
+# download-data/backtest/dry-run, which never construct a SecureClient.
+# NOT py-clob-client - Polymarket archived that package 2026-05-25 ("no
+# longer functional and should not be used for new or existing integrations")
+# and it hardcodes USDC.e collateral with no pUSD support, so every order it
+# signs now comes back `400 invalid order version, please use the latest
+# clob-client`. polymarket-client (imports as `polymarket`) is the official
+# replacement and correctly reports/spends pUSD - no separate on-chain
+# balance workaround needed.
+polymarket-client==0.6.0
+# >=3.14.3,<3.15 required by ccxt 4.5.76 (was 3.14.1).
+aiohttp==3.14.3
 python-telegram-bot==22.7
 # can't be hard-pinned due to telegram-bot pinning httpx with ~
 httpx>=0.24.1
@@ -28,7 +49,8 @@ humanize==4.15.0
 cachetools==7.1.4
 requests==2.34.2
 urllib3==2.7.0
-certifi==2026.5.20
+# Pinned exactly by ccxt 4.5.76 - do not float to the newest certifi.
+certifi==2026.6.17
 jsonschema==4.26.0
 tabulate==0.10.0
 pycoingecko==3.2.0
@@ -65,7 +87,10 @@ pytz==2026.2
 schedule==1.2.2
 
 # WS Messages
-websockets==16.0
+# Capped at <16 by polymarket-client 0.6.0. The old ==16.0 pin here was
+# unsatisfiable against it - a clean `pip install -r requirements.txt` failed
+# outright; only already-provisioned venvs (holding 15.0.1) kept working.
+websockets==15.0.1
 janus==2.0.0
 
 ast-comments==1.3.0

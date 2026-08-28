@@ -555,7 +555,19 @@ def cmd_trade(args: argparse.Namespace) -> int:
     if args.dry_run:
         args_dict["dry_run"] = True
 
-    config = _load_configuration(args_dict, RunMode.DRY_RUN if args.dry_run else RunMode.LIVE)
+    # Only force DRY_RUN when the CLI flag was actually passed - otherwise
+    # leave runmode unset so Configuration._process_runmode derives it from
+    # the merged config files' own "dry_run" key (the normal way every
+    # config in this project sets dry-run). Hardcoding RunMode.LIVE here
+    # whenever --dry-run was omitted used to produce a dry_run=True +
+    # runmode=LIVE mismatch for any config-file-only dry-run setup - harmless
+    # for exchanges whose ccxt adapter can still answer fetch_balance with
+    # blank credentials, but a hard crash for adapters (Polymarket) that
+    # correctly refuse to touch real endpoints without real credentials,
+    # since Wallets.update() treats runmode==LIVE as reason enough to fetch a
+    # real balance even though dry_run is true.
+    runmode = RunMode.DRY_RUN if args.dry_run else None
+    config = _load_configuration(args_dict, runmode)
 
     # Per-instance overrides so several concurrent trade instances can share
     # one base config file - vary these flags per invocation instead of

@@ -73,6 +73,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 
@@ -109,6 +110,22 @@ except ImportError as exc:  # pragma: no cover
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = REPO_ROOT / "template"
 STATIC_DIR = REPO_ROOT / "static"
+
+
+class _RevalidatingStatic(StaticFiles):
+    """Serve /static with `Cache-Control: no-cache`.
+
+    The dashboards take their entire look from /static/theme.css. Plain
+    StaticFiles sends only ETag/Last-Modified, so browsers are free to reuse a
+    cached copy heuristically - an edit to the theme then silently doesn't show
+    up until a hard reload. `no-cache` does not disable caching; it just forces
+    the revalidation round-trip, and an unchanged file still answers 304.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _json_safe(value: Any) -> Any:
@@ -221,6 +238,15 @@ class HyperoptRunRequest(BaseModel):
     analyze_per_epoch: bool = False
     print_all: bool = False
     no_color: bool = True
+
+
+class SuiteRunRequest(BaseModel):
+    """Mirrors run-backtest-suite.bat's CONFIG / JOBS / SCAN_DAYS / DEEP_DAYS."""
+
+    config: str = "configHyper"
+    jobs: int = 4
+    scan_days: int = 30
+    deep_days: int = 548
 
 
 class BotConfigureRequest(BaseModel):
@@ -390,6 +416,12 @@ class WebPortal:
         # Process object has no prior sample to diff against - see
         # _proc_stats).
         self._proc_stat_cache: dict[int, psutil.Process] = {}
+
+        # Same idea for single_process_mode bots, which are THREADS of this
+        # process rather than subprocesses (see _thread_stats): OS thread id
+        # -> (cumulative cpu seconds, monotonic clock) from the previous poll,
+        # since per-thread CPU% is likewise only meaningful as a delta.
+        self._thread_cpu_cache: dict[int, tuple[float, float]] = {}
 
         # Live-price cache for computing OPEN trades' unrealized PnL - keyed
         # by "<exchange>:<pair>", short TTL so a page with several open
@@ -641,24 +673,25 @@ class WebPortal:
                 )
 
         # --------------- static pages ---------------
-        @app.get("/", include_in_schema=False)
-        def root() -> Any:
-            f = TEMPLATE_DIR / "login.html"
-            if f.is_file():
-                return FileResponse(f)
-            return JSONResponse({"detail": "login.html not found"}, status_code=404)
-
-        @app.get("/login", include_in_schema=False)
-        def login_page() -> Any:
-            return root()
-
         # No-cache headers so the dashboards always pick up fresh HTML edits
-        # without the browser serving a stale cached copy.
+        # without the browser serving a stale cached copy. Defined before the
+        # first page route so every page - login included - can use it.
         _no_cache_headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
         }
+
+        @app.get("/", include_in_schema=False)
+        def root() -> Any:
+            f = TEMPLATE_DIR / "login.html"
+            if f.is_file():
+                return FileResponse(f, headers=_no_cache_headers)
+            return JSONResponse({"detail": "login.html not found"}, status_code=404)
+
+        @app.get("/login", include_in_schema=False)
+        def login_page() -> Any:
+            return root()
 
         @app.get("/backtester", include_in_schema=False)
         def backtester_page() -> Any:
@@ -695,7 +728,7 @@ class WebPortal:
         if STATIC_DIR.is_dir():
             app.mount(
                 "/static",
-                StaticFiles(directory=str(STATIC_DIR)),
+                _RevalidatingStatic(directory=str(STATIC_DIR)),
                 name="static",
             )
 
@@ -926,12 +959,13 @@ class WebPortal:
 
         # --------------- strategy / chart data ---------------
         @app.get("/api/strategy/info", dependencies=[Depends(auth)])
-        def api_strategy_info() -> dict:
-            return self._strategy_info()
+        def api_strategy_info(bot: str | None = None) -> dict:
+            return self._strategy_info(bot)
 
         @app.get("/api/pair/candles", dependencies=[Depends(auth)])
-        def api_pair_candles(pair: str, timeframe: str | None = None, limit: int = 500) -> dict:
-            return self._pair_candles(pair, timeframe, limit)
+        def api_pair_candles(pair: str, timeframe: str | None = None, limit: int = 500,
+                             bot: str | None = None) -> dict:
+            return self._pair_candles(pair, timeframe, limit, bot)
 
         @app.get("/api/pair/trades", dependencies=[Depends(auth)])
         def api_pair_trades(pair: str) -> dict:
@@ -1015,6 +1049,14 @@ class WebPortal:
         @app.post("/api/hyperopt/run", dependencies=[Depends(auth)])
         def api_hyperopt_run(req: HyperoptRunRequest) -> dict:
             return self._submit_hyperopt_job(req)
+
+        @app.post("/api/suite/run", dependencies=[Depends(auth)])
+        def api_suite_run(req: SuiteRunRequest) -> dict:
+            return self._submit_suite_job(req)
+
+        @app.get("/api/suite/jobs/{job_id}", dependencies=[Depends(auth)])
+        def api_suite_job(job_id: str, log_offset: int = 0) -> dict:
+            return self._get_job(job_id, log_offset=log_offset)
 
         @app.get("/api/hyperopt/jobs/{job_id}", dependencies=[Depends(auth)])
         def api_hyperopt_job(job_id: str, log_offset: int = 0) -> dict:
@@ -1528,8 +1570,14 @@ class WebPortal:
             return None
         return getattr(self.bot, "strategy", None)
 
-    def _strategy_info(self) -> dict:
+    def _strategy_info(self, account: str | None = None) -> dict:
         strat = self._strategy()
+        offline = False
+        if strat is None:
+            # No in-process bot: resolve the strategy from the bot's own config
+            # so the chart still gets plot_config / timeframe / whitelist.
+            strat = self._offline_strategy(account)
+            offline = strat is not None
         if strat is None:
             return {
                 "name": None,
@@ -1544,7 +1592,13 @@ class WebPortal:
 
         whitelist: list[str] = []
         try:
-            whitelist = list(getattr(self.bot, "active_pair_whitelist", []) or [])
+            if offline:
+                cfg = getattr(strat, "config", {}) or {}
+                whitelist = list(
+                    (cfg.get("exchange", {}) or {}).get("pair_whitelist", []) or []
+                )
+            else:
+                whitelist = list(getattr(self.bot, "active_pair_whitelist", []) or [])
         except Exception:
             pass
 
@@ -1557,14 +1611,20 @@ class WebPortal:
             "pairs": whitelist,
         }
 
-    def _pair_candles(self, pair: str, timeframe: str | None, limit: int) -> dict:
+    def _pair_candles(self, pair: str, timeframe: str | None, limit: int,
+                      account: str | None = None) -> dict:
         """
         Return candles + every column the strategy added (indicators, signals)
         from the analyzed DataFrame cached by the DataProvider.
+
+        Bots started from the Bots tab run as separate processes, so this portal
+        has no DataProvider for them. In that case fall back to reading the same
+        OHLCV from the data directory and running that bot's strategy over it -
+        see `_pair_candles_offline`.
         """
         strat = self._strategy()
         if strat is None or self.bot is None:
-            raise HTTPException(status_code=503, detail="Bot not running")
+            return self._pair_candles_offline(pair, timeframe, limit, account)
         tf = timeframe or getattr(strat, "timeframe", None)
         if not tf:
             raise HTTPException(status_code=400, detail="timeframe required")
@@ -1614,6 +1674,160 @@ class WebPortal:
             "pair": pair,
             "timeframe": tf,
             "last_analyzed": last_analyzed.isoformat() if last_analyzed else None,
+            "columns": cols,
+            "indicators": [
+                c for c in cols
+                if c not in {"date", "open", "high", "low", "close", "volume",
+                             "enter_long", "exit_long", "enter_short", "exit_short",
+                             "enter_tag", "exit_tag"}
+            ],
+            "candles": records,
+        }
+
+    # ------------------------------------------------------------------
+    # Offline chart data (bots running as separate processes)
+    # ------------------------------------------------------------------
+    def _config_for_account(self, account: str | None) -> dict | None:
+        """Load the config JSON behind an account name.
+
+        Account names are built as ``<config>_dry_run`` / ``<config>_live``
+        (see the bot-start route), so strip that suffix to get the config stem.
+        """
+        if not account:
+            return None
+        stem = account
+        for suffix in ("_dry_run", "_live"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        try:
+            path = self._config_path(stem)
+        except Exception:
+            return None
+        if not path.is_file():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            logger.debug("_config_for_account: unreadable config %s", path, exc_info=True)
+            return None
+        # IResolver does config["user_data_dir"].joinpath(...), so these have to
+        # be real Paths - a JSON config carries them as strings.
+        cfg["user_data_dir"] = Path(cfg.get("user_data_dir") or self._user_data_dir())
+        if cfg.get("datadir"):
+            cfg["datadir"] = Path(cfg["datadir"])
+        return cfg
+
+    def _offline_strategy(self, account: str | None) -> Any:
+        """Resolve (and cache) a strategy object straight from a bot's config."""
+        cfg = self._config_for_account(account)
+        if cfg is None or not cfg.get("strategy"):
+            return None
+        key = (account, cfg.get("strategy"))
+        cached = getattr(self, "_offline_strat_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        try:
+            from VulcanTrader.resolvers import StrategyResolver
+            strat = StrategyResolver.load_strategy(cfg)
+        except Exception:
+            logger.debug("_offline_strategy: cannot load %s", cfg.get("strategy"), exc_info=True)
+            return None
+        self._offline_strat_cache = (key, strat)
+        return strat
+
+    def _pair_candles_offline(self, pair: str, timeframe: str | None, limit: int,
+                              account: str | None) -> dict:
+        """Candles + indicators for a bot this portal is not hosting."""
+        cfg = self._config_for_account(account)
+        if cfg is None:
+            raise HTTPException(
+                status_code=503,
+                detail=("No bot attached and no config found"
+                        + (f" for {account!r}" if account else "")
+                        + " - open a running bot from the Bots tab first"),
+            )
+        strat = self._offline_strategy(account)
+        tf = timeframe or (getattr(strat, "timeframe", None) if strat else None) or cfg.get("timeframe")
+        if not tf:
+            raise HTTPException(status_code=400, detail="timeframe required")
+
+        try:
+            from VulcanTrader.data.history import load_pair_history
+            from VulcanTrader.enums import CandleType, TradingMode
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"history loader unavailable: {exc}") from exc
+
+        datadir = Path(cfg["datadir"]) if cfg.get("datadir") else (
+            Path(cfg["user_data_dir"]) / "data" / (cfg.get("exchange", {}) or {}).get("name", "")
+            if (cfg.get("exchange", {}) or {}).get("name") else self._datadir()
+        )
+        if not datadir.is_dir():
+            raise HTTPException(status_code=404, detail=f"datadir not found: {datadir}")
+        try:
+            tm_enum = TradingMode(cfg.get("trading_mode", "spot"))
+        except Exception:
+            tm_enum = TradingMode.SPOT
+        try:
+            df = load_pair_history(
+                pair=pair,
+                timeframe=tf,
+                datadir=datadir,
+                data_format=cfg.get("dataformat_ohlcv", "feather"),
+                candle_type=CandleType.get_default(tm_enum.value),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"No data for {pair} {tf}: {exc}") from exc
+        if df is None or len(df) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No downloaded {tf} candles for {pair} - use Data Manager to download them",
+            )
+
+        df = df.tail(max(50, min(limit, 5000))).copy()
+        # Indicators are a bonus: a strategy that raises here should still leave
+        # the user with a plain candle chart rather than an error box.
+        indicator_error = None
+        if strat is not None:
+            try:
+                df = strat.advise_indicators(df, {"pair": pair})
+            except Exception as exc:
+                indicator_error = str(exc)
+                logger.debug("_pair_candles_offline: advise_indicators failed", exc_info=True)
+
+        out = self._candles_payload(df, pair, tf)
+        out["source"] = "offline"
+        if indicator_error:
+            out["indicator_error"] = indicator_error
+        return out
+
+    @staticmethod
+    def _candles_payload(df: Any, pair: str, tf: str) -> dict:
+        """Shape a dataframe into the /api/pair/candles response."""
+        if "date" in df.columns:
+            try:
+                df["date"] = df["date"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                df["date"] = df["date"].astype(str)
+        skip = {"buy", "sell"}
+        cols = [c for c in df.columns if c not in skip]
+        records: list[dict] = []
+        for row in df[cols].itertuples(index=False, name=None):
+            rec = {}
+            for k, v in zip(cols, row, strict=False):
+                if v is None:
+                    rec[k] = None
+                    continue
+                try:
+                    f = float(v)
+                    rec[k] = None if (f != f or f in (float("inf"), float("-inf"))) else f
+                except (TypeError, ValueError):
+                    rec[k] = str(v)
+            records.append(rec)
+        return {
+            "pair": pair,
+            "timeframe": tf,
             "columns": cols,
             "indicators": [
                 c for c in cols
@@ -1732,14 +1946,30 @@ class WebPortal:
                 if p.is_dir() and not p.name.startswith("."):
                     by_name.setdefault(p.name, [])
 
+        def _has_ohlcv(d: Path) -> bool:
+            """True when a directory holds at least one feather OHLCV file.
+
+            `has_data` used to be `ex_dir.is_dir()`, which is true for any
+            exchange folder that merely exists - e.g. one holding only a
+            `.exchange_cache/` - so a badge claimed "has data" while the
+            coverage panel (which counts actual feather files, same as here)
+            correctly reported zero. Lazy `next()`: an exchange like
+            Hyperliquid has 10,000+ files and a full scan would be wasted.
+            """
+            try:
+                return next(d.glob("*.feather"), None) is not None
+            except OSError:
+                return False
+
         out = []
         for name in sorted(by_name):
             ex_dir = data_dir / name
+            has_futures = _has_ohlcv(ex_dir / "futures")
             out.append({
                 "name": name,
                 "configs": by_name[name],
-                "has_data": ex_dir.is_dir(),
-                "has_futures": (ex_dir / "futures").is_dir(),
+                "has_data": _has_ohlcv(ex_dir) or has_futures,
+                "has_futures": has_futures,
             })
         return out
 
@@ -1895,6 +2125,13 @@ class WebPortal:
                 detail=f"Max concurrent jobs reached ({self.MAX_CONCURRENT_JOBS}). Wait for one to finish.",
             )
 
+        # Hyperliquid has no usable historical OHLCV endpoint - the only source
+        # is a prebuilt archive, which is all-or-nothing (no pair/timeframe/
+        # timerange selection). Route those to the archive importer instead.
+        exchange = (req.exchange or self._config_exchange(cfg_name) or "").lower()
+        if exchange == self.HYPERLIQUID_EXCHANGE:
+            return self._submit_hyperliquid_job(cfg_name, bool(req.erase))
+
         pairs_total, units_total = self._estimate_download_units(cfg_name, req.pairs, req.timeframes)
 
         job_id = uuid.uuid4().hex[:12]
@@ -1936,6 +2173,180 @@ class WebPortal:
         )
         thread.start()
         return {"ok": True, "job": self._job_summary(job)}
+
+    # ------------------------------------------------------------------
+    # Hyperliquid: prebuilt archive import
+    # ------------------------------------------------------------------
+    HYPERLIQUID_EXCHANGE = "hyperliquid"
+    HYPERLIQUID_ARCHIVE_URL = (
+        "http://frequenthippo-dl.ddns.net/wp-content/uploads/hyperliquid_download-data.7z"
+    )
+
+    def _config_exchange(self, cfg_name: str) -> str | None:
+        """Exchange name declared by a config, or None."""
+        path = self._configs_dir() / f"{cfg_name}.json"
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                return ((json.load(fh).get("exchange") or {}).get("name")) or None
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            return None
+
+    @staticmethod
+    def _find_7z() -> str | None:
+        found = shutil.which("7z") or shutil.which("7za")
+        if found:
+            return found
+        for p in (
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ):
+            if Path(p).is_file():
+                return p
+        return None
+
+    def _submit_hyperliquid_job(self, cfg_name: str, force: bool) -> dict:
+        with self._jobs_lock:
+            busy = [j for j in self._jobs.values()
+                    if j.get("kind") == "download_archive" and j.get("status") in ("queued", "running")]
+        if busy:
+            raise HTTPException(status_code=409, detail="A Hyperliquid import is already running.")
+
+        job_id = uuid.uuid4().hex[:12]
+        job: dict = {
+            "id": job_id,
+            "kind": "download_archive",
+            "config": cfg_name,
+            "exchange": self.HYPERLIQUID_EXCHANGE,
+            "pairs": None, "timeframes": None, "days": None, "timerange": None,
+            "erase": force,
+            "status": "queued",
+            "exit_code": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "started_at": None,
+            "finished_at": None,
+            "log": deque(maxlen=self.MAX_JOB_LOG_LINES),
+            "result_file": None,
+            "error": None,
+            "_proc": None,
+            "dl_pairs_total": 0,
+            "dl_units_total": 100,      # drives the existing % progress bar
+            "dl_units_done": 0,
+        }
+        with self._jobs_lock:
+            self._jobs[job_id] = job
+            self._evict_old_jobs_locked()
+        threading.Thread(
+            target=self._run_hyperliquid_job_thread,
+            args=(job_id,),
+            name=f"hyperliquid-import-{job_id}",
+            daemon=True,
+        ).start()
+        return {"ok": True, "job": self._job_summary(job)}
+
+    def _run_hyperliquid_job_thread(self, job_id: str) -> None:
+        import urllib.request
+
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job["status"] = "running"
+            job["started_at"] = datetime.now(UTC).isoformat()
+            force = bool(job.get("erase"))
+            log = job["log"]
+
+        def say(msg: str) -> None:
+            with self._jobs_lock:
+                log.append(msg)
+
+        def fail(msg: str) -> None:
+            with self._jobs_lock:
+                job["status"] = "failed"
+                job["error"] = msg
+                job["finished_at"] = datetime.now(UTC).isoformat()
+                log.append(f"[error] {msg}")
+
+        datadir = self._datadir()
+        archive = datadir / "hyperliquid_download-data.7z"
+        target = datadir / self.HYPERLIQUID_EXCHANGE
+        try:
+            datadir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return fail(f"cannot create {datadir}: {exc}")
+
+        # ---- fetch (skipped when the archive is already on disk) ----------
+        if archive.is_file() and archive.stat().st_size > 0 and not force:
+            say(f"[hyperliquid] using existing archive {archive.name} "
+                f"({archive.stat().st_size / 1e9:.2f} GB) - tick 'Erase existing data first' to re-download")
+            with self._jobs_lock:
+                job["dl_units_done"] = 60
+        else:
+            say(f"[hyperliquid] downloading {self.HYPERLIQUID_ARCHIVE_URL}")
+            tmp = archive.with_suffix(".7z.part")
+            try:
+                with urllib.request.urlopen(self.HYPERLIQUID_ARCHIVE_URL, timeout=60) as resp:
+                    total = int(resp.headers.get("Content-Length") or 0)
+                    done = 0
+                    last_pct = -1
+                    with tmp.open("wb") as fh:
+                        while True:
+                            chunk = resp.read(1 << 20)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            done += len(chunk)
+                            if total:
+                                pct = int(done * 100 / total)
+                                if pct != last_pct and pct % 2 == 0:
+                                    last_pct = pct
+                                    say(f"[hyperliquid] {pct}%  {done / 1e9:.2f} / {total / 1e9:.2f} GB")
+                                    with self._jobs_lock:
+                                        job["dl_units_done"] = int(pct * 0.6)
+                tmp.replace(archive)
+                say(f"[hyperliquid] downloaded {archive.stat().st_size / 1e9:.2f} GB")
+            except Exception as exc:
+                tmp.unlink(missing_ok=True)
+                return fail(f"download failed: {exc}")
+
+        # ---- extract ------------------------------------------------------
+        seven = self._find_7z()
+        if seven is None:
+            return fail("7-Zip not found - install it (or put 7z on PATH) to unpack the archive")
+        say(f"[hyperliquid] extracting with {seven} -> {target}")
+        with self._jobs_lock:
+            job["dl_units_done"] = 65
+        cmd = [seven, "x", str(archive), f"-o{datadir}", "-y"]
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                bufsize=1, text=True, encoding="utf-8", errors="replace",
+            )
+        except Exception as exc:
+            return fail(f"extract failed to start: {exc}")
+        with self._jobs_lock:
+            job["_proc"] = proc
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if line.strip():
+                say(line)
+        rc = proc.wait()
+        with self._jobs_lock:
+            job["_proc"] = None
+        if rc != 0:
+            return fail(f"7-Zip exited {rc}")
+
+        try:
+            files = sum(1 for _ in target.rglob("*.feather")) if target.is_dir() else 0
+        except OSError:
+            files = 0
+        say(f"[hyperliquid] done - {files} candle files under {target}")
+        with self._jobs_lock:
+            job["dl_units_done"] = job["dl_units_total"]
+            job["exit_code"] = 0
+            job["status"] = "succeeded"
+            job["finished_at"] = datetime.now(UTC).isoformat()
 
     def _run_download_job_thread(self, job_id: str) -> None:
         with self._jobs_lock:
@@ -2124,6 +2535,87 @@ class WebPortal:
             self._proc_stat_cache.pop(proc.pid, None)
             return {"cpu_percent": None, "memory_mb": None}
 
+    def _in_process_bot_threads(self) -> dict[str, int]:
+        """account_name -> OS thread id for every bot running as a thread in
+        THIS process (single_process_mode).
+
+        Resolves bot.py's ``_IN_PROCESS_BOTS`` through ``sys.modules`` rather
+        than a plain ``from VulcanTrader.bot import ...``. The portal is
+        started as ``python -m VulcanTrader.bot webserver``, which executes
+        bot.py as ``__main__`` - importing it by package name afterwards
+        creates a SECOND module object with its own, permanently empty
+        registry. Bots register in whichever copy is actually running, so
+        check both and take the one that has them."""
+        import sys
+        out: dict[str, int] = {}
+        seen: set[int] = set()
+        for mod_name in ("__main__", "VulcanTrader.bot"):
+            mod = sys.modules.get(mod_name)
+            if mod is None or id(mod) in seen:
+                continue
+            seen.add(id(mod))
+            registry = getattr(mod, "_IN_PROCESS_BOTS", None)
+            if not isinstance(registry, dict):
+                continue
+            lock = getattr(mod, "_IN_PROCESS_LOCK", None)
+            try:
+                if lock is not None:
+                    with lock:
+                        items = list(registry.items())
+                else:
+                    items = list(registry.items())
+            except Exception:
+                continue
+            for account_name, handle in items:
+                thread = (handle or {}).get("thread")
+                tid = getattr(thread, "native_id", None)
+                try:
+                    alive = thread is not None and thread.is_alive()
+                except Exception:
+                    alive = False
+                if alive and tid:
+                    out[account_name] = tid
+        return out
+
+    def _thread_stats(self, tid: int) -> dict:
+        """(cpu_percent, memory_mb) for one THREAD of this process - the
+        single_process_mode counterpart of _proc_stats.
+
+        CPU is real and per-bot: psutil exposes cumulative user/system time
+        per thread, so sampling the delta against the previous poll gives
+        that one bot's share. Normalised to 0-100% of TOTAL system capacity
+        (divided by core count) to match _proc_stats and Task Manager.
+
+        Memory is NOT per-bot and cannot be: threads share one address space,
+        so there is no per-thread RSS to read. The figure returned is the
+        whole portal process's RSS, the same value for every in-process bot -
+        the UI labels it "shared" (see trading.html's bot-meta row) rather
+        than implying each bot owns that much.
+
+        Like _proc_stats, the first call for a given thread has no prior
+        sample to diff against and returns None for CPU rather than a
+        misleading 0.0%."""
+        try:
+            me = psutil.Process()
+            now = time.monotonic()
+            cpu_seconds = None
+            for t in me.threads():
+                if t.id == tid:
+                    cpu_seconds = t.user_time + t.system_time
+                    break
+            mem = me.memory_info().rss / (1024 * 1024)
+        except psutil.Error:
+            return {"cpu_percent": None, "memory_mb": None}
+        if cpu_seconds is None:  # thread died between registry read and here
+            self._thread_cpu_cache.pop(tid, None)
+            return {"cpu_percent": None, "memory_mb": None}
+        prev = self._thread_cpu_cache.get(tid)
+        self._thread_cpu_cache[tid] = (cpu_seconds, now)
+        if prev is None or now <= prev[1]:
+            return {"cpu_percent": None, "memory_mb": round(mem, 1)}
+        cpu = (cpu_seconds - prev[0]) / (now - prev[1]) * 100.0 / (psutil.cpu_count() or 1)
+        return {"cpu_percent": round(max(cpu, 0.0), 1), "memory_mb": round(mem, 1)}
+
     def _get_ccxt_public_client(self, exchange_name: str) -> Any | None:
         """Pooled, keyless ccxt client for read-only public ticker lookups
         (see _current_price_ccxt_public/_prefetch_tickers_ccxt_public).
@@ -2308,6 +2800,16 @@ class WebPortal:
             return []
         live = {b["name"]: b for b in self._scan_live_bots()}
         trade_procs = self._scan_trade_processes()
+        # single_process_mode bots are threads of THIS process, so they have no
+        # `bot.py trade -c <name>` command line for _scan_trade_processes to
+        # find. Their CPU comes from per-thread sampling instead (_thread_stats)
+        # - without this they would sit on the "measuring..." placeholder
+        # forever, since no per-process reading will ever arrive.
+        try:
+            in_process_threads = self._in_process_bot_threads()
+        except Exception:
+            logger.debug("in-process bot thread scan failed", exc_info=True)
+            in_process_threads = {}
         out = []
         for p in sorted(d.glob("*.json")):
             try:
@@ -2326,7 +2828,10 @@ class WebPortal:
                 size = p.stat().st_size
             except OSError:
                 size = 0
-            proc_stats = self._proc_stats(trade_procs.get(p.stem) if running else None)
+            proc = trade_procs.get(p.stem) if running else None
+            tid = in_process_threads.get(account_name) if (running and proc is None) else None
+            in_process = tid is not None
+            proc_stats = self._thread_stats(tid) if in_process else self._proc_stats(proc)
             out.append({
                 "name": p.stem,
                 "filename": p.name,
@@ -2342,6 +2847,7 @@ class WebPortal:
                 "crashed": bool(bot_info and bot_info.get("crashed")),
                 "cpu_percent": proc_stats["cpu_percent"],
                 "memory_mb": proc_stats["memory_mb"],
+                "in_process": in_process,
             })
         return out
 
@@ -2977,6 +3483,131 @@ class WebPortal:
                             pass
         except Exception as exc:
             logger.exception("hyperopt job %s stream error", job_id)
+            with self._jobs_lock:
+                job["log"].append(f"[stream error] {exc}")
+
+        rc = proc.wait()
+        with self._jobs_lock:
+            job["exit_code"] = rc
+            job["status"] = "succeeded" if rc == 0 else ("cancelled" if rc < 0 else "failed")
+            job["finished_at"] = datetime.now(UTC).isoformat()
+            job["_proc"] = None
+
+    # ------------------------------------------------------------------
+    # Backtest suite (the pipeline behind run-backtest-suite.bat)
+    # ------------------------------------------------------------------
+    def _submit_suite_job(self, req: "SuiteRunRequest") -> dict:
+        cfg_name = self._validate_name(req.config, "config")
+        cfg_path = self._configs_dir() / f"{cfg_name}.json"
+        if not cfg_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Config not found: {cfg_name}.json")
+        try:
+            jobs = max(1, min(32, int(req.jobs)))
+            scan_days = max(1, min(3650, int(req.scan_days)))
+            deep_days = max(1, min(3650, int(req.deep_days)))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid numeric param: {exc}") from exc
+
+        # The suite fans out to `jobs` backtests of its own, so allowing several
+        # at once would oversubscribe the box badly.
+        with self._jobs_lock:
+            already = [j for j in self._jobs.values()
+                       if j.get("kind") == "suite" and j.get("status") in ("queued", "running")]
+        if already:
+            raise HTTPException(status_code=409, detail="A backtest suite is already running.")
+        if self._running_job_count() >= self.MAX_CONCURRENT_JOBS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Max concurrent jobs reached ({self.MAX_CONCURRENT_JOBS}).",
+            )
+
+        job_id = uuid.uuid4().hex[:12]
+        job: dict = {
+            "id": job_id,
+            "kind": "suite",
+            "config": cfg_name,
+            "strategy": None,
+            "timerange": None,
+            "status": "queued",
+            "exit_code": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "started_at": None,
+            "finished_at": None,
+            "log": deque(maxlen=self.MAX_JOB_LOG_LINES),
+            "result_file": None,
+            "error": None,
+            "_proc": None,
+            "_cancel": False,
+            "suite_jobs": jobs,
+            "suite_scan_days": scan_days,
+            "suite_deep_days": deep_days,
+            "suite_phase": None,
+        }
+        with self._jobs_lock:
+            self._jobs[job_id] = job
+            self._evict_old_jobs_locked()
+
+        threading.Thread(
+            target=self._run_suite_job_thread,
+            args=(job_id,),
+            name=f"suite-job-{job_id}",
+            daemon=True,
+        ).start()
+        return {"ok": True, "job": self._job_summary(job)}
+
+    def _run_suite_job_thread(self, job_id: str) -> None:
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job["status"] = "running"
+            job["started_at"] = datetime.now(UTC).isoformat()
+
+        cmd = [
+            sys.executable, "-m", "VulcanTrader.util.run_backtest_suite",
+            "--config", job["config"],
+            "--jobs", str(job["suite_jobs"]),
+            "--scan-days", str(job["suite_scan_days"]),
+            "--deep-days", str(job["suite_deep_days"]),
+        ]
+        job["log"].append(f"$ {' '.join(cmd)}")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except Exception as exc:
+            with self._jobs_lock:
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["finished_at"] = datetime.now(UTC).isoformat()
+            logger.exception("Failed to launch suite job %s", job_id)
+            return
+
+        with self._jobs_lock:
+            job["_proc"] = proc
+
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                line = re.sub(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfnsu]", "", line.rstrip("\r\n"))
+                with self._jobs_lock:
+                    job["log"].append(line)
+                    low = line.lower()
+                    if "phase 1" in low or "pair discovery" in low:
+                        job["suite_phase"] = "discovery"
+                    elif "phase 2" in low or "deep backtest" in low:
+                        job["suite_phase"] = "deep"
+                    elif "metrics_summary" in low:
+                        job["suite_phase"] = "summary"
+        except Exception as exc:
+            logger.exception("suite job %s stream error", job_id)
             with self._jobs_lock:
                 job["log"].append(f"[stream error] {exc}")
 

@@ -75,6 +75,7 @@ MAP_EXCHANGE_CHILDCLASS = {
 # Exchanges that are not in CCXT but have custom implementations
 NON_CCXT_EXCHANGES = [
     "bitunix",
+    "polymarket",
 ]
 
 SUPPORTED_EXCHANGES = [
@@ -82,7 +83,6 @@ SUPPORTED_EXCHANGES = [
     "binanceus",
     "binanceusdm",
     "bingx",
-    "bitmart",
     "bitget",
     "bitunix",
     "bybit",
@@ -93,6 +93,7 @@ SUPPORTED_EXCHANGES = [
     "kraken",
     "okx",
     "myokx",
+    "polymarket",
 ]
 
 # either the main, or replacement methods (array) is required

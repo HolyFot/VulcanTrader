@@ -441,6 +441,64 @@ class Order(ModelBase):
         return None
 
 
+class _OrderList(list):
+    """Order list that keeps ``Order.trade`` pointing back at its owning trade.
+
+    Upstream this was a SQLAlchemy ``relationship(..., back_populates="orders")``,
+    which populated the backref automatically on ``trade.orders.append(order)``.
+    This JSON-backed persistence layer replaced SQLAlchemy but kept the plain
+    list-append idiom at every call site, so ``Order._trade_live`` ended up
+    being set in exactly one place - reloading a snapshot from disk
+    (``persistence/models.py``). Every order created during a live or dry-run
+    session therefore had ``Order.trade`` None, and the properties that need
+    the owning trade to compute a value (``stake_amount``,
+    ``stake_amount_filled``, both of which divide by ``trade.leverage``) raised
+    ``AttributeError: 'NoneType' object has no attribute 'leverage'``.
+
+    That surfaced as a real, reachable dry-run failure: an entry order that
+    rests unfilled (maker-style ``entry_pricing.price_side``, a
+    ``custom_entry_price`` below the ask, or simply a book that moved) leaves an
+    entry in ``trade.open_orders``, which ``Wallets._update_dry()`` sums over -
+    so the wallet update blew up, and since ``create_trade`` catches and logs
+    per-pair errors the bot silently stopped opening ANY further trades while
+    that order rested.
+
+    Wiring the backref here restores the upstream behaviour for all call sites
+    at once (and any added later) rather than relying on each to remember.
+    """
+
+    __slots__ = ("_owner",)
+
+    def __init__(self, owner: "LocalTrade | None" = None, iterable=()) -> None:
+        # `owner` defaults to None so copy/deepcopy/pickle - which reconstruct
+        # list subclasses via a no-arg call - can't fail on this type.
+        super().__init__()
+        self._owner = owner
+        if iterable:
+            self.extend(iterable)
+
+    def _wire(self, order):
+        owner = self._owner
+        if owner is not None:
+            # Backtest trades (LocalTrade, use_db False) and live trades
+            # (Trade, use_db True) are tracked in separate fields, and
+            # `Order.trade` prefers the backtest one - matching upstream.
+            if owner.use_db:
+                order._trade_live = owner
+            else:
+                order._trade_bt = owner
+        return order
+
+    def append(self, order) -> None:
+        super().append(self._wire(order))
+
+    def insert(self, index, order) -> None:
+        super().insert(index, self._wire(order))
+
+    def extend(self, orders) -> None:
+        super().extend(self._wire(o) for o in orders)
+
+
 # ---------------------------------------------------------------------------
 #  LocalTrade -- backtesting / in-memory trade
 # ---------------------------------------------------------------------------
@@ -631,7 +689,7 @@ class LocalTrade:
         return [oo.order_id for oo in self.open_orders if oo.ft_order_side != "stoploss"]
 
     def __init__(self, **kwargs: Any) -> None:
-        self.orders = []
+        self.orders = _OrderList(self)
         for key, value in kwargs.items():
             setattr(self, key, value)
         self.recalc_open_trade_value()

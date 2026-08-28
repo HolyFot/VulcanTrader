@@ -15,12 +15,23 @@ REM  hit that, a master (or a stray duplicate) is already running; don't
 REM  start a second one. Two masters fighting over the same exchange budget
 REM  is what caused the fleet-wide rate-limit storm this script exists to
 REM  prevent.
+REM
+REM  HOST is the interface the master BINDS to, and is what decides whether
+REM  other machines can reach it:
+REM      set HOST=127.0.0.1   (default) local bots/subservers only
+REM      set HOST=0.0.0.0     every interface - remote bots/subservers connect
+REM      set HOST=10.0.0.5    that one interface only
+REM  Neither port authenticates anything: whatever can reach PORT can steer
+REM  what this master collects, and whatever can reach SUBSERVER_PORT can push
+REM  candles into its cache and onto disk. Only bind wide on a trusted/private
+REM  network, or firewall both ports. Bots on other machines then point at
+REM  this host via system.json's "data_server_ip".
 REM ---------------------------------------------------------------------------
 setlocal enableextensions
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\activate.bat" (
-    echo [run-datamaster] .venv not found - run install.bat first.
+    echo [run-dataserver] .venv not found - run install.bat first.
     exit /b 1
 )
 call ".venv\Scripts\activate.bat"
@@ -40,11 +51,11 @@ if "%TIMEFRAMES%"=="" set "TIMEFRAMES=15m"
 
 python -c "import socket,os,sys; h=os.environ.get('HOST','127.0.0.1'); h='127.0.0.1' if h in ('0.0.0.0','') else h; p=int(os.environ.get('PORT','8720')); s=socket.socket(); s.settimeout(1.5); r=s.connect_ex((h,p)); sys.exit(0 if r==0 else 1)"
 if not errorlevel 1 (
-    echo [run-datamaster] Something is already listening on %HOST%:%PORT% - refusing to start a second master.
+    echo [run-dataserver] Something is already listening on %HOST%:%PORT% - refusing to start a second master.
     exit /b 1
 )
 
-echo [run-datamaster] config=%CONFIG% exchange=%EXCHANGE% host=%HOST% port=%PORT% subserver-port=%SUBSERVER_PORT% timeframes=%TIMEFRAMES%
+echo [run-dataserver] config=%CONFIG% exchange=%EXCHANGE% host=%HOST% port=%PORT% subserver-port=%SUBSERVER_PORT% timeframes=%TIMEFRAMES%
 REM No "endlocal"/anything after this line, deliberately - cmd.exe only
 REM prompts "Terminate batch job (Y/N)?" on Ctrl+C when it thinks there's
 REM more of the script left to run once the current command ends. With
