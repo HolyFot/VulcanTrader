@@ -2879,6 +2879,7 @@ def ensure_master_running(
     config_path: str | Path,
     *,
     subserver_port: int = 8721,
+    bind_host: str | None = None,
     python_executable: str | None = None,
     extra_args: list[str] | None = None,
     startup_timeout: float = 30.0,
@@ -2893,6 +2894,14 @@ def ensure_master_running(
     lifetime. Returns True if a master is already running or was just launched
     and came up within `startup_timeout`; False if launching failed outright or
     it never came up (callers should fall back to direct exchange polling).
+
+    ``bind_host``, if given, is what interface a master LAUNCHED BY THIS CALL
+    binds its two listening sockets to - separate from ``host`` above, which
+    is only where this call dials/probes. Defaults to ``host`` (loopback-
+    converted the same way ``connect_host`` is) when omitted, so an existing
+    caller that never passes it keeps binding whatever it dialed, same as
+    before. Pass e.g. "0.0.0.0" to accept remote bots/subservers while still
+    dialing "127.0.0.1" locally. No-op when a master is already running.
 
     ``show_terminal``/``tmux`` control the launched master's own visibility -
     same convention (and same `util.proc_launch.launch_detached` helper) as
@@ -2925,6 +2934,7 @@ def ensure_master_running(
     ``run-datamaster.bat``/``.sh``, to rule out the launch race entirely
     rather than just narrowing it)."""
     connect_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    launch_host = connect_host if bind_host is None else bind_host
 
     def _probe() -> bool:
         try:
@@ -2980,7 +2990,7 @@ def ensure_master_running(
             "-m", "VulcanTrader.data_server",
             "--mode", "master",
             "-c", str(config_path),
-            "--host", connect_host,
+            "--host", launch_host,
             "--port", str(port),
             "--subserver-port", str(subserver_port),
             # Without this the auto-launched master defaults to WARNING-only

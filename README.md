@@ -5,6 +5,9 @@ crypto strategies. Based off the latest FreqTrade, we added an improved UI built
 
 Drop a Freqtrade-style `IStrategy` subclass into
 [user_data/strategies/](user_data/strategies) and it should run (just rename imports to VulcanTrader). You are still allowed to use TA Indicators, but there are faster rust indicators provided.
+
+![VulcanTrader dashboard](static/screenshot.png)
+
 ---
 
 ## Requirements
@@ -54,37 +57,14 @@ Then open **http://localhost:8060** in your browser (default password: `test`).
 
 ### Use the web dashboard
 
-Once a `run-paper` / `run-live` session is up, the Web Portal is
-served on `http://localhost:8060` (port comes from
-`config["api_server"]["listen_port"]`). Log in with the bearer password
+Once you run run-app  the Web Portal is
+served on `http://localhost:8060` (port comes from `config["api_server"]["listen_port"]`). Log in with the bearer password
 from `config["api_server"]["password"]` (default `VulcanTrader`).
 
-The dashboard exposes everything you need day-to-day so you rarely have
-to touch the CLI:
-
-- **Trading** (`/`) — live open/closed trades, wallet balances,
-  per-pair candle charts with strategy plot overlays, and pair locks.
-- **Bot account dropdown** (navbar) — the portal scans
-  `user_data/accounts/*.json` persistence files and detects which
-  `trader_bot` processes are currently running (each running bot holds an
-  OS-level lock on its `<account>.json.lock`, plus writes
-  `is_running`/`last_heartbeat` markers into the account file). The
-  dropdown lists every account — `●` running (with uptime), `○` stopped,
-  `⚠` crashed (marked running but no live process) — and selecting one
-  loads that bot's full trades/stats/metrics into the dashboard, headless
-  bots included. The **Stop** button then gracefully shuts down that bot's
-  process: the portal drops a `<account>.json.stop` file which the bot's
-  trade loop picks up within ~2 s, exiting cleanly (cleanup, state saved,
-  lock released) once its current cycle finishes. API: `GET /api/livebots`,
-  `GET /api/dashboard?bot=<name>`, `POST /api/livebots/<name>/stop`.
-- **Backtester** (`/backtester`) — pick any JSON file from
-  `user_data/backtest_results/` and inspect performance metrics,
-  monthly/daily breakdowns, equity & drawdown curves, hourly P&L /
-  profit-factor / drawdown, best/worst pairs, regime and MAE/MFE
-  analysis, and the full per-trade table.
-- **Backtest results browser** — drop new result files into
-  `user_data/backtest_results/`; they show up in the dropdown
-  automatically.
+- In the trading panel you can create new configs for bots (based on example configs or your existing ones).
+- Bots can all run in one single process saving tons on ram.
+- Bots can auto-start as well if checked.
+- Configs can be set to is_bot meaning its a bot, otherwise its just another config meant for backtesting.
 
 ---
 
@@ -144,16 +124,10 @@ webserver` — use whichever you prefer, both read `single_process_mode` from
 
 ### Running the data server master explicitly
 
-Normally you don't need to think about the `data_server` master at all — the
-first bot to start auto-launches one (`ensure_master_running`) and every
-later bot just connects to it. But that auto-launch is a probe-then-spawn
-race: if two independent fleet launches (e.g. `run-app` started twice, or
-under two different Python interpreters) both find nothing listening before
-the first one finishes binding, **both** spawn their own master, and you end
-up with two processes independently hammering the exchange for the same
-pairs — a real cause of chronic rate-limit errors and stale candles.
+Typically you dont have the data server yourself, it auto runs it unless a remote one is specified
+in the `user_data\config_system\system.json`
 
-`run-dataserver.bat` / `run-dataserver.sh` start the master as its own
+Run `run-dataserver.bat` / `run-dataserver.sh` to start the master as its own
 standalone, explicitly-managed process, refusing to start if something is
 already listening on its port. Run it once, before starting the fleet:
 
@@ -219,14 +193,6 @@ shared master instead of each spawning a useless local one:
   "auto_start_data_server": false
 }
 ```
-
-> [!WARNING]
-> Both master ports are **unauthenticated plain TCP**. Anything that can
-> reach the client port (8720) can steer what the master collects; anything
-> that can reach the subserver port (8721) can push candles into its cache
-> **and onto disk**, into the same feather files the backtester reads. Only
-> bind beyond loopback on a private/trusted network, or firewall both ports.
-> The master logs a warning at startup whenever it binds non-loopback.
 
 Pair this with `run-subserver.bat` / `.sh` on a second machine to add
 collection capacity — a subserver dials the master's `subserver_port`, so

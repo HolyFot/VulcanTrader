@@ -19,10 +19,8 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-CONFIG="${CONFIG:-configHyper}"
 PORT="${PORT:-8060}"
 
-echo "[run-app] config=$CONFIG  port=$PORT"
+echo "[run-app] port=$PORT"
 exec python -m VulcanTrader.bot webserver \
-    -c "$CONFIG" \
     --port "$PORT" "$@"

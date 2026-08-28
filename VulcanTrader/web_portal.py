@@ -267,6 +267,15 @@ class ConfigNameRequest(BaseModel):
     new_name: str
 
 
+class ConfigCreateRequest(BaseModel):
+    name: str
+    # None/"" = blank skeleton; "example:<name>" = copy from
+    # user_data/configs/examples; anything else = copy from an existing
+    # config in user_data/configs (same idea as duplicate, just reachable
+    # from the "new bot" picker instead of an existing bot's row).
+    source: str | None = None
+
+
 class DataDownloadRequest(BaseModel):
     config: str
     exchange: str | None = None
@@ -983,6 +992,14 @@ class WebPortal:
         @app.get("/api/configs", dependencies=[Depends(auth)])
         def api_configs(all: bool = False) -> dict:
             return {"configs": self._list_configs(include_non_bots=all)}
+
+        @app.post("/api/configs", dependencies=[Depends(auth)])
+        def api_config_create(req: ConfigCreateRequest) -> dict:
+            return self._create_config(req.name, req.source)
+
+        @app.get("/api/configs/examples", dependencies=[Depends(auth)])
+        def api_config_examples() -> dict:
+            return {"examples": self._list_config_examples()}
 
         @app.get("/api/strategies", dependencies=[Depends(auth)])
         def api_strategies() -> dict:
@@ -1909,6 +1926,9 @@ class WebPortal:
 
     def _configs_dir(self) -> Path:
         return self._user_data_dir() / "configs"
+
+    def _examples_dir(self) -> Path:
+        return self._configs_dir() / "examples"
 
     def _strategies_dir(self) -> Path:
         return self._user_data_dir() / "strategies"
@@ -2854,6 +2874,57 @@ class WebPortal:
     def _config_path(self, name: str) -> Path:
         name = self._validate_name(name, "config")
         return self._configs_dir() / f"{name}.json"
+
+    def _list_config_examples(self) -> list[dict]:
+        """Template configs under user_data/configs/examples - one per
+        supported exchange/market, shipped read-only as starting points.
+        Shown in the "new bot" picker alongside the user's own configs so a
+        fresh install has somewhere to start from other than a blank file."""
+        d = self._examples_dir()
+        if not d.is_dir():
+            return []
+        out = []
+        for p in sorted(d.glob("*.json")):
+            try:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raw = {}
+            if not isinstance(raw, dict):
+                raw = {}
+            out.append({
+                "name": p.stem,
+                "exchange": (raw.get("exchange") or {}).get("name"),
+            })
+        return out
+
+    def _create_config(self, name: str, source: str | None) -> dict:
+        dst = self._config_path(name)
+        if dst.exists():
+            raise HTTPException(status_code=409, detail=f"Config {name!r} already exists")
+        example_prefix = "example:"
+        if source and source.startswith(example_prefix):
+            example_name = self._validate_name(source[len(example_prefix):], "example")
+            src = self._examples_dir() / f"{example_name}.json"
+            if not src.is_file():
+                raise HTTPException(status_code=404, detail=f"Example {example_name!r} not found")
+            content = src.read_text(encoding="utf-8")
+        elif source:
+            src = self._config_path(source)
+            if not src.is_file():
+                raise HTTPException(status_code=404, detail=f"Config {source!r} not found")
+            content = src.read_text(encoding="utf-8")
+        else:
+            content = json.dumps({
+                "is_bot": True,
+                "auto_start": False,
+                "dry_run": True,
+                "strategy": None,
+            }, indent=4)
+        try:
+            dst.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Could not create config: {exc}") from exc
+        return {"created": True, "name": name}
 
     def _read_config_raw(self, name: str) -> str:
         p = self._config_path(name)
