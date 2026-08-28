@@ -1,0 +1,66 @@
+{
+    "db_url": "json:user_data/accounts/trades-PolymarketUpDown5min.json",
+    "bot_name": "Polymarket UpDown 5min",
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "strategy": "",
+    "auto_start": false,
+    "is_bot": false,
+    "show_terminal": true,
+    "tmux": false,
+    "dry_run": true,
+    "hyperopt_ignore_missing_space": true,
+
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 5,
+    "stake_currency": "USDC",
+    "max_stake_amount": 500,
+    "stake_amount": 50,
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "dry_run_wallet": 1000,
+    "cancel_open_orders_on_exit": true,
+    "trading_mode": "spot",
+    "unfilledtimeout": {
+        "entry": 25,
+        "exit": 25,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "polymarket",
+        "key": "",
+        "secret": "",
+        "pair_whitelist": [
+            "btc-updown-5m",
+            "eth-updown-5m",
+            "sol-updown-5m",
+            "xrp-updown-5m"
+        ],
+        "pair_blacklist": [],
+        "ccxt_config": {}
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "internals": {
+        "process_throttle_secs": 5
+    }
+}
