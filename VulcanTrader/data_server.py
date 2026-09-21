@@ -2935,13 +2935,28 @@ def ensure_master_running(
     rather than just narrowing it)."""
     connect_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     launch_host = connect_host if bind_host is None else bind_host
+    # The address THIS call's own fallback master would bind to, if it ends up
+    # launching one - same loopback conversion as connect_host, since a master
+    # bound to "0.0.0.0" is reachable at 127.0.0.1 locally.
+    probe_launch_host = "127.0.0.1" if launch_host in ("0.0.0.0", "") else launch_host
 
     def _probe() -> bool:
-        try:
-            socket.create_connection((connect_host, port), timeout=1.5).close()
-            return True
-        except OSError:
-            return False
+        # Check the configured host first (the common case: a real remote/local
+        # master is up there). Also check probe_launch_host when it differs -
+        # otherwise, once the configured host is unreachable, EVERY caller's
+        # probe fails identically even after an earlier caller already spun up
+        # a local fallback bound to probe_launch_host, since that address was
+        # never the one being dialed. Confirmed this fired for real: caused
+        # repeated redundant ~140MB fallback-master processes, one per bot,
+        # instead of the whole fleet sharing the first one.
+        hosts = (connect_host,) if connect_host == probe_launch_host else (connect_host, probe_launch_host)
+        for h in hosts:
+            try:
+                socket.create_connection((h, port), timeout=1.5).close()
+                return True
+            except OSError:
+                continue
+        return False
 
     if _probe():
         logger.info("Data server master already running at %s:%d", connect_host, port)

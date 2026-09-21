@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import logging
 import sys
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,41 @@ from VulcanTrader.util.exceptions import OperationalException
 
 
 logger = logging.getLogger(__name__)
+
+# Process-wide cache of the filtered candidate .py file list per directory,
+# keyed by resolved directory path. Under single_process_mode, every bot in
+# the fleet runs _search_object() in its own thread at startup, and each call
+# used to redo the full `directory.rglob("*.py")` + sort + is_file() filter
+# from scratch - fine for one bot per process, but with 100+ bots sharing a
+# process this became 100+ redundant full recursive filesystem walks of the
+# same strategies directory, contending for disk I/O and the GIL at exactly
+# the moment every bot is trying to start. The listing is immutable for the
+# life of a run (strategies aren't hot-reloaded), so it's safe to compute once
+# and share. Guarded by a lock only for the build step, not the whole lookup -
+# concurrent readers of an already-built entry never block each other.
+_candidate_files_cache: dict[Path, list[Path]] = {}
+_candidate_files_lock = threading.Lock()
+
+
+def _cached_candidate_files(directory: Path) -> list[Path]:
+    resolved = directory.resolve()
+    cached = _candidate_files_cache.get(resolved)
+    if cached is not None:
+        return cached
+    with _candidate_files_lock:
+        cached = _candidate_files_cache.get(resolved)
+        if cached is not None:
+            return cached
+        candidates = []
+        for entry in sorted(directory.rglob("*.py")):
+            rel_parts = entry.relative_to(directory).parts
+            if any(p.startswith((".", "__")) for p in rel_parts[:-1]):
+                continue
+            if not entry.is_file():
+                continue
+            candidates.append(entry)
+        _candidate_files_cache[resolved] = candidates
+        return candidates
 
 
 class PathModifier:
@@ -143,20 +179,11 @@ class IResolver:
             return (None, None)
         # Recursive so objects can be organised into sub-folders (e.g.
         # user_data/strategies/examples/). Sorted for deterministic resolution
-        # when the same class name exists in more than one file.
-        for entry in sorted(directory.rglob("*.py")):
-            rel_parts = entry.relative_to(directory).parts
-            # Skip caches, hidden and dunder dirs (e.g. __pycache__).
-            if any(p.startswith((".", "__")) for p in rel_parts[:-1]):
-                logger.debug("Ignoring %s", entry)
-                continue
-            # Covers broken symlinks and, less obviously, a *directory* whose
-            # own name ends in .py (rglob("*.py") matches those too) - reading
-            # one raises PermissionError on Windows and takes down the whole
-            # resolve. user_data/strategies/Github/ contains such a directory.
-            if not entry.is_file():
-                logger.debug("Ignoring non-file %s", entry)
-                continue
+        # when the same class name exists in more than one file. The listing
+        # itself (walk + sort + hidden/dunder/non-file filtering) is cached
+        # process-wide - see _cached_candidate_files - since it's the same
+        # regardless of which object_name this particular call is after.
+        for entry in _cached_candidate_files(directory):
             module_path = entry.resolve()
             if entry.read_text(encoding="utf-8").find(f"class {object_name}(") == -1:
                 logger.debug(f"Skipping {module_path} as it does not contain class {object_name}.")
